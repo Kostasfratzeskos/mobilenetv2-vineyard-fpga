@@ -1,0 +1,60 @@
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# ── Datasets & large model artifacts (keep local / use Git LFS) ──
+data/*
+!data/README.md
+!data/.gitkeep
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+*.onnx
+*.tflite
+# Large exported weight blobs — track with Git LFS if you must version them:
+# software/export/*.bin
+
+# ── Vivado / Vitis generated files ──────────────────
+# Tip: commit hardware/rtl + a create_project.tcl, not the generated project dirs.
+*.jou
+*.log
+*.str
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.runs/
+*.gen/
+vivado*.jou
+vivado*.log
+webtalk*.jou
+webtalk*.log
+
+# ── Simulation outputs ──────────────────────────────
+xsim.dir/
+*.wdb
+*.vcd
+*.ghw
+*.wlf
+transcript
+sim/*
+!sim/README.md
+!sim/.gitkeep
+
+# ── OS / editor cruft ───────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/

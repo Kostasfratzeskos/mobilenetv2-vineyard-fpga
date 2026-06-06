@@ -1,0 +1,12 @@
+# Core
+numpy
+pillow
+matplotlib
+tqdm
+
+# Pick ONE deep-learning stack for the reference model:
+# PyTorch (flexible for custom fixed-point export):
+torch
+torchvision
+# --- or TensorFlow (canonical MobileNetV2 + TFLite int8 path) ---
+# tensorflow
