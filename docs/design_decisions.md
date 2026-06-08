@@ -88,3 +88,13 @@ Copy the template below, give it the next id, and fill it in.
 ### DD-008 onward
 Fill these in as you decide the concrete numbers and structures, e.g.: exact weight/activation/accumulator
 bit-widths, the PE-array dimensions, on-chip buffer sizes, AXI burst lengths, and the layer-scheduling order.
+
+
+### DD-009 — Future Improvements
+- Status: Proposed
+- Date: 2026-07-06
+- Context: Add operations to the platform (add some humidity sensors, or whatever monitors climate changes)
+- Decision: If there is enough time or if I continue with that project
+- Rationale: More complete work and there is a chance to get the product to the market
+- Alternatives considered: --
+- Revisit if: --

@@ -19,3 +19,28 @@ keeps momentum and makes the methodology chapter far easier to write later.
 - Found / decided: tiered scope locked; verification will run on golden vectors.
 - Blocked on: nothing.
 - Next: install Vivado/Vitis, boot the board, read a file from SD (Phase 0); email field contacts for real vine images.
+
+
+### 2026-06-07 — Chose the fixed-point format
+- Did: Made a scheme with the dataflow of bits through a layer
+- Found / decided: 8-bit data width (int8 quantization)
+- Blocked on: nothing
+- Next: Send to Konstantinos for the images and start implementing the MobileNet-V2 in python
+
+### 2026-06-07 — Contact with Konstantinos and started model training
+- Did: I spoke with Konstantinos and started model training with the help of claude (float32 training)
+- Found / decided: 
+- Blocked on: nothing
+- Next: Build the model for int8 operations.
+
+### 2026-06-08 - Model Evaluation
+- Did: Completed float model training and the evaluation of the model
+- Found / decided: 
+    Overall accuracy: 1.0000 (4062/4062)
+    Per-class accuracy:
+    black_rot            1.0000  (n=1180)
+    esca                 1.0000  (n=1383)
+    healthy              1.0000  (n=423)
+    leaf_blight          1.0000  (n=1076)
+- Blocked on: nothing
+- Next: Build the model for int8 operations.
