@@ -44,3 +44,16 @@ keeps momentum and makes the methodology chapter far easier to write later.
     leaf_blight          1.0000  (n=1076)
 - Blocked on: nothing
 - Next: Build the model for int8 operations.
+
+### 2026-06-11 - Building the int8 Model
+- Did: Claude created the quantize.py file that does the training in int8 quantization
+- Found / decided: 
+   INT8   val acc: 100.00%   (drop +0.00 pts)
+   black_rot    100.0%
+   esca         100.0%
+   healthy      100.0%
+   leaf_blight  100.0%
+
+wrote quant_scales.json  (53 layers)
+- Blocked on: nothing
+- Next: Continue with exporting the golden vectors from the reference model

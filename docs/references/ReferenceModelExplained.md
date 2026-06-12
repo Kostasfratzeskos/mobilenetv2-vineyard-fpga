@@ -18,3 +18,15 @@
 
 - About training
     The script picks the device (CUDA → MPS → CPU), builds the model from ImageNet weights, runs the loop, and saves the best-validation checkpoint. 
+
+
+### 2026-06-11
+
+# Building int8 model
+Claude made a file quantize.py that does the followings:
+1) Load the trained Network and the images
+2) Check the network before we touch anything (f_acc, f_cls = accuracy(model, val_loader, ...))
+3) Merge (fused = fuse_conv_bn(model)) --> "Inside fuse_conv_bn, we walk through the network looking for a main layer (Conv2d) immediately followed by a BatchNorm2d, and we fuse the pair into a single layer. PyTorch's fuse_conv_bn_eval does the actual merge; we then replace the BatchNorm with nn.Identity(), which is just a "do nothing" placeholder. After this, the network gives the same answers but has fewer separate steps — which is what the hardware wants."
+4) Measure (calibration). This is the "watch the numbers flow and pick step sizes" job.
+5) Convert (snap everything to whole numbers). Now we apply those step sizes. Two parts: the weights, and the activations.
+6) Check again.
