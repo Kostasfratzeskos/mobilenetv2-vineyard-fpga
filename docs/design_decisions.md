@@ -85,12 +85,50 @@ Copy the template below, give it the next id, and fill it in.
 
 ---
 
-### DD-008 onward
-Fill these in as you decide the concrete numbers and structures, e.g.: exact weight/activation/accumulator
-bit-widths, the PE-array dimensions, on-chip buffer sizes, AXI burst lengths, and the layer-scheduling order.
+## DD-008 — Memory layout & export format
+**Decision:** Activations stored (N,C,H,W) row-major; weights (OC, IC/groups, KH, KW)
+row-major. All hardware artifacts exported as ASCII hex, one value per line, two's
+complement, for Verilog $readmemh. Per layer: <name>_w (int8), _b (int32, BN folded),
+_m0 (int32 per-out-channel requant multiplier), _shift (uint8 per-out-channel).
+manifest.json is the single source of truth (shapes, scales, strides, file map) for
+both testbenches and the PS-side C code.
+**Rationale:** $readmemh is the native, simulator-agnostic, human-inspectable init
+format; per-channel m0/shift as loadable files (not RTL constants) lets weights be
+reloaded after retraining without re-synthesis (see DD: dynamic scales).
+**Status:** Implemented in export.py (Stage 2). Verified: selftest + 8/8 crosscheck.
+
+## DD-009 — Residual add via integer rescale
+**Decision:** At each residual add, the saved (skip) branch is requantized to the
+main branch's scale using its own (m0, shift), then the two int8 tensors are added in
+int32 and saturated to [-128,127].
+**Rationale:** The two branches carry different per-tensor scales; they must be
+brought to a common scale before integer addition. Rescaling the skip branch is
+cheaper than rescaling the (larger) main branch.
+**Consequence / known deviation:** Introduces a second rounding on the skip branch,
+so the integer result may differ from the Stage-1 fake-quant model by ≤1 LSB per
+element. The integer executor (export.py) is the authoritative spec; fake-quant was
+only an accuracy proxy. Crosscheck tolerates a small number of such disagreements.
+**Status:** Implemented. Watch crosscheck "agree with FAKE-QUANT" for >2 deltas.
+
+## DD-010 — Global average pool with folded division
+**Decision:** GAP computed as an int32 sum over the 49 (7×7) spatial positions,
+followed by a single per-tensor requantize whose multiplier M = S_in / (49 · S_out)
+folds the ÷49 into the rescale. The conv18 output feeding GAP uses the fixed scale
+S_RELU6 = 6/127 (full ReLU6 range, no clipping possible).
+**Rationale:** Avoids a hardware divider; the average is obtained for free inside the
+requantize multiply-shift already required.
+**Status:** Implemented and exported (gap op carries m0, shift, window=49).
+
+## DD-011 — Integer logits & argmax
+**Decision:** Classifier outputs are requantized to a common int16 scale S_logit,
+calibrated from the float model's max |logit| over a few batches with 1.2× headroom.
+argmax over the 4 int16 logits is the predicted class.
+**Rationale:** A shared logit scale lets the hardware compare classes directly with a
+4-way comparator; int16 gives ample range for the small 4-class head.
+**Status:** Implemented. S_logit printed at export time and stored in manifest.json.
 
 
-### DD-009 — Future Improvements
+### DD-012 — Future Improvements
 - Status: Proposed
 - Date: 2026-07-06
 - Context: Add operations to the platform (add some humidity sensors, or whatever monitors climate changes)

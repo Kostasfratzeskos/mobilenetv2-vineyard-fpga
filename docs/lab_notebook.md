@@ -57,3 +57,9 @@ keeps momentum and makes the methodology chapter far easier to write later.
 wrote quant_scales.json  (53 layers)
 - Blocked on: nothing
 - Next: Continue with exporting the golden vectors from the reference model
+
+### 2026-06-13 - Understanding quantization and build of export.py
+- Did: I watched a video that explained quantization in cnns and understood what the claude build for phase 2.
+- Found / decided: exported int8 weights, int32 bias, int8 M0 variables, golden vectors for each layer.
+- Blocked on: nothing
+- Next: Build the axi4 light stream, just to transfer some data from PS to PL.

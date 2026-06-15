@@ -30,3 +30,8 @@ Claude made a file quantize.py that does the followings:
 4) Measure (calibration). This is the "watch the numbers flow and pick step sizes" job.
 5) Convert (snap everything to whole numbers). Now we apply those step sizes. Two parts: the weights, and the activations.
 6) Check again.
+
+### 2026-06-15
+
+# Understanding the export.py phase
+see phase2_export_explained.md file

@@ -1,0 +1,797 @@
+{
+  "image": "C:\\Users\\el208\\Documents\\\u03a3\u03a7\u039f\u039b\u0397\\\u0394\u03b9\u03c0\u03bb\u03c9\u03bc\u03b1\u03c4\u03b9\u03ba\u03ae(Grape IoT)\\mobilenetv2-vineyard-fpga\\data\\grape\\esca\\image_1.jpg",
+  "predicted_class": "esca",
+  "logits_int16": [
+    -2278,
+    11929,
+    -6915,
+    -2884
+  ],
+  "layout": "activations (N,C,H,W) row-major, one value/line, $readmemh",
+  "files": [
+    {
+      "seq": 0,
+      "name": "input",
+      "file": "000_input.hex",
+      "shape": [
+        1,
+        3,
+        224,
+        224
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 1,
+      "name": "features.0.0",
+      "file": "001_features_0_0.hex",
+      "shape": [
+        1,
+        32,
+        112,
+        112
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 2,
+      "name": "features.1.conv.0.0",
+      "file": "002_features_1_conv_0_0.hex",
+      "shape": [
+        1,
+        32,
+        112,
+        112
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 3,
+      "name": "features.1.conv.1",
+      "file": "003_features_1_conv_1.hex",
+      "shape": [
+        1,
+        16,
+        112,
+        112
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 4,
+      "name": "features.2.conv.0.0",
+      "file": "004_features_2_conv_0_0.hex",
+      "shape": [
+        1,
+        96,
+        112,
+        112
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 5,
+      "name": "features.2.conv.1.0",
+      "file": "005_features_2_conv_1_0.hex",
+      "shape": [
+        1,
+        96,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 6,
+      "name": "features.2.conv.2",
+      "file": "006_features_2_conv_2.hex",
+      "shape": [
+        1,
+        24,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 7,
+      "name": "features.3.conv.0.0",
+      "file": "007_features_3_conv_0_0.hex",
+      "shape": [
+        1,
+        144,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 8,
+      "name": "features.3.conv.1.0",
+      "file": "008_features_3_conv_1_0.hex",
+      "shape": [
+        1,
+        144,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 9,
+      "name": "features.3.conv.2",
+      "file": "009_features_3_conv_2.hex",
+      "shape": [
+        1,
+        24,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 10,
+      "name": "features.3.add",
+      "file": "010_features_3_add.hex",
+      "shape": [
+        1,
+        24,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 11,
+      "name": "features.4.conv.0.0",
+      "file": "011_features_4_conv_0_0.hex",
+      "shape": [
+        1,
+        144,
+        56,
+        56
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 12,
+      "name": "features.4.conv.1.0",
+      "file": "012_features_4_conv_1_0.hex",
+      "shape": [
+        1,
+        144,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 13,
+      "name": "features.4.conv.2",
+      "file": "013_features_4_conv_2.hex",
+      "shape": [
+        1,
+        32,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 14,
+      "name": "features.5.conv.0.0",
+      "file": "014_features_5_conv_0_0.hex",
+      "shape": [
+        1,
+        192,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 15,
+      "name": "features.5.conv.1.0",
+      "file": "015_features_5_conv_1_0.hex",
+      "shape": [
+        1,
+        192,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 16,
+      "name": "features.5.conv.2",
+      "file": "016_features_5_conv_2.hex",
+      "shape": [
+        1,
+        32,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 17,
+      "name": "features.5.add",
+      "file": "017_features_5_add.hex",
+      "shape": [
+        1,
+        32,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 18,
+      "name": "features.6.conv.0.0",
+      "file": "018_features_6_conv_0_0.hex",
+      "shape": [
+        1,
+        192,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 19,
+      "name": "features.6.conv.1.0",
+      "file": "019_features_6_conv_1_0.hex",
+      "shape": [
+        1,
+        192,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 20,
+      "name": "features.6.conv.2",
+      "file": "020_features_6_conv_2.hex",
+      "shape": [
+        1,
+        32,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 21,
+      "name": "features.6.add",
+      "file": "021_features_6_add.hex",
+      "shape": [
+        1,
+        32,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 22,
+      "name": "features.7.conv.0.0",
+      "file": "022_features_7_conv_0_0.hex",
+      "shape": [
+        1,
+        192,
+        28,
+        28
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 23,
+      "name": "features.7.conv.1.0",
+      "file": "023_features_7_conv_1_0.hex",
+      "shape": [
+        1,
+        192,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 24,
+      "name": "features.7.conv.2",
+      "file": "024_features_7_conv_2.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 25,
+      "name": "features.8.conv.0.0",
+      "file": "025_features_8_conv_0_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 26,
+      "name": "features.8.conv.1.0",
+      "file": "026_features_8_conv_1_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 27,
+      "name": "features.8.conv.2",
+      "file": "027_features_8_conv_2.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 28,
+      "name": "features.8.add",
+      "file": "028_features_8_add.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 29,
+      "name": "features.9.conv.0.0",
+      "file": "029_features_9_conv_0_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 30,
+      "name": "features.9.conv.1.0",
+      "file": "030_features_9_conv_1_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 31,
+      "name": "features.9.conv.2",
+      "file": "031_features_9_conv_2.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 32,
+      "name": "features.9.add",
+      "file": "032_features_9_add.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 33,
+      "name": "features.10.conv.0.0",
+      "file": "033_features_10_conv_0_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 34,
+      "name": "features.10.conv.1.0",
+      "file": "034_features_10_conv_1_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 35,
+      "name": "features.10.conv.2",
+      "file": "035_features_10_conv_2.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 36,
+      "name": "features.10.add",
+      "file": "036_features_10_add.hex",
+      "shape": [
+        1,
+        64,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 37,
+      "name": "features.11.conv.0.0",
+      "file": "037_features_11_conv_0_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 38,
+      "name": "features.11.conv.1.0",
+      "file": "038_features_11_conv_1_0.hex",
+      "shape": [
+        1,
+        384,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 39,
+      "name": "features.11.conv.2",
+      "file": "039_features_11_conv_2.hex",
+      "shape": [
+        1,
+        96,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 40,
+      "name": "features.12.conv.0.0",
+      "file": "040_features_12_conv_0_0.hex",
+      "shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 41,
+      "name": "features.12.conv.1.0",
+      "file": "041_features_12_conv_1_0.hex",
+      "shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 42,
+      "name": "features.12.conv.2",
+      "file": "042_features_12_conv_2.hex",
+      "shape": [
+        1,
+        96,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 43,
+      "name": "features.12.add",
+      "file": "043_features_12_add.hex",
+      "shape": [
+        1,
+        96,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 44,
+      "name": "features.13.conv.0.0",
+      "file": "044_features_13_conv_0_0.hex",
+      "shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 45,
+      "name": "features.13.conv.1.0",
+      "file": "045_features_13_conv_1_0.hex",
+      "shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 46,
+      "name": "features.13.conv.2",
+      "file": "046_features_13_conv_2.hex",
+      "shape": [
+        1,
+        96,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 47,
+      "name": "features.13.add",
+      "file": "047_features_13_add.hex",
+      "shape": [
+        1,
+        96,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 48,
+      "name": "features.14.conv.0.0",
+      "file": "048_features_14_conv_0_0.hex",
+      "shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 49,
+      "name": "features.14.conv.1.0",
+      "file": "049_features_14_conv_1_0.hex",
+      "shape": [
+        1,
+        576,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 50,
+      "name": "features.14.conv.2",
+      "file": "050_features_14_conv_2.hex",
+      "shape": [
+        1,
+        160,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 51,
+      "name": "features.15.conv.0.0",
+      "file": "051_features_15_conv_0_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 52,
+      "name": "features.15.conv.1.0",
+      "file": "052_features_15_conv_1_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 53,
+      "name": "features.15.conv.2",
+      "file": "053_features_15_conv_2.hex",
+      "shape": [
+        1,
+        160,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 54,
+      "name": "features.15.add",
+      "file": "054_features_15_add.hex",
+      "shape": [
+        1,
+        160,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 55,
+      "name": "features.16.conv.0.0",
+      "file": "055_features_16_conv_0_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 56,
+      "name": "features.16.conv.1.0",
+      "file": "056_features_16_conv_1_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 57,
+      "name": "features.16.conv.2",
+      "file": "057_features_16_conv_2.hex",
+      "shape": [
+        1,
+        160,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 58,
+      "name": "features.16.add",
+      "file": "058_features_16_add.hex",
+      "shape": [
+        1,
+        160,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 59,
+      "name": "features.17.conv.0.0",
+      "file": "059_features_17_conv_0_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 60,
+      "name": "features.17.conv.1.0",
+      "file": "060_features_17_conv_1_0.hex",
+      "shape": [
+        1,
+        960,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 61,
+      "name": "features.17.conv.2",
+      "file": "061_features_17_conv_2.hex",
+      "shape": [
+        1,
+        320,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 62,
+      "name": "features.18.0",
+      "file": "062_features_18_0.hex",
+      "shape": [
+        1,
+        1280,
+        7,
+        7
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 63,
+      "name": "avgpool",
+      "file": "063_avgpool.hex",
+      "shape": [
+        1,
+        1280
+      ],
+      "bits": 8
+    },
+    {
+      "seq": 64,
+      "name": "classifier.1.acc_int32",
+      "file": "064_classifier_1_acc_int32.hex",
+      "shape": [
+        4
+      ],
+      "bits": 32
+    },
+    {
+      "seq": 65,
+      "name": "classifier.1.logits_int16",
+      "file": "065_classifier_1_logits_int16.hex",
+      "shape": [
+        4
+      ],
+      "bits": 16
+    }
+  ]
+}
