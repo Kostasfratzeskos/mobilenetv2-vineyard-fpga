@@ -14,7 +14,7 @@
 
 *Write 3–5 sentences answering: why can't we just load the trained PyTorch model onto the FPGA directly? What has to happen to the model before hardware can run it?*
 
-Fpgas have limited recources we can use to build our model. That's why we use quantization, which float32 becomes int8 in all parameters loadable data. Float32 units are 4 times bigger that int8, something that will dicrease the memory drastically. We know that the MobileNet V2 has 2.22M + 0.05M --> 2,228,996 parameters so the overall memory layout will dicrease from 8.9MB to 2.3MB.
+Fpgas have limited recources we can use to build our model. That's why we use quantization, which float32 becomes int8 in all parameters loadable data. Float32 units are 4 times bigger than int8, something that will dicrease the memory drastically. We know that the MobileNet V2 has 2.22M + 0.05M --> 2,228,996 parameters so the overall memory layout will dicrease from 8.9MB to 2.3MB.
 
 ---
 
@@ -77,20 +77,22 @@ _______________________________________________________________________________
 
 **Stage 3 — Attach the quantization numbers (`assign_scales`)**
 
-What it does:
+What it does: After stage 2 we have the structure but not the exact 8bit values. Stage 3 walks the pipeline and for every operation computes and attaches the three numbers op needs (S_w, M0, shift). This is where your two inputs finally meet. The checkpoint gave the weights (→ S_w); the scales file gave the activation ranges (→ S_in, S_out); Stage 3 combines them into the M0/shift each op carries.
 _______________________________________________________________________________
 
-What the "numbers" are (name them):
+What the "numbers" are (name them): S_w, M0, shift
 _______________________________________________________________________________
 
 ---
 
 **Stage 4 — Integer forward pass (`IntExecutor`)**
 
-What it does:
+What it does: In this function an image from the dataset run through the serialized network and make all the operations in int8 arithmetic.
+For each conv op:
+int8 activations × int8 weights → accumulate in int32 → add int32 bias → multiply by M0 and shift right with round-half-up → clamp to [−128, 127] → int8 out.
 _______________________________________________________________________________
 
-Why this stage exists instead of just using PyTorch's fake-quant output:
+Why this stage exists instead of just using PyTorch's fake-quant output: PyTorch's fake-quant uses float arithmetic but we want int8.
 _______________________________________________________________________________
 
 *This is the most important stage. Write the exact arithmetic sequence that happens per layer (in your own words, not symbols):*
@@ -102,7 +104,7 @@ _______________________________________________________________________________
 
 **Stage 5 — Emit files**
 
-What files are written out:
+What files are written out: The final stage writes everything to disk: the per-layer weight/bias/M0/shift hex files, the manifest.json describing every op, and the golden vector hex files (one per layer, plus the final logits). These are Section 4's three outputs.
 _______________________________________________________________________________
 
 ---
@@ -139,13 +141,13 @@ _______________________________________________________________________________
 
 **Output C — Golden vectors (per layer)**
 
-Contents:
+Contents: Its the activations for each layer
 _______________________________________________________________________________
 
-How the testbench will use them:
+How the testbench will use them: It will compare the hardware results in the end of each layer (activations of hardware vs activations of software) and just like this we will check if our hardware implemantation is correct.
 _______________________________________________________________________________
 
-What it means if the golden vector and the RTL output don't match:
+What it means if the golden vector and the RTL output don't match: It means that there is an error in our hardware if the error is big enough. If we are talking about small percentages out of the expected values then we can accept it. ?
 _______________________________________________________________________________
 
 ---
@@ -154,6 +156,7 @@ _______________________________________________________________________________
 
 *Explain in 3–4 sentences what the crosscheck does and what "8/8 agreement" means.*
 
+In this step we check if the float32, fake-quant and int8 models provide the same results.
 _______________________________________________________________________________
 _______________________________________________________________________________
 _______________________________________________________________________________
@@ -166,10 +169,10 @@ _______________________________________________________________________________
 
 **DD-008 — File formats for weights and manifest**
 
-Choice:
+Choice: File formats for weights and manifest are in ASCI hex, because that format Verilog's $readmemh reads directly.
 _______________________________________________________________________________
 
-Hardware consequence:
+Hardware consequence: Initialize BRAMs with $readmemh and no custom parser.
 _______________________________________________________________________________
 
 ---
@@ -208,8 +211,7 @@ _______________________________________________________________________________
 
 *What is the accumulator, and why does its bit-width matter for Verilog? What happens if you get it wrong?*
 
-_______________________________________________________________________________
-_______________________________________________________________________________
+Accumulator is the hardware unit that adds the biases with ouput of multiplications. The bit width is 32bits and that is very important because the multiplication int8xint8 requires at least 20 bits, so we choose bit width of 32bit for accumulator.
 
 *What command tells you the actual required bit-width from your trained model?*
 
@@ -217,7 +219,7 @@ _______________________________________________________________________________
 
 *Write the actual number from your run here when you have it:*
 
-Max |accumulator|: _____  → requires _____ signed bits in the Verilog accumulator register.
+Max |accumulator|: __32___  → requires __20___ signed bits in the Verilog accumulator register.
 
 ---
 
@@ -225,9 +227,7 @@ Max |accumulator|: _____  → requires _____ signed bits in the Verilog accumula
 
 *Explain in plain words why M0 and shift must be loadable from files rather than hardcoded constants in the RTL. Connect it to what happens when the model is retrained.*
 
-_______________________________________________________________________________
-_______________________________________________________________________________
-_______________________________________________________________________________
+These weights should be loadable because the hardware that we build have to stay the same and these parameters change if we retrain the model. Therefore we can retrain the model with more data and the hardware will remain the same.
 
 ---
 
@@ -236,12 +236,13 @@ _______________________________________________________________________________
 *Complete this sentence for each file type:*
 
 When I implement a conv layer in Verilog, I will load `_w.hex` by:
+The actual load is done by readmemh, which read the hex file inside memory array.
 _______________________________________________________________________________
 
-The testbench will verify correctness by:
+The testbench will verify correctness by: Comparing exactly the int8 activations of the export files with the activations of the hardware in each layer.
 _______________________________________________________________________________
 
-If the testbench shows a mismatch at layer N, the first thing I check is:
+If the testbench shows a mismatch at layer N, the first thing I check is: If the hardware implemantation is correct.
 _______________________________________________________________________________
 
 ---
