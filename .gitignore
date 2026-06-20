@@ -58,3 +58,14 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+#── C ───────────────────────────────
+# Compiled binaries
+*.exe
+*.o
+*.out
+*.obj
+
+# Build output
+out.exe
+main.exe

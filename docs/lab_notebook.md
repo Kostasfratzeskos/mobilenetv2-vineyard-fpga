@@ -69,3 +69,9 @@ wrote quant_scales.json  (53 layers)
 - Found / decided: --
 - Blocked on: nothing
 - Next: Build the axi4 light stream, just to transfer some data from PS to PL.
+
+### 2026-06-20 - C implemantation of the model int8 pipeline
+- Did: I fixed the make in my environment, I began to study a c implemantation of a simple cnn
+- Found / decided: The c implemantation will help me understand better the whole model.
+- Blocked on: nothing
+- Next: Continue with the study.
