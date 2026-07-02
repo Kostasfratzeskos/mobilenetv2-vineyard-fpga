@@ -75,3 +75,9 @@ wrote quant_scales.json  (53 layers)
 - Found / decided: The c implemantation will help me understand better the whole model.
 - Blocked on: nothing
 - Next: Continue with the study.
+
+### 2026-07-1 - Implemantation of quantization layer of c model
+- Did: Implemented the quantize function in c
+- Found / decided: The maths and the rounding that were used is: (acc * m0 + (1 << (shift-1))) >> shift and then a clamp function to produce the int8 number in the range of [-128,127]
+- Blocked on: nothing
+- Next: Continue by implementing the conv in c.

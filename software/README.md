@@ -1,11 +1,19 @@
-# software/ - Phase 1: reference model (the source of truth)
+# software/ - Phase 1: reference models (the source of truth)
 
-Python pipeline that produces the golden vectors every hardware block is checked against.
+Python pipeline that produces the golden vectors every hardware block is checked
+against, plus a bit-exact C reimplementation that bridges the Python model and the RTL.
 
-- `model/`    - load / define MobileNetV2
-- `train/`    - fine-tune on the grape-disease dataset
-- `quantize/` - int8 quantization + the bit-exact fixed-point model (must match the hardware arithmetic)
-- `export/`   - dump quantized weights (hex/coe/bin) and per-layer scales for the RTL
-- `golden/`   - generate and store per-layer golden activation vectors
+- `model/`      - MobileNetV2 definition / checkpoint loading (`mobilenetv2.py`)
+- `train/`      - the full pipeline: `train.py`, `dataset.py`, `quantize.py`
+  (int8 + fixed-point model), `export.py` (dump weights), `evaluate.py`
+- `cmodel/`     - bit-exact C reference model: same integer arithmetic as the
+  hardware, used to cross-check the Python golden vectors before the RTL exists
+- `export/`     - quantized weights (`.hex`) and per-layer scales for the RTL
+- `golden/`     - per-layer golden activation vectors
+- `predict.py`  - run inference on a single image
+- `runs/`       - trained checkpoints (gitignored)
 
 Install deps: `pip install -r requirements.txt`
+
+The quantization arithmetic (`train/quantize.py`) must stay identical to the
+hardware; `cmodel/` exists to prove it does. See `cmodel/README.md`.

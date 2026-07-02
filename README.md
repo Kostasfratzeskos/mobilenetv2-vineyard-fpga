@@ -26,8 +26,13 @@ See `docs/design_decisions.md` (DD-006) and `software/golden/`.
 │   ├── design_decisions.md why each non-trivial choice was made (start here)
 │   ├── lab_notebook.md     running progress log
 │   └── references/         papers + notes
-├── software/               Phase 1: Python reference model (the source of truth)
-│   ├── model/  train/  quantize/  export/  golden/
+├── software/               Phase 1: reference models (the source of truth)
+│   ├── model/              MobileNetV2 definition (PyTorch)
+│   ├── train/              fine-tune + quantize + export scripts
+│   ├── cmodel/             bit-exact C reference model (Python ⇄ Verilog bridge)
+│   ├── export/             quantized weights (hex) + per-layer scales for the RTL
+│   ├── golden/             per-layer golden activation vectors
+│   ├── predict.py          single-image inference
 │   └── requirements.txt
 ├── data/                   datasets (gitignored)
 ├── hardware/               Phases 2–3: Verilog-2001 RTL
