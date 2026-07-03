@@ -61,8 +61,32 @@ void conv1x1(const tensor_i8 *in, const int8_t *w,
 
 void dwconv3x3(const tensor_i8 *in, const int8_t *w,
                const layer_config *cfg, tensor_i32 *out) {
-    (void)in; (void)w; (void)cfg; (void)out;
-    /* TODO: depthwise 3x3 - one independent 3x3 kernel per channel. */
+    const int C  = in->c;                 /* depthwise => OC == C, no ic sum  */
+    const int H  = in->h,  W  = in->w;
+    const int OH = out->h, OW = out->w;
+    const int K  = cfg->kernel;           /* 3                                */
+    const int S  = cfg->stride;
+    const int P  = cfg->pad;
+
+    for (int oy = 0; oy < OH; ++oy) {
+        for (int ox = 0; ox < OW; ++ox) {
+            for (int c = 0; c < C; ++c) {
+                int32_t acc = 0;
+                for (int ky = 0; ky < K; ++ky) {
+                    int iy = oy * S - P + ky;
+                    if (iy < 0 || iy >= H) continue;              /* zero pad */
+                    for (int kx = 0; kx < K; ++kx) {
+                        int ix = ox * S - P + kx;
+                        if (ix < 0 || ix >= W) continue;          /* zero pad */
+                        int8_t a = in->data[(iy * W + ix) * C + c];
+                        int8_t g = w[(c * K + ky) * K + kx];      /* (C,1,K,K) */
+                        acc += (int32_t)a * (int32_t)g;
+                    }
+                }
+                out->data[(oy * OW + ox) * C + c] = acc;
+            }
+        }
+    }
 }
 
 void bias_add(tensor_i32 *acc, const int32_t *bias) {
