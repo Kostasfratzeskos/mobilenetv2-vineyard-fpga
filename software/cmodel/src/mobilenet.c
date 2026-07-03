@@ -21,19 +21,35 @@ const char *const CLASS_NAMES[NUM_CLASSES] = {
 
 void conv3x3_std(const tensor_i8 *in, const int8_t *w,
                  const layer_config *cfg, tensor_i32 *out) {
-    (void)in; (void)w; (void)cfg; (void)out;
+    const int C  = in->c;                 /* input channels  (3 for the stem) */
+    const int H  = in->h,  W  = in->w;
+    const int OC = out->c;                /* output channels                  */
+    const int OH = out->h, OW = out->w;
+    const int K  = cfg->kernel;           /* 3                                */
+    const int S  = cfg->stride;
+    const int P  = cfg->pad;
 
-    int C = in->c;
-    int W = in->w;
-    int H = in->h;
-
-    int8_t InputLen = W*H*C;
-
-    for (int i = 0; i < InputLen; i++) {
-
+    for (int oy = 0; oy < OH; ++oy) {
+        for (int ox = 0; ox < OW; ++ox) {
+            for (int oc = 0; oc < OC; ++oc) {
+                int32_t acc = 0;
+                for (int ky = 0; ky < K; ++ky) {
+                    int iy = oy * S - P + ky;
+                    if (iy < 0 || iy >= H) continue;              /* zero pad */
+                    for (int kx = 0; kx < K; ++kx) {
+                        int ix = ox * S - P + kx;
+                        if (ix < 0 || ix >= W) continue;          /* zero pad */
+                        for (int ic = 0; ic < C; ++ic) {
+                            int8_t a = in->data[(iy * W + ix) * C + ic];
+                            int8_t g = w[((oc * C + ic) * K + ky) * K + kx];
+                            acc += (int32_t)a * (int32_t)g;       /* i8*i8 -> i32 */
+                        }
+                    }
+                }
+                out->data[(oy * OW + ox) * OC + oc] = acc;
+            }
+        }
     }
-    /* TODO: standard 3x3 conv, Cin=3, NHWC, accumulate int8*int8 -> int32.
-     *       symmetric quant => no zero-point terms. */
 }
 
 void conv1x1(const tensor_i8 *in, const int8_t *w,
@@ -50,8 +66,9 @@ void dwconv3x3(const tensor_i8 *in, const int8_t *w,
 }
 
 void bias_add(tensor_i32 *acc, const int32_t *bias) {
-    (void)acc; (void)bias;
-    /* TODO: acc[.,.,k] += bias[k]  (int32). */
+    const int C = acc->c;                 /* NHWC: channel index = i % C */
+    const int n = acc->h * acc->w * acc->c;
+    for (int i = 0; i < n; ++i) acc->data[i] += bias[i % C];
 }
 
 void requantize(const tensor_i32 *acc, const requant_params *rq,
