@@ -54,9 +54,25 @@ void conv3x3_std(const tensor_i8 *in, const int8_t *w,
 
 void conv1x1(const tensor_i8 *in, const int8_t *w,
              const layer_config *cfg, tensor_i32 *out) {
-    (void)in; (void)w; (void)cfg; (void)out;
-    /* TODO: pointwise conv. For each output pixel, dot product over the
-     *       contiguous in_c channels (this is why NHWC is convenient). */
+    const int C  = in->c;                 /* input channels                   */
+    const int OC = out->c;
+    const int OH = out->h, OW = out->w;
+    const int W  = in->w;
+    const int S  = cfg->stride;           /* 1 for every 1x1 in the network   */
+    const int P  = cfg->pad;              /* 0                                */
+
+    for (int oy = 0; oy < OH; ++oy) {
+        for (int ox = 0; ox < OW; ++ox) {
+            const int8_t *pin = &in->data[((oy * S - P) * W + (ox * S - P)) * C];
+            for (int oc = 0; oc < OC; ++oc) {
+                const int8_t *pw = &w[oc * C];        /* (OC,IC) weight row   */
+                int32_t acc = 0;
+                for (int ic = 0; ic < C; ++ic)
+                    acc += (int32_t)pin[ic] * (int32_t)pw[ic];
+                out->data[(oy * OW + ox) * OC + oc] = acc;
+            }
+        }
+    }
 }
 
 void dwconv3x3(const tensor_i8 *in, const int8_t *w,
