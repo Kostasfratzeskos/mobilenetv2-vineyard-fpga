@@ -125,10 +125,18 @@ void requantize(const tensor_i32 *acc, const requant_params *rq,
 }
 
 void residual_add(const tensor_i8 *target, const tensor_i8 *saved,
-                  int32_t m0, int shift, tensor_i8 *out) {
-    (void)target; (void)saved; (void)m0; (void)shift; (void)out;
+                  int32_t m0, int shift, tensor_i8 *out, int relu6_qmax) {
     /* TODO: rescale `saved` onto target's scale via (saved*m0)>>shift,
      *       add to target (int), clamp to int8. */
+
+     // Before adding the input activation with the output activation,
+     // rescale the input activation in the same scale as the output
+     int arr_len = target->c * target->h * target->w;
+
+     for(int idx = 0; idx < arr_len; idx++) {
+        out->data[idx] = requantize_elem(saved->data[idx], m0, (int)shift, ACT_NONE, relu6_qmax) + 
+                         target->data[idx];
+     }
 }
 
 void avgpool(const tensor_i8 *in, int32_t m0, int shift, tensor_i8 *out) {
@@ -373,7 +381,7 @@ void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits,
         case OP_RESIDUAL_ADD:
             if (L->residual_src >= 0) {
                 tensor_i8 saved = { out[L->residual_src], L->out_h, L->out_w, L->out_c };
-                residual_add(cur, &saved, L->requant.m0[0], (int)L->requant.shift[0], &o);
+                residual_add(cur, &saved, L->requant.m0[0], (int)L->requant.shift[0], &o, L->relu6_qmax);
             }
             break;
 

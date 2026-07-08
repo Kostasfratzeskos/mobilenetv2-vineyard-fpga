@@ -155,7 +155,7 @@ void requantize  (const tensor_i32 *acc, const requant_params *rq, activation ac
 /* residual add: `target` and `saved` live in DIFFERENT scales; (m0,shift)
  * rescale `saved` onto target's scale before the int add, result clamped
  * to int8. (Signature carries the scale-alignment the manifest requires.) */
-void residual_add(const tensor_i8 *target, const tensor_i8 *saved, int32_t m0, int shift, tensor_i8 *out);
+void residual_add(const tensor_i8 *target, const tensor_i8 *saved, int32_t m0, int shift, tensor_i8 *out, int relu6_qmax);
 
 /* global average pool HxWxC -> 1x1xC, then requantize the mean with (m0,shift). */
 void avgpool     (const tensor_i8 *in, int32_t m0, int shift, tensor_i8 *out);
