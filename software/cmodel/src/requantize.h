@@ -14,6 +14,10 @@ int32_t requant_mul_shift(int32_t acc, int32_t m0, int shift);
 /* saturate an int32 to the int8 range [-128, 127]  (== quantize.clamp_i8) */
 int8_t  clamp_i8(int32_t v);
 
+/* saturate an int32 to the int16 range [-32768, 32767] - used by the
+ * classifier tail, whose logits are 16-bit (manifest logit_bits = 16). */
+int16_t clamp_i16(int32_t v);
+
 /* full per-element tail:  core -> activation/clamp -> int8.
  *   ACT_RELU6 : clamp to [0, relu6_qmax]   (relu6_qmax = q6 from manifest)
  *   ACT_NONE  : clamp to [-128, 127]                                       */

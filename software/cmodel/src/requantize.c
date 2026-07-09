@@ -22,6 +22,12 @@ int8_t clamp_i8(int32_t v) {
     return (int8_t)v;
 }
 
+int16_t clamp_i16(int32_t v) {
+    if (v < -32768) return -32768;
+    if (v >  32767) return  32767;
+    return (int16_t)v;
+}
+
 int8_t requantize_elem(int32_t acc, int32_t m0, int shift,
                        activation act, int relu6_qmax) {
     int32_t r = requant_mul_shift(acc, m0, shift);

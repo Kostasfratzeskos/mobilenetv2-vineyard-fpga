@@ -108,6 +108,8 @@ typedef struct {
     requant_params requant;
     activation     act;
     int            relu6_qmax;  /* clamp ceiling when act == ACT_RELU6 */
+    int            out_bits;    /* 8 for every layer except the classifier,
+                                 * which emits 16-bit logits (manifest logit_bits) */
 
     /* residual bookkeeping: index of the earlier layer whose i8 output
      * is the second addend, or -1 if this layer has no residual.      */
@@ -160,6 +162,11 @@ void residual_add(const tensor_i8 *target, const tensor_i8 *saved, int32_t m0, i
 /* global average pool HxWxC -> 1x1xC, then requantize the mean with (m0,shift). */
 void avgpool     (const tensor_i8 *in, int32_t m0, int shift, tensor_i8 *out);
 
+/* classifier tail: int32 acc -> int16 logits. Like `requantize` but clamps to
+ * the int16 logit range instead of int8, keeps 16-bit, and has no activation.
+ * Per-class (m0,shift) in `rq` (rq->len == number of classes).               */
+void requantize_logits(const tensor_i32 *acc, const requant_params *rq, int16_t *out);
+
 
 /* =====================================================================
  *  Model lifecycle + controller + helpers
@@ -171,12 +178,14 @@ void free_model (model *m);
 
 /* the controller: walks m->layers and dispatches to the engines.
  * `input`  is already int8, NHWC, in the network's input scale.
- * `logits` receives the 1x1xNUM_CLASSES int8 logits.
+ * `logits` receives the NUM_CLASSES int16 logits (classifier output).
  * `dump_dir` (or NULL): if set, every layer's output is written there as
- *   "<name>.hex" (NCHW) for golden diffing.                           */
-void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits, const char *dump_dir);
+ *   "<name>.hex" (NCHW) for golden diffing; the classifier also writes
+ *   "<name>.acc_int32.hex" and "<name>.logits_int16.hex".             */
+void run_inference(const model *m, const tensor_i8 *input, int16_t *logits, const char *dump_dir);
 
-int  argmax_i8(const tensor_i8 *logits);
+int  argmax_i8 (const tensor_i8 *logits);
+int  argmax_i16(const int16_t *logits, int n);
 
 /* validation hook: write a layer's i8 output (permuted NHWC->NCHW) to
  * `path` so it can be diffed against the per-layer golden vector.     */

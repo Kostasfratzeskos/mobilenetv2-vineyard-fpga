@@ -19,10 +19,12 @@ long hex_count(const char *path);
 
 /* read exactly n values; returns n on success, -1 on error/short file */
 int hex_read_i8 (const char *path, int8_t  *dst, int n);
+int hex_read_i16(const char *path, int16_t *dst, int n);
 int hex_read_i32(const char *path, int32_t *dst, int n);
 
 /* write n values, one per line, lowercase hex two's complement */
 int hex_write_i8 (const char *path, const int8_t  *src, int n);
+int hex_write_i16(const char *path, const int16_t *src, int n);
 int hex_write_i32(const char *path, const int32_t *src, int n);
 
 /* layout permutes (H*W*C elements) */

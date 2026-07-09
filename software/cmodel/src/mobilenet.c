@@ -126,8 +126,6 @@ void requantize(const tensor_i32 *acc, const requant_params *rq,
 
 void residual_add(const tensor_i8 *target, const tensor_i8 *saved,
                   int32_t m0, int shift, tensor_i8 *out, int relu6_qmax) {
-    /* TODO: rescale `saved` onto target's scale via (saved*m0)>>shift,
-     *       add to target (int), clamp to int8. */
 
      // Before adding the input activation with the output activation,
      // rescale the input activation in the same scale as the output
@@ -139,9 +137,29 @@ void residual_add(const tensor_i8 *target, const tensor_i8 *saved,
      }
 }
 
+void requantize_logits(const tensor_i32 *acc, const requant_params *rq, int16_t *out) {
+    const int n = acc->h * acc->w * acc->c;   /* one accumulator per class */
+    for (int c = 0; c < n; ++c) {
+        int idx = (rq->len == 1) ? 0 : c;     /* per-class m0/shift */
+        int32_t v = requant_mul_shift(acc->data[c], rq->m0[idx], (int)rq->shift[idx]);
+        out[c] = clamp_i16(v);                /* logits stay 16-bit; no activation */
+    }
+}
+
 void avgpool(const tensor_i8 *in, int32_t m0, int shift, tensor_i8 *out) {
-    (void)in; (void)m0; (void)shift; (void)out;
-    /* TODO: sum over HxW per channel -> int32, requantize with (m0,shift). */
+    /* Global average pool -> 1x1xC. For each channel, sum its H*W spatial
+     * values into an int32, then requantize. The /(H*W) averaging is folded
+     * into (m0,shift) by the exporter, so there is no explicit divide here. */
+    const int C = in->c;
+    const int H = in->h, W = in->w;
+
+    for (int c = 0; c < C; ++c) {
+        int32_t acc = 0;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                acc += in->data[(y * W + x) * C + c];
+        out->data[c] = requantize_elem(acc, m0, shift, ACT_NONE, 0);
+    }
 }
 
 
@@ -247,6 +265,7 @@ int load_model(const char *dir, model *m) {
         L->residual_src = -1;
         L->in_h = cur_h; L->in_w = cur_w; L->in_c = cur_c;
         L->requant.len = 1;
+        L->out_bits = 8;
 
         if (!strcmp(kind, "conv") || !strcmp(kind, "linear")) {
             const json *ws  = json_get(op, "weight_shape");
@@ -275,6 +294,8 @@ int load_model(const char *dir, model *m) {
             L->requant.len   = oc;
             L->act        = json_get_bool(op, "relu6", 0) ? ACT_RELU6 : ACT_NONE;
             L->relu6_qmax = json_get_int(op, "relu6_qmax", 127);
+            if (!strcmp(kind, "linear"))               /* classifier -> int16 logits */
+                L->out_bits = json_get_int(root, "logit_bits", 16);
 
             if (!L->weights || !L->bias || !L->requant.m0 || !L->requant.shift) {
                 fprintf(stderr, "load_model: missing params for %s\n", L->name);
@@ -342,7 +363,7 @@ void free_model(model *m) {
  *  point: implement one engine, watch one more layer go green.
  * ==================================================================== */
 
-void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits,
+void run_inference(const model *m, const tensor_i8 *input, int16_t *logits,
                    const char *dump_dir) {
     int nl = m->num_layers;
     if (nl == 0) return;
@@ -375,7 +396,20 @@ void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits,
             else if (L->op == OP_CONV1x1)     conv1x1   (cur, L->weights, L, &a);
             else                              dwconv3x3 (cur, L->weights, L, &a);
             if (L->bias) bias_add(&a, L->bias);
-            requantize(&a, &L->requant, L->act, L->relu6_qmax, &o);
+            if (L->out_bits == 16) {
+                /* classifier: keep the int32 acc, emit int16 logits; both are
+                 * checked against golden. o (int8) is unused - it is the last layer. */
+                if (logits) requantize_logits(&a, &L->requant, logits);
+                if (dump_dir) {
+                    char p[512];
+                    snprintf(p, sizeof p, "%s/%s.acc_int32.hex", dump_dir, L->name);
+                    hex_write_i32(p, acc, (int)osz);
+                    snprintf(p, sizeof p, "%s/%s.logits_int16.hex", dump_dir, L->name);
+                    if (logits) hex_write_i16(p, logits, L->out_c);
+                }
+            } else {
+                requantize(&a, &L->requant, L->act, L->relu6_qmax, &o);
+            }
             break;
 
         case OP_RESIDUAL_ADD:
@@ -393,7 +427,9 @@ void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits,
             break;
         }
 
-        if (dump_dir) {
+        /* 8-bit layers dump one file; the classifier already dumped its
+         * acc_int32 / logits_int16 above, so skip the plain int8 dump. */
+        if (dump_dir && L->out_bits != 16) {
             char p[512];
             snprintf(p, sizeof p, "%s/%s.hex", dump_dir, L->name);
             dump_layer_i8(p, &o);
@@ -401,14 +437,6 @@ void run_inference(const model *m, const tensor_i8 *input, tensor_i8 *logits,
 
         curbuf = o;        /* stable storage for the next iteration's `cur` */
         cur = &curbuf;
-    }
-
-    /* logits <- last layer's output (classifier). NOTE: the real logits are
-     * int16 (manifest logit_bits=16); this int8 copy is a placeholder until
-     * the classifier tail is widened. */
-    if (logits && logits->data) {
-        int n = logits->c < m->layers[nl - 1].out_c ? logits->c : m->layers[nl - 1].out_c;
-        memcpy(logits->data, out[nl - 1], (size_t)n);
     }
 
     for (int i = 0; i < nl; i++) free(out[i]);
@@ -425,6 +453,14 @@ int argmax_i8(const tensor_i8 *logits) {
             best  = k;
         }
     }
+    return best;
+}
+
+int argmax_i16(const int16_t *logits, int n) {
+    int     best  = 0;
+    int16_t bestv = logits ? logits[0] : 0;
+    for (int k = 1; k < n; ++k)
+        if (logits[k] > bestv) { bestv = logits[k]; best = k; }
     return best;
 }
 

@@ -30,17 +30,28 @@ static int load_input_image(const char *golden_dir, const layer_config *first,
 
 /* diff two hex files (int8). returns #mismatches, -1 on size mismatch,
  * -2 if a file is missing. `first` gets the index of the first mismatch. */
-static int compare_hex(const char *a, const char *b, int *first) {
+static int compare_hex(const char *a, const char *b, int bits, int *first) {
     *first = -1;
     long na = hex_count(a), nb = hex_count(b);
     if (na < 0 || nb < 0) return -2;
     if (na != nb) return -1;
     int n = (int)na, mm = 0;
-    int8_t *A = malloc((size_t)n), *B = malloc((size_t)n);
-    hex_read_i8(a, A, n); hex_read_i8(b, B, n);
-    for (int i = 0; i < n; i++)
-        if (A[i] != B[i]) { if (*first < 0) *first = i; mm++; }
-    free(A); free(B);
+    if (bits == 32) {
+        int32_t *A = malloc((size_t)n * 4), *B = malloc((size_t)n * 4);
+        hex_read_i32(a, A, n); hex_read_i32(b, B, n);
+        for (int i = 0; i < n; i++) if (A[i] != B[i]) { if (*first < 0) *first = i; mm++; }
+        free(A); free(B);
+    } else if (bits == 16) {
+        int16_t *A = malloc((size_t)n * 2), *B = malloc((size_t)n * 2);
+        hex_read_i16(a, A, n); hex_read_i16(b, B, n);
+        for (int i = 0; i < n; i++) if (A[i] != B[i]) { if (*first < 0) *first = i; mm++; }
+        free(A); free(B);
+    } else {
+        int8_t *A = malloc((size_t)n), *B = malloc((size_t)n);
+        hex_read_i8(a, A, n); hex_read_i8(b, B, n);
+        for (int i = 0; i < n; i++) if (A[i] != B[i]) { if (*first < 0) *first = i; mm++; }
+        free(A); free(B);
+    }
     return mm;
 }
 
@@ -69,9 +80,7 @@ static void compare_against_golden(const char *golden_dir, const char *dump_dir)
         if (!strcmp(nm, "input")) snprintf(dpath, sizeof dpath, "%s/input.hex", dump_dir);
         else                      snprintf(dpath, sizeof dpath, "%s/%s.hex", dump_dir, nm);
 
-        if (bits != 8) { printf(" %3d  %-33s  skip (int%d, not modeled)\n", seq, nm, bits); continue; }
-
-        int first = -1, mm = compare_hex(gpath, dpath, &first);
+        int first = -1, mm = compare_hex(gpath, dpath, bits, &first);
         total++;
         if      (mm == -2) printf(" %3d  %-33s  no dump\n", seq, nm);
         else if (mm == -1) printf(" %3d  %-33s  SIZE MISMATCH\n", seq, nm);
@@ -79,7 +88,7 @@ static void compare_against_golden(const char *golden_dir, const char *dump_dir)
         else               printf(" %3d  %-33s  FAIL (%d diffs, first @%d)\n", seq, nm, mm, first);
     }
     printf(" ---  ---------------------------------  ------------------------\n");
-    printf(" %d / %d int8 layers match golden\n\n", pass, total);
+    printf(" %d / %d layers match golden\n\n", pass, total);
     json_free(gm);
 }
 
@@ -105,13 +114,12 @@ int main(int argc, char **argv) {
     { char p[512]; snprintf(p, sizeof p, "%s/input.hex", dump_dir);
       dump_layer_i8(p, &input); }
 
-    int8_t logits_buf[NUM_CLASSES] = {0};
-    tensor_i8 logits = { logits_buf, 1, 1, NUM_CLASSES };
-    run_inference(&m, &input, &logits, dump_dir);
+    int16_t logits[NUM_CLASSES] = {0};
+    run_inference(&m, &input, logits, dump_dir);
 
-    int cls = argmax_i8(&logits);
-    printf("predicted class: %d (%s)   [placeholder until engines land]\n",
-           cls, CLASS_NAMES[cls]);
+    int cls = argmax_i16(logits, NUM_CLASSES);
+    printf("predicted class: %d (%s)   logits = [%d, %d, %d, %d]\n",
+           cls, CLASS_NAMES[cls], logits[0], logits[1], logits[2], logits[3]);
 
     compare_against_golden(golden_dir, dump_dir);
 

@@ -43,6 +43,15 @@ int hex_read_i8(const char *path, int8_t *dst, int n) {
     return r;
 }
 
+int hex_read_i16(const char *path, int16_t *dst, int n) {
+    uint32_t *tmp = malloc((size_t)n * sizeof *tmp);
+    if (!tmp) return -1;
+    int r = hex_read_u32(path, tmp, n);
+    if (r == n) for (int i = 0; i < n; i++) dst[i] = (int16_t)(uint16_t)tmp[i];
+    free(tmp);
+    return r;
+}
+
 int hex_read_i32(const char *path, int32_t *dst, int n) {
     uint32_t *tmp = malloc((size_t)n * sizeof *tmp);
     if (!tmp) return -1;
@@ -56,6 +65,14 @@ int hex_write_i8(const char *path, const int8_t *src, int n) {
     FILE *f = fopen(path, "w");
     if (!f) { fprintf(stderr, "hexio: cannot write %s\n", path); return -1; }
     for (int i = 0; i < n; i++) fprintf(f, "%02x\n", (uint8_t)src[i]);
+    fclose(f);
+    return n;
+}
+
+int hex_write_i16(const char *path, const int16_t *src, int n) {
+    FILE *f = fopen(path, "w");
+    if (!f) { fprintf(stderr, "hexio: cannot write %s\n", path); return -1; }
+    for (int i = 0; i < n; i++) fprintf(f, "%04x\n", (uint16_t)src[i]);
     fclose(f);
     return n;
 }
