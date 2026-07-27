@@ -112,8 +112,14 @@ fi
 "$VIVADO_BIN/xsim.bat" sim_snap -runall | tee sim.log
 
 echo
-if grep -qE '\[ERR\]|FAILED' sim.log; then
+# Pass requires a POSITIVE marker (the TB prints "ALL PASS"): absence of the
+# word FAILED is not enough -- a sim that never started prints neither.
+if grep -qE '\[ERR\]|FAILED|^ERROR:|Simulation engine failed' sim.log; then
     echo ">> SIMULATION FAILED ($MODULE)"
     exit 1
+elif grep -q 'ALL PASS' sim.log; then
+    echo ">> SIMULATION PASSED ($MODULE)"
+else
+    echo ">> SIMULATION INCONCLUSIVE ($MODULE): no 'ALL PASS' marker -- did the sim run?"
+    exit 1
 fi
-echo ">> SIMULATION PASSED ($MODULE)"
