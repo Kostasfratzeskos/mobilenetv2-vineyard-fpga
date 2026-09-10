@@ -96,18 +96,37 @@ generator** για τα 3×3.
 ## 3. Roofline analysis
 
 ### Inputs
-| | Τιμή |
-|---|---|
-| Workload | ~300 M MACs / inference (MobileNetV2-1.0 @224) |
-| Weights | ~3,4 MB int8 |
-| Peak compute | 1.728 MAC/cyc (·2 με int8 packing) |
-| DDR BW | ~12–19 GB/s (PS-DDR4) |
-| Design clock | 250 MHz |
+Τα δύο πρώτα **μετρήθηκαν από το `software/export/manifest.json`** (2026-09-10), δεν
+είναι εκτιμήσεις από τη βιβλιογραφία.
+
+| | Τιμή | προέλευση |
+|---|---|---|
+| Workload | **299.499.392 MACs** / inference (≈300 M) | άθροισμα `OH·OW·OC·(IC/groups)·KH·KW` σε 53 conv + gap + classifier |
+| Weights | **2,19 MB int8** (+0,07 MB int32 bias) | άθροισμα `OC·(IC/groups)·KH·KW` |
+| Peak compute | 1.728 MAC/cyc (·2 με int8 packing) | DSP48E2 count του XCZU7EV |
+| DDR BW | ~12–19 GB/s (PS-DDR4) | 64 bit × 2400 MT/s = 19,2 θεωρητικό· 12 ρεαλιστικό |
+| Design clock | 250 MHz | **στόχος σχεδίασης**, όχι υπολογισμός |
+
+> **Διόρθωση (2026-09-10).** Η προηγούμενη έκδοση έγραφε «~3,4 MB βάρη». Αυτό είναι το
+> MobileNetV2 του **ImageNet** (3,4 M παράμετροι × 1 byte για int8). Το δικό μας
+> classifier είναι `1280×4` αντί για `1280×1000`, δηλαδή ~1,27 M λιγότερες παράμετροι.
+> Το «~300 M MACs» επιβεβαιώθηκε (σφάλμα 0,2%).
+
+### Κατανομή του workload (μετρημένη)
+| κατηγορία | % των MACs | % των βαρών |
+|---|---:|---:|
+| pointwise 1×1 | **89,4%** | 96,8% |
+| depthwise 3×3 | 6,9% | 2,9% |
+| stem 3×3 | 3,6% | ~0% |
+| gap + classifier | 0,02% | 0,2% |
+
+Αυτό δικαιολογεί ποσοτικά τη σειρά του build plan: **9 στα 10 MACs περνούν από τον
+pointwise array**, άρα αυτός χτίζεται πρώτος.
 
 ### Arithmetic intensity (με activations on-chip)
-DRAM traffic/inference = weights + input + output ≈ 3,4 + 0,15 + ~0 ≈ **3,55 MB**.
+DRAM traffic/inference = βάρη + bias + input ≈ 2,19 + 0,07 + 0,15 ≈ **2,41 MB**.
 ```
-Intensity = 300e6 MAC / 3,55e6 B ≈ 85 MAC/byte   (υψηλό)
+Intensity = 299,5e6 MAC / 2,41e6 B ≈ 124 MAC/byte   (πολύ υψηλό)
 ```
 > Αν τα activations πήγαιναν στο DDR κάθε layer, το intensity θα κατέρρεε (~2–3
 > MAC/byte) → memory-bound. Ο roofline **δικαιώνει ποσοτικά** το «activations on-chip».
@@ -115,9 +134,11 @@ Intensity = 300e6 MAC / 3,55e6 B ≈ 85 MAC/byte   (υψηλό)
 ### Ridge point → compute-bound
 Χειρότερη περίπτωση (όλα τα DSP+packing = 864 GMAC/s, BW 12 GB/s):
 ```
-Ridge = 864e9 / 12e9 ≈ 72 MAC/byte  <  85  →  compute-bound
+Ridge = 864e9 / 12e9 ≈ 72 MAC/byte  <  124  →  compute-bound
 ```
-**Bottleneck = DSPs, όχι μνήμη.**
+**Bottleneck = DSPs, όχι μνήμη.** Με το διορθωμένο μέγεθος βαρών το περιθώριο πάνω από
+το ridge point είναι **72%** (ήταν 18% με το λανθασμένο 3,4 MB) — δηλαδή το συμπέρασμα
+δεν κινδυνεύει από λεπτομέρειες υλοποίησης του DMA.
 
 ### Throughput vs P (MAC/κύκλο), @250 MHz
 `latency = 300e6 / (P × 250e6)`
@@ -130,17 +151,20 @@ Ridge = 864e9 / 12e9 ≈ 72 MAC/byte  <  85  →  compute-bound
 | 1024 | 512 | 1,2 ms | 853 | ~425 |
 | 1728 | 864 | 0,69 ms | 1440 | ~720 |
 
-### Reality factor
-Ρεαλιστικό utilization **40–60%**. Λόγοι: τα **pointwise 1×1 = ~90%+ των MACs**
-(καλό util)· τα **depthwise = ~3% MACs αλλά κακό util** (9 taps, χαμηλό reuse)·
-πολλά μικρά/ασύμμετρα layers (pipeline fill/drain).
+### Reality factor (μετρημένο, όχι εκτίμηση)
+Η αρχική εκτίμηση ήταν «ρεαλιστικό utilization 40–60%». Η προσομοίωση του cycle model
+πάνω σε **όλα** τα pointwise layers (§5) δείχνει ότι ο **ίδιος ο array πιάνει 92,1%** —
+η μόνη απώλεια είναι το tail-padding. Οι πραγματικοί κίνδυνοι είναι αλλού:
+
+1. **Η σειριοποίηση του depthwise** — το μεγάλο πρόβλημα, βλ. §6.
+2. Pipeline fill/drain και DMA stalls, που δεν μοντελοποιούνται εδώ.
 
 ### Απόφαση: **μεσαίο P = 512** (Tm=32 × Tn=16, ~256 DSPs, ~15% chip)
 Ισορροπία throughput/πόρων με headroom για timing/routing.
 
 ### Weight-bandwidth sanity check @P=512
 ```
-3,4 MB / 2,3 ms ≈ 1,5 GB/s  «  12–19 GB/s ✓   (τετριμμένο, ακόμα & με double-buffer)
+2,26 MB / 2,27 ms ≈ 1,0 GB/s  «  12–19 GB/s ✓   (5% της DDR, άπλετος χώρος για double-buffer)
 ```
 
 ---
@@ -159,13 +183,50 @@ Ridge = 864e9 / 12e9 ≈ 72 MAC/byte  <  85  →  compute-bound
 
 ## 5. Pointwise MAC array — detailed spec (P=512)
 
-### Διαστάσεις
-`Tm × Tn = 32 × 16 = 512 MACs`.
+### Διαστάσεις — **ΑΠΟΦΑΣΙΣΜΕΝΟ: Tm × Tn = 32 × 16** (2026-09-10)
 - **Tn=16** input channels/κύκλο → adder-tree βάθους 4/lane· activation broadcast
   16×8b = 128 bit/κύκλο.
 - **Tm=32** output channels/κύκλο → 32 lanes, δικά τους βάρη ανά lane.
-- *Εναλλακτική Tn=8/Tm=64:* το Tn=8 διαιρεί **όλα** τα MobileNetV2 channel counts
-  (16,24,32,96,144,…) → λιγότερο tail-padding. Αλλαγή παραμέτρου.
+
+Η απόφαση βγήκε τρέχοντας το cycle model σε **όλα** τα 35 pointwise layers, για κάθε
+διαμόρφωση με σταθερό `Tm·Tn = 512`:
+
+| Tm × Tn | utilization | κύκλοι | ms @250MHz |
+|---|---:|---:|---:|
+| 8 × 64 | 66,1% | 792k | 3,17 |
+| 16 × 32 | 88,6% | 591k | 2,36 |
+| **32 × 16** | **92,1%** | **568k** | **2,27** |
+| 64 × 8 | 74,9% | 699k | 2,80 |
+
+**Η υπόθεση υπέρ του Tn=8 ήταν λάθος.** Ισχύει ότι το Tn=8 διαιρεί όλα τα channel
+counts — αλλά αυτό κοιτάζει μόνο τη διάσταση **εισόδου**. Με σταθερό P, το Tn=8
+επιβάλλει Tm=64, που καταστρέφει τη διάσταση **εξόδου**:
+
+| OC στο δίκτυο | 16 | 24 | 32 | 96 | 144 | 192 |
+|---|---:|---:|---:|---:|---:|---:|
+| lanes σε χρήση, Tm=32 | 50% | 75% | **100%** | **100%** | 90% | **100%** |
+| lanes σε χρήση, Tm=64 | 25% | 38% | 50% | 75% | 75% | **100%** |
+
+Το MobileNetV2 έχει **στενές εξόδους** στα bottleneck layers (16, 24, 32, 96) και
+**πλατιές εισόδους** στα expand layers. Θέλεις λοιπόν μικρό Tm και μεγάλο Tn — και το
+32×16 πέφτει ακριβώς πάνω σε αυτή την ασυμμετρία. Κερδίζει και σε κόστος έναντι του
+16×32: broadcast 128 bit αντί 256, adder tree βάθους 4 αντί 5. Το weight bandwidth
+(4096 bit/κύκλο) είναι ταυτόσημο σε όλες τις διαμορφώσεις, αφού το `Tm·Tn` είναι σταθερό.
+
+### Πού πάει το υπόλοιπο 7,9%
+Συγκεντρώνεται σε πέντε πρώιμα layers με μεγάλο H×W:
+
+| layer | χαμένοι κύκλοι | αιτία |
+|---|---:|---|
+| `features.1.conv.1` | 12.544 | OC=16 → 32 |
+| `features.3.conv.0.0` | 10.192 | OC=144→160, IC=24→32 |
+| `features.4.conv.0.0` | 10.192 | OC=144→160, IC=24→32 |
+| `features.3.conv.2` | 7.056 | OC=24 → 32 |
+| `features.2.conv.2` | 4.704 | OC=24 → 32 |
+
+Εξετάστηκε **pixel-parallel fallback** (όταν `OC < Tm`, οι αδρανείς lanes δουλεύουν σε
+δεύτερο pixel): κερδίζει μόλις **2,2%** με σημαντική επιπλοκή στο control. **Απορρίφθηκε** —
+κρατάμε το 7,9% ως γνωστό, μετρημένο κόστος.
 
 ### Dataflow (output-stationary, weights+acts on-chip)
 Το 1×1 χρησιμοποιεί τον **ίδιο πίνακα βαρών σε όλα τα pixels** → τεράστιο weight
@@ -225,35 +286,84 @@ utilization στο tail tile.
 
 ---
 
-## 6. Build plan (μεθοδολογία engine → unit test → integrate)
+## 6. Depthwise engine — το πραγματικό bottleneck
 
-1. **`mac_lane.v`** — μία lane: Tn-wide parallel MAC + adder tree + accumulate
-   (first/last/done). Το `conv1x1.v` «πλατύ». Unit-test bit-exact vs reference dot
-   product (και vs το single-MAC `conv1x1`).
-2. **`pe_array.v`** — Tm instances του `mac_lane`, κοινό activation broadcast, Tm-wide
-   acc έξοδος. Unit-test.
+Εύρημα της 2026-09-10, από το ίδιο cycle model. Με τα engines **όπως είναι σήμερα**
+(το `dwconv3x3.v` παράγει 1 στοιχείο εξόδου/κύκλο, 9 taps παράλληλα):
+
+| τμήμα | κύκλοι | ms @250MHz | % χρόνου | % των MACs |
+|---|---:|---:|---:|---:|
+| pointwise array (P=512) | 568k | 2,27 | 17% | **89,4%** |
+| **depthwise @ 1 καν./κύκλο** | **2.302k** | **9,21** | **70%** | **6,9%** |
+| stem @ 1 στοιχ./κύκλο | 401k | 1,61 | 12% | 3,6% |
+| **σειριακό σύνολο** | **3.271k** | **13,09** | | → **76 fps** |
+
+**Το depthwise είναι 6,9% της αριθμητικής αλλά θα γινόταν 70% του χρόνου.** Χωρίς
+παραλληλισμό εκεί, ο array των 256 DSP κάθεται και περιμένει. Είναι το κλασικό
+πρόβλημα των depthwise-separable δικτύων (πρβλ. Bai et al., TCAS-II 2018): το
+depthwise έχει **μηδενικό channel reuse** — κάθε κανάλι εξόδου βλέπει μόνο το
+ομώνυμο κανάλι εισόδου, άρα δεν υπάρχει άθροιση κατά μήκος καναλιών να παραλληλοποιηθεί.
+Ο μόνος διαθέσιμος άξονας είναι **Tc κανάλια ταυτόχρονα**.
+
+| Tc (κανάλια/κύκλο) | DSPs* | depthwise | σύνολο | fps |
+|---:|---:|---:|---:|---:|
+| 1 (σήμερα) | 5 | 9,21 ms | 13,09 ms | 76 |
+| 8 | 36 | 1,15 ms | 5,03 ms | 199 |
+| **16** | **72** | **0,58 ms** | **4,45 ms** | **225** |
+| 32 | 144 | 0,30 ms | 4,17 ms | 240 |
+
+<sub>*Tc × 9 taps ÷ 2 με int8 packing</sub>
+
+### Απόφαση: **Tc = 16, σε ξεχωριστό engine** (2026-09-10)
+Στο Tc=16 το depthwise πέφτει στο 13% του χρόνου με 72 DSPs· πάνω από εκεί οι
+αποδόσεις φθίνουν (το Tc=32 δίνει +7% throughput για διπλάσιους πόρους).
+
+**Ξεχωριστό engine, όχι διαμοιρασμός DSPs με τον pointwise array.** Το MobileNetV2
+εναλλάσσει `pw → dw → pw`, οπότε τα δύο δεν τρέχουν ποτέ ταυτόχρονα μέσα στο ίδιο
+layer και *θα μπορούσαν* να μοιράζονται πόρους — αλλά το συνολικό budget είναι
+`256 + 72 + ~50 (stem) ≈ 380 DSPs, μόλις 22% του chip`. Ο διαμοιρασμός θα κόστιζε
+πολύπλοκα mux στο datapath για να γλιτώσει πόρους που περισσεύουν.
+
+> **Πλαισίωση.** Ο Core στόχος είναι μία εικόνα από SD κάρτα, και το stretch goal
+> κάμερας θέλει 30 fps — ακόμα και το σημερινό 76 fps τα καλύπτει. Η αξία του Tc=16
+> δεν είναι ότι κάνει το έργο εφικτό, αλλά ότι δίνει υπερασπίσιμο νούμερο throughput
+> και δείχνει ότι εντοπίστηκε το πραγματικό bottleneck.
+
+---
+
+## 7. Build plan (μεθοδολογία engine → unit test → integrate)
+
+1. ~~**`mac_lane.v`**~~ — **ΕΤΟΙΜΟ (2026-08-02).** Μία lane: Tn-wide parallel MAC +
+   adder tree + accumulate (first/last/done). Το `conv1x1.v` «πλατύ». Επικυρώθηκε
+   bit-exact απέναντι σε δύο oracles ταυτόχρονα (ανεξάρτητο reference άθροισμα **και**
+   το single-MAC `conv1x1`), 24/24 cases.
+2. **`pe_array.v`** ← **επόμενο** — Tm=32 instances του `mac_lane`, κοινό activation
+   broadcast, Tm-wide acc έξοδος. Unit-test.
 3. **Feeder/buffers** — activation buffer (NHWC banked) + weight buffer + address
    counters (pixel / oc_tile / ic_tile).
 4. **Integration** vs το golden του `pointwise_layer_tb`, αλλά με 512 MACs/κύκλο.
-5. Επανάληψη για depthwise (Tc-parallel dwconv) + line-buffer window generator.
+5. **Depthwise engine (Tc=16, §6)** + line-buffer window generator.
 6. **Top sequencer** (Ιδέα 2) που δρομολογεί τα 74 ops.
 
 ---
 
-## 7. Ανοιχτές αποφάσεις / next
+## 8. Ανοιχτές αποφάσεις / next
 
-- [ ] Οριστικοποίηση Tm/Tn (32×16 vs 8×64) — trade-off tail-utilization vs broadcast width.
+- [x] ~~Οριστικοποίηση Tm/Tn~~ → **32×16** (§5). Μετρήθηκε σε όλα τα pointwise layers:
+      92,1% vs 74,9% για το 64×8. Το `mac_lane.v` δεν αλλάζει.
+- [x] ~~Depthwise parallelism & διαμοιρασμός DSPs~~ → **Tc=16, ξεχωριστό engine** (§6).
 - [ ] Instruction format του top sequencer (πεδία ανά op).
 - [ ] URAM banking scheme για το activation buffer (Tn/κύκλο) & το weight buffer (Tm×Tn/κύκλο).
-- [ ] Depthwise parallelism (Tc κανάλια) & πώς μοιράζεται DSPs με το pointwise array.
 - [ ] Ping-pong activation buffer management μεταξύ layers.
 - [ ] Χειρισμός residual: πότε/πού κρατιέται το `saved` tensor on-chip.
+- [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
+      το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
-**Επόμενο RTL βήμα:** `mac_lane.v` (build plan #1).
+**Επόμενο RTL βήμα:** `pe_array.v` (build plan #2).
 
 ---
 
-## 8. Πηγές (συγκεντρωτικά)
+## 9. Πηγές (συγκεντρωτικά)
 
 **CNN-on-FPGA controllers / accelerators**
 - Guo et al., *Angel-Eye: A Complete Design Flow for Mapping CNN onto Embedded FPGA*, TCAD 2018. *(PDF στο docs/references/)*

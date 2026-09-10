@@ -136,3 +136,46 @@ argmax over the 4 int16 logits is the predicted class.
 - Rationale: More complete work and there is a chance to get the product to the market
 - Alternatives considered: --
 - Revisit if: --
+
+### DD-013 — Pointwise MAC array shape: Tm=32 × Tn=16
+- Status: Accepted
+- Date: 2026-09-10
+- Context: with P = Tm·Tn = 512 MACs/cycle fixed, the split between output-channel
+  parallelism (Tm) and input-channel parallelism (Tn) is free. The earlier note in
+  `controller_design.md` argued for Tn=8 because 8 divides every MobileNetV2 channel
+  count, so tail-padding would vanish.
+- Decision: **Tm=32, Tn=16.**
+- Rationale: ran the cycle model `HW · ceil(OC/Tm) · ceil(IC/Tn)` over all 35 pointwise
+  layers. 32×16 reaches **92.1%** utilization; 16×32 gives 88.6%, 64×8 gives 74.9% and
+  8×64 gives 66.1%. The Tn=8 argument only looked at the *input* dimension: with P fixed,
+  Tn=8 forces Tm=64, which wrecks the *output* dimension, because MobileNetV2's bottleneck
+  layers are narrow on output (OC = 16, 24, 32, 96) while the expand layers are wide on
+  input. Small Tm + large Tn matches that asymmetry. 32×16 also beats 16×32 on cost:
+  128-bit activation broadcast instead of 256, adder tree of depth 4 instead of 5. Weight
+  bandwidth (4096 bit/cycle) is identical for every split since Tm·Tn is constant.
+- Alternatives considered: 64×8 (the earlier proposal, 23% slower); 16×32 (close on
+  cycles, worse on broadcast width); a pixel-parallel fallback for layers with OC < Tm,
+  which recovers only 2.2% for a substantial control complication — rejected.
+- Revisit if: the network is retrained with different channel widths, or P changes.
+
+### DD-014 — Dedicated depthwise engine with Tc=16 channels in parallel
+- Status: Accepted
+- Date: 2026-09-10
+- Context: the depthwise layers are only 6.9% of the MACs, so they were treated as a
+  detail. With `dwconv3x3.v` as it stands (one output element per cycle), the cycle model
+  says they would take 9.21 ms against 2.27 ms for the entire 512-MAC pointwise array —
+  **70% of the runtime for 6.9% of the arithmetic**. The 256-DSP array would sit idle
+  waiting for them.
+- Decision: a **separate** depthwise engine processing **Tc=16 channels per cycle**
+  (~72 DSPs with int8 packing).
+- Rationale: depthwise has zero channel reuse — each output channel sees only the
+  same-index input channel — so there is no cross-channel accumulation to parallelize and
+  the only available axis is channel count. Tc=16 drops the depthwise to 0.58 ms (13% of
+  runtime) and the total to 4.45 ms (~225 fps); Tc=32 buys only 7% more for twice the
+  DSPs. Kept separate rather than sharing DSPs with the pointwise array: although
+  `pw → dw → pw` means the two never run at once, the whole budget is ~380 DSPs (22% of
+  the chip), so sharing would add datapath muxing to save a resource that is not scarce.
+- Alternatives considered: Tc=8 (half the DSPs, 12% less throughput); Tc=32 (diminishing
+  returns); sharing the pointwise array's DSPs (complexity without need).
+- Revisit if: the DSP budget gets tight once the stem and the buffers are placed and
+  routed, or timing closure fails at 250 MHz.

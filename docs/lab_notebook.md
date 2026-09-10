@@ -206,3 +206,33 @@ wrote quant_scales.json  (53 layers)
 - Blocked on: nothing
 - Next: finalize Tm/Tn (32x16 vs 64x8 - Tn=8 divides every MobileNetV2 channel count, so less
   tail padding), fix the weights figure in controller_design.md, then write pe_array.v.
+
+### 2026-09-10 - Closed the Tm/Tn decision, found the real bottleneck
+- Did: Wrote scripts/analyze_workload.py, which replays the network from manifest.json and
+  recomputes every architectural number - the roofline inputs, the Tm/Tn sweep, the tail-padding
+  breakdown and the depthwise cycle count. Nothing is hard-coded, so the numbers follow if the
+  network is ever re-exported. Then used it to settle the two open decisions and updated
+  controller_design.md (sections 3, 5, 6, 8) and design_decisions.md (DD-013, DD-014).
+- Found / decided:
+  - **DD-013: Tm=32 x Tn=16, confirmed.** Ran the cycle model over all 35 pointwise layers:
+    32x16 = 92.1%, 16x32 = 88.6%, 64x8 = 74.9%, 8x64 = 66.1%. The old note in the design doc
+    argued for Tn=8 because 8 divides every channel count - true, but it only looks at the INPUT
+    dimension. With P fixed, Tn=8 forces Tm=64, and MobileNetV2's bottleneck layers are narrow on
+    output (OC = 16, 24, 32, 96), so the output dimension is where you lose. Small Tm + large Tn
+    matches the network's asymmetry. mac_lane.v needs no change.
+  - The remaining 7.9% of tail padding sits in five early layers with big H*W. A pixel-parallel
+    fallback for OC < Tm recovers only 2.2% for real control complexity - rejected, and recorded
+    as a measured cost rather than an unknown.
+  - **DD-014: the depthwise is the real bottleneck.** At the current 1 element/cycle it would be
+    9.21 ms against 2.27 ms for the whole 512-MAC pointwise array: 6.9% of the arithmetic
+    becoming 70% of the runtime, with the big array idle. Depthwise has zero channel reuse, so
+    the only axis to parallelize is channel count. Chose Tc=16 in a separate engine (~72 DSPs):
+    depthwise drops to 0.58 ms, total 4.45 ms, ~225 fps. Kept separate rather than sharing DSPs
+    with the pointwise array - the whole budget is ~380 DSPs, 22% of the chip, so sharing would
+    buy complexity for a resource that is not scarce.
+  - Worth remembering for the write-up: none of this is needed to hit the Core goal (one image
+    from SD). Even the un-parallelized 76 fps is 70x more than required. The value of these
+    decisions is a defensible throughput number and evidence that the bottleneck was located.
+- Blocked on: nothing
+- Next: pe_array.v - 32 instances of mac_lane sharing one 128-bit activation broadcast, with a
+  unit TB against 32 independent dot products. Then the feeders.
