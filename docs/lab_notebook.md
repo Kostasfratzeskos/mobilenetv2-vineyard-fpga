@@ -236,3 +236,36 @@ wrote quant_scales.json  (53 layers)
 - Blocked on: nothing
 - Next: pe_array.v - 32 instances of mac_lane sharing one 128-bit activation broadcast, with a
   unit TB against 32 independent dot products. Then the feeders.
+
+### 2026-09-11 - pe_array.v: 32 lanes, 512 MAC/cycle
+- Did: Wrote hardware/rtl/kernels/pe_array.v (build plan #2) and its testbench. 32 mac_lane
+  instances sharing ONE broadcast activation tile, each with its own weight slice, giving
+  Tm*Tn = 32*16 = 512 MACs per cycle. Pure structural wiring - no arithmetic of its own, all
+  the math and the first/last/done handshake stay in mac_lane. 19 cases, 608 lane-checks, PASS.
+- Found / decided:
+  - Because pe_array is only wiring, the bugs it can have are wiring bugs: a lane reading
+    another lane's weight slice, an accumulator landing in the wrong slot, taps swapped inside
+    a lane, or a broadcast that is not really shared. Random data hides some of those - a
+    symmetric mistake still sums to the right number - so the directed cases give every lane
+    and every tap a distinguishable value: lane m weighted (m+1), one-hot taps, a single active
+    lane, and identical weights across lanes (which forces all 32 accumulators to be equal and
+    so proves the broadcast really is shared).
+  - **Verified the testbench itself by mutation testing.** A test that passes proves nothing
+    until you know it can fail, so I deliberately broke the DUT three ways and confirmed each
+    was caught: (a) weight slices shifted by one lane, (b) acc slices shifted by one lane,
+    (c) odd lanes seeing the two halves of `a` swapped. Worth noting which case caught what -
+    (a) and (b) were caught by "lane identity", but (c) sailed through it (uniform weights make
+    tap order irrelevant) and was caught only by "one-hot tap". That is exactly why both cases
+    exist, and it is a good argument to reuse for the other engines.
+  - `before` is a reserved SystemVerilog keyword - xsim rejects it as a variable name. Renamed
+    to fails0.
+  - done is taken from lane 0 rather than re-derived in pe_array: all lanes see the same
+    valid/first/last so they run in lockstep, and sourcing it from a real lane keeps it aligned
+    with acc by construction. The 31 unused done registers are pruned by synthesis.
+  - Bus layout locked for the feeder: w[(m*TN + j)*DATA_W +: DATA_W] is lane m's weight for
+    input channel j, i.e. oc-major / ic-minor, which is exactly the manifest's w[oc*IC + ic].
+    The feeder can copy a contiguous run per lane.
+- Blocked on: nothing
+- Next: build plan #3, the feeders and buffers - activation buffer (NHWC banked), weight buffer,
+  and the pixel / oc_tile / ic_tile address counters. Then #4, integration against the same
+  golden the pointwise_layer_tb uses, but at 512 MACs/cycle and ACC_W=21.

@@ -14,6 +14,10 @@ pointwise MAC array με build plan.
 `requantize`, `conv1x1` (streaming MAC), `bias_add`, `dwconv3x3` (parallel 9-tap),
 `conv3x3_std` (parallel 27-tap), `residual_add`, `avgpool`.
 
+Στον δρόμο προς τον array (unit-tested, όχι ακόμα integration):
+`mac_lane` (Tn=16 πλατιά lane, 2026-08-02), `pe_array` (Tm=32 lanes = 512
+MAC/κύκλο, 2026-09-11).
+
 Αρχή σχεδίασης: **τα engines κάνουν ΜΟΝΟ αριθμητική**· το addressing / windowing /
 padding / stride / feeding είναι δουλειά του **controller**. Τα integration
 testbenches (`pointwise_layer_tb`, `dwconv_layer_tb`, `stem_layer_tb`, …) κάνουν
@@ -89,7 +93,7 @@ generator** για τα 3×3.
 | PS | quad Cortex-A53 + **DDR4 2 GB**, AXI-HP προς PL |
 
 Συνέπειες: (α) μεγάλος DSP όγκος → ο **παραλληλισμός** είναι ο μοχλός, όχι η μνήμη·
-(β) 4,7 MB on-chip → τα activations χωράνε· (γ) weights (3,4 MB) → streaming ανά layer.
+(β) 4,7 MB on-chip → τα activations χωράνε· (γ) weights (2,19 MB, βλ. §3) → streaming ανά layer.
 
 ---
 
@@ -337,9 +341,14 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
    adder tree + accumulate (first/last/done). Το `conv1x1.v` «πλατύ». Επικυρώθηκε
    bit-exact απέναντι σε δύο oracles ταυτόχρονα (ανεξάρτητο reference άθροισμα **και**
    το single-MAC `conv1x1`), 24/24 cases.
-2. **`pe_array.v`** ← **επόμενο** — Tm=32 instances του `mac_lane`, κοινό activation
-   broadcast, Tm-wide acc έξοδος. Unit-test.
-3. **Feeder/buffers** — activation buffer (NHWC banked) + weight buffer + address
+2. ~~**`pe_array.v`**~~ — **ΕΤΟΙΜΟ (2026-09-11).** Tm=32 instances του `mac_lane`,
+   κοινό activation broadcast, Tm-wide acc έξοδος — 512 MAC/κύκλο. Καθαρή
+   καλωδίωση, χωρίς δική του αριθμητική. 19 cases / 608 lane-checks PASS, με
+   τα δύο oracles (ανεξάρτητο reference σε όλες τις lanes + `conv1x1`). Το TB
+   επαληθεύτηκε με **mutation testing**: τρεις σκόπιμες βλάβες καλωδίωσης
+   (μετατόπιση weight slice, μετατόπιση acc slice, σπασμένο broadcast) πιάστηκαν
+   και οι τρεις.
+3. **Feeder/buffers** ← **επόμενο** — activation buffer (NHWC banked) + weight buffer + address
    counters (pixel / oc_tile / ic_tile).
 4. **Integration** vs το golden του `pointwise_layer_tb`, αλλά με 512 MACs/κύκλο.
 5. **Depthwise engine (Tc=16, §6)** + line-buffer window generator.
@@ -359,7 +368,7 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 - [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
       το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
-**Επόμενο RTL βήμα:** `pe_array.v` (build plan #2).
+**Επόμενο RTL βήμα:** feeder/buffers (build plan #3).
 
 ---
 
