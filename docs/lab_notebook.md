@@ -309,3 +309,55 @@ wrote quant_scales.json  (53 layers)
 - Next: build plan #5 - the depthwise engine at Tc=16 (DD-014) plus the line-buffer window
   generator, which is what finally replaces the hand-built windows in the dwconv and stem
   testbenches. After that #6, the top sequencer over all 74 ops.
+### 2026-09-12 (later) - Build plan #5: the depthwise path, bit-exact
+- Did: line_buffer, dw_array, dw_feeder, and the integration. The whole of
+  features.1.conv.0.0 (401,408 elements) now matches the golden exactly, with each
+  input pixel read ONCE instead of nine times. Also lifted act_buffer to the top
+  level and gave it half writes, because the activation pool is shared with the
+  pointwise path.
+- Found / decided:
+  - Corrected DD-014's cycle model. It counted OUTPUT pixels, but a line-buffer
+    generator must consume every INPUT pixel to slide the window even at stride 2,
+    and four depthwise layers are stride 2 where the input grid is 4x the output
+    grid. The depthwise costs 1.63x more: 0.94 ms not 0.58, 19% of runtime not 13%,
+    ~208 fps overall not 225. Tc=16 is still the knee, so the decision stands and
+    only the numbers move.
+  - act_buffer had to move OUT of pw_feeder. The activation pool is a shared
+    resource - the depthwise reads and writes the same feature maps - and a second
+    instance would duplicate 1.5 MB for nothing. wgt_buffer stayed inside pw_feeder
+    because the pointwise weights genuinely belong to it; the depthwise weights are
+    a different shape entirely (16 banks of 9 taps, not 32 of 16). The pointwise
+    integration was the safety net for that refactor and still reported 200,704
+    elements bit-exact afterwards - which is exactly what an integration test is for.
+  - The depthwise output stage needed NO new RTL: rq_bank and param_buffer are
+    parameterized by TM, so TM=16 instances serve it directly. DD-003 paying off.
+  - Group-boundary hazard, and how it was avoided. The channel group has to be the
+    OUTER loop, because line_buffer holds two rows of ONE group and switching
+    mid-row would mean re-reading rows or keeping a line buffer per group (30 of
+    them at C=960). So the weights and parameters change at group boundaries while
+    the last windows of the old group are still in flight. Reading both memories
+    EVERY cycle, addressed by the pipelined group index, removes the hazard;
+    reading once per pass would need a 4-cycle drain per group, 6% of the 7x7
+    layers with their 60 groups.
+  - For depthwise ACC_W=21 is PROVABLY enough for the 9-tap sum (9*128*127 =
+    146,304, 19 bits) rather than the data-dependent precondition it is on the
+    pointwise side. The int32 bias still has to fit, so the integration measures
+    |acc + bias| anyway: 11,833, six bits of headroom.
+  - Two mutation-testing findings worth keeping:
+    (a) Removing line_buffer's left-column clear passes the WHOLE testbench. The
+        virtual column already injects a zero that arrives in the leftmost position
+        exactly when the first window of the next row is emitted, so the clear is
+        measurably redundant. Kept anyway, with the reasoning in the header:
+        deleting it would make left-edge padding depend on the virtual-column
+        invariant too, so a later change that skipped that column would break two
+        things instead of one.
+    (b) Tying aw_full high passed everything, because the monitor was checking the
+        write BUS and wr_full only affects what is STORED. Added a read-back phase
+        that reads the pool after the run and verifies both halves of sampled
+        entries; it now catches that mutation on the first pixel. Lesson worth
+        carrying: an integration test that never reads its own output back is only
+        testing half the path.
+- Blocked on: nothing
+- Next: build plan #6, the top sequencer. All the compute is bit-exact now; what is
+  left is the program that schedules the 74 ops of the manifest, plus the
+  residual/avgpool/classifier tail and the stem's own feeder.

@@ -364,7 +364,13 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
    `ACC_W=21`. Μετρήθηκε και το περιθώριο του accumulator: max |acc+bias| = 20.888
    έναντι ορίου ±1.048.576 → **5 bits headroom**. Η προϋπόθεση των 21 bit έγινε
    μετρημένο περιθώριο.
-5. **Depthwise engine (Tc=16, §6)** + line-buffer window generator.
+5. ~~**Depthwise engine (Tc=16, §6) + line-buffer**~~ — **ΕΤΟΙΜΟ (2026-09-12).**
+   `line_buffer` (κάθε pixel διαβάζεται ΜΙΑ φορά αντί για εννέα), `dw_array`
+   (16 παράλληλα `dwconv3x3`), `dw_feeder` (οι τρεις μετρητές + output stage).
+   Integration: **ολόκληρο το `features.1.conv.0.0` (401.408 στοιχεία) bit-exact**.
+   Το output stage ξαναχρησιμοποιεί `rq_bank` και `param_buffer` με TM=16 —
+   μηδέν νέο RTL (DD-003 στην πράξη). Για το depthwise τα 21 bit είναι
+   **αποδείξιμα** αρκετά (9 taps → max 146.304), όχι προϋπόθεση.
 6. **Top sequencer** (Ιδέα 2) που δρομολογεί τα 74 ops.
 
 ---
@@ -381,7 +387,7 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 - [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
       το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
-**Επόμενο RTL βήμα:** depthwise engine Tc=16 + line-buffer window generator (build plan #5).
+**Επόμενο RTL βήμα:** top sequencer για τα 74 ops (build plan #6).
 
 ---
 
