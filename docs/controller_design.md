@@ -371,7 +371,16 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
    Το output stage ξαναχρησιμοποιεί `rq_bank` και `param_buffer` με TM=16 —
    μηδέν νέο RTL (DD-003 στην πράξη). Για το depthwise τα 21 bit είναι
    **αποδείξιμα** αρκετά (9 taps → max 146.304), όχι προϋπόθεση.
-6. **Top sequencer** (Ιδέα 2) που δρομολογεί τα 74 ops.
+6. ~~**Top sequencer**~~ — **ΕΤΟΙΜΟ (2026-09-12).** `top_seq.v` εκτελεί τα 64
+   instructions που παράγει το `gen_program.py`. Fetch → decode → ζητά τα βάρη
+   (handshake, όχι DMA) → ξεκινά τον feeder του opcode → περιμένει → gap →
+   επόμενο. Επαληθεύτηκε με το **πραγματικό** `program.hex`: και τα 64
+   instructions, 18 πεδία το καθένα, με τη σωστή σύνθεση opcodes
+   (1 STEM, 34 PW, 17 DW, 10 RES_ADD, 1 GAP, 1 LINEAR).
+
+   Και οι έξι feeders είναι **bit-exact** απέναντι στα golden vectors:
+   STEM 405.568 · PW 200.704 · DW 405.568 · RES_ADD 76.512 · GAP 1.280 καν. ·
+   LINEAR accumulators, logits και η κλάση.
 
 ---
 
@@ -387,7 +396,8 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 - [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
       το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
-**Επόμενο RTL βήμα:** top sequencer για τα 74 ops (build plan #6).
+**Επόμενο βήμα:** datapath top (mux των έξι feeders γύρω από ένα `out_stage`),
+DMA για τα βάρη, και μετά σύνθεση στο Vivado.
 
 ---
 

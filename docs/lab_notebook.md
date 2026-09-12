@@ -361,3 +361,45 @@ wrote quant_scales.json  (53 layers)
 - Next: build plan #6, the top sequencer. All the compute is bit-exact now; what is
   left is the program that schedules the 74 ops of the manifest, plus the
   residual/avgpool/classifier tail and the stem's own feeder.
+### 2026-09-12 (later still) - Build plan #6 complete: all six opcodes and the sequencer
+- Did: finished every remaining feeder and the program sequencer. All six opcodes now
+  have a bit-exact datapath against the golden vectors: STEM 405,408 elements, PW
+  200,704, DW 405,568, RES_ADD 76,512, GAP all 1,280 channels, LINEAR the accumulators,
+  the int16 logits and the predicted class. top_seq executes the real 64-instruction
+  program from gen_program.py.
+- Found / decided:
+  - out_stage: ONE requantize stage shared by every feeder, because only one op runs at
+    a time. Without it the budget was heading for ~634 DSP (37% of the chip); with it,
+    442 (26%), and one block to verify instead of five. The nice part is that a 16-channel
+    feeder uses the 32-lane bank by placing its results in lanes (g&1)*16 and reading
+    parameters at g>>1 - the parameter banks and act_buffer's half write then line up with
+    no rotation at all.
+  - DD-015: R=32 requantize units. R=16 is the knee on cycles (+6.6% for half the DSPs),
+    but at 32 an entire control path stops existing - no shadow register, no drain counter,
+    no stall path - and the 32 results already ARE the 256-bit word act_buffer wants.
+  - DD-016: TS=8 for the stem, derived from geometry rather than feel. 225x225 input
+    pixels against 112x112 windows is exactly 4 input cycles per window, so ceil(32/TS)<=4
+    means TS>=8. Past that the input streaming dominates and more DSPs buy ~3%.
+  - res_feeder adds NO multiplier: the rescale of the skip branch is a requantize with
+    bias=0, so it runs on out_stage and only 16 adders and saturations remain. gap_feeder
+    adds no DSP either - 16 copies of avgpool.v, plain adders.
+  - The classifier needed no new feeder at all. It IS a 1x1 conv (n_pix=1, n_oc=1,
+    n_ic=80), so pw_feeder runs it unchanged and only the tail differs. requantize.v
+    gained an OUT_W parameter so the same module does clamp_i8 and clamp_i16.
+  - The tightest accumulator in the network is the classifier at 33% of the 21-bit range
+    (355,971 of 1,048,575), because IC=1280 is the longest dot product. Every other layer
+    measured sits below 3%. Worth re-measuring if the model is retrained.
+  - Three mutations across this stretch were NOT caught at first and each exposed a real
+    testbench gap rather than a design flaw: an integration that never read its own output
+    back (fixed with a read-back pass), a sequencer test that checked decoded fields but
+    not handshake ORDER (fixed by tracking what happens between op_starts), and a busy
+    handshake that only looked redundant because every feeder built so far raises busy in
+    exactly one cycle (fixed by giving the stub variable latency, which is the contract
+    top_seq actually documents).
+  - Two width traps, same failure mode both times: an expression narrower than its port
+    leaves the top bits undriven in xsim and the memory reads X. Both were parameter
+    addresses. Resizing now goes through an explicit wide intermediate.
+- Blocked on: nothing
+- Next: the datapath top that muxes the six feeders around the shared out_stage and the
+  one activation pool, the weight DMA behind top_seq's ld_req handshake, and then Vivado
+  synthesis - timing at 250 MHz and the real resource numbers are still unknown.
