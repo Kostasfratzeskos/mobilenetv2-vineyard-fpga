@@ -269,3 +269,43 @@ wrote quant_scales.json  (53 layers)
 - Next: build plan #3, the feeders and buffers - activation buffer (NHWC banked), weight buffer,
   and the pixel / oc_tile / ic_tile address counters. Then #4, integration against the same
   golden the pointwise_layer_tb uses, but at 512 MACs/cycle and ACC_W=21.
+
+### 2026-09-12 - Build plan #4: the output half, and the first real integration
+- Did: Finished the pointwise datapath and ran the whole of features.1.conv.1 through it,
+  bit-exact against the golden. rq_bank (32 parallel bias_add + requantize), param_buffer
+  (per-channel bias/m0/shift, banked by oc_tile), pw_out (the glue + writeback), and
+  pw_datapath_tb, which wires pw_feeder and pw_out together on real data at the real
+  ACC_W=21. 200,704 elements match the software model exactly.
+- Found / decided:
+  - **DD-015: R = Tm = 32 requantize units.** Measured with the new `requant` section of
+    analyze_workload.py: R=16 is the knee on cycles (+6.6% for half the DSPs), but at
+    R=32 an entire control path stops existing - no shadow register, no drain counter, no
+    stall path back into addr_gen, and the 32 results already ARE the 256-bit word
+    act_buffer wants. 32 extra DSPs is 1.9% of the chip; the logic they remove is a place
+    for bugs. (The single layer R=16 would stall is features.2.conv.0.0 with IC=16 - the
+    same outlier that forced the 256-bit activation entries. Third time that layer has
+    driven a decision.)
+  - The output-side write address needs no multiplier either, and for a cleaner reason
+    than in the feeder: entries per pixel on the output side equal n_oc, which is also how
+    many results each pixel produces, so results land on consecutive addresses forever.
+    A counter incrementing once per write IS the address.
+  - Since the tag is therefore NOT needed for addressing, it became a self-check instead:
+    pw_out keeps its own expected (pix, oct) and raises a sticky tag_error on any
+    disagreement. Cheap tripwire for the two pipelines drifting apart.
+  - **The 21-bit accumulator is no longer an assumption.** The integration testbench
+    computes the true int64 dot product over a sample of the layer: max |acc + bias| =
+    20,888 against a limit of +-1,048,576, i.e. 5 bits of headroom. It FAILS if a layer
+    would not fit, so every future integration re-measures this.
+  - Mutation testing paid for itself again, twice. On pw_out it found two real holes in my
+    own testbench: "acc not registered" passed because the testbench held the accumulator
+    bus stable until the next result (the real pe_array reuses it immediately - feed() now
+    scribbles the bus), and "tag check ignores pix" passed because the wrong-tag case had
+    BOTH fields wrong. Both closed; all five mutations now caught.
+  - Two testbench bugs worth remembering, both caught by the reference disagreeing with
+    the DUT when the DUT was right: the parameter generator overflowed int32 for high
+    channel indices (pl_m0 arrived negative), and earlier the wgt_buffer latency check
+    read the same address twice so old and new data were identical by construction.
+- Blocked on: nothing
+- Next: build plan #5 - the depthwise engine at Tc=16 (DD-014) plus the line-buffer window
+  generator, which is what finally replaces the hand-built windows in the dwconv and stem
+  testbenches. After that #6, the top sequencer over all 74 ops.

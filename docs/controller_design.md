@@ -348,9 +348,16 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
    επαληθεύτηκε με **mutation testing**: τρεις σκόπιμες βλάβες καλωδίωσης
    (μετατόπιση weight slice, μετατόπιση acc slice, σπασμένο broadcast) πιάστηκαν
    και οι τρεις.
-3. **Feeder/buffers** ← **επόμενο** — activation buffer (NHWC banked) + weight buffer + address
-   counters (pixel / oc_tile / ic_tile).
-4. **Integration** vs το golden του `pointwise_layer_tb`, αλλά με 512 MACs/κύκλο.
+3. ~~**Feeder/buffers**~~ — **ΕΤΟΙΜΟ (2026-09-11).** `addr_gen` (οι τρεις μετρητές),
+   `wgt_buffer` (32 τράπεζες = 4096 bit/κύκλο), `act_buffer` (entries 256 bit, μία
+   δεξαμενή), `pw_feeder` (η κόλλα + ευθυγράμμιση pipeline). Καμία διεύθυνση
+   δεν χρειάζεται πολλαπλασιαστή.
+4. ~~**Integration**~~ — **ΕΤΟΙΜΟ (2026-09-12).** Το output half (`rq_bank` με R=32 — DD-015,
+   `param_buffer`, `pw_out`) και το `pw_datapath_tb`: **ολόκληρο το `features.1.conv.1`
+   (200.704 στοιχεία) bit-exact** απέναντι στο golden, στα 512 MAC/κύκλο και με
+   `ACC_W=21`. Μετρήθηκε και το περιθώριο του accumulator: max |acc+bias| = 20.888
+   έναντι ορίου ±1.048.576 → **5 bits headroom**. Η προϋπόθεση των 21 bit έγινε
+   μετρημένο περιθώριο.
 5. **Depthwise engine (Tc=16, §6)** + line-buffer window generator.
 6. **Top sequencer** (Ιδέα 2) που δρομολογεί τα 74 ops.
 
@@ -368,7 +375,7 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 - [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
       το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
-**Επόμενο RTL βήμα:** feeder/buffers (build plan #3).
+**Επόμενο RTL βήμα:** depthwise engine Tc=16 + line-buffer window generator (build plan #5).
 
 ---
 
