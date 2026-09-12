@@ -43,6 +43,19 @@
 //  The raw 224x224x3 input is NOT stored here - it is the stem's input and
 //  would waste 91% of an entry on padding; the stem has its own feeder.
 //
+//  ---- half writes, and why -------------------------------------------
+//
+//  The pointwise array produces TM=32 channels per result and fills a whole
+//  entry. The depthwise array produces TC=16 (DD-014) and fills HALF of one,
+//  because a depthwise pass covers 16 channels of every pixel before moving to
+//  the next 16. So `wr_full` low writes only the slice named by `wr_sel`,
+//  leaving the other half of the entry as the previous pass left it. On
+//  BRAM/URAM this is a native byte-enable, not a read-modify-write.
+//
+//  Convention for a half write: the caller REPLICATES its payload across the
+//  whole wr_data word and lets wr_sel choose which copy lands. That keeps this
+//  module generic over TM/TN rather than hard-coding which half is which.
+//
 //  Read latency is ONE cycle, like wgt_buffer. rd_sel is pipelined with the
 //  data so the caller presents it with the address, not a cycle later.
 //
@@ -58,8 +71,10 @@ module act_buffer #(
 )(
     input  wire                   clock,
 
-    // ---- write port: one oc_tile result, TM channels ------------------
+    // ---- write port: a whole entry, or one TN-channel slice of it -----
     input  wire                   wr_en,
+    input  wire                   wr_full,   // 1 = all TM channels
+    input  wire [SEL_W-1:0]       wr_sel,    // which slice when wr_full = 0
     input  wire [ADDR_W-1:0]      wr_addr,
     input  wire [TM*DATA_W-1:0]   wr_data,
 
@@ -87,8 +102,18 @@ module act_buffer #(
         sel_q = {SEL_W{1'b0}};
     end
 
+    localparam NSEL = TM / TN;            // slices per entry (2)
+
+    integer h;
     always @(posedge clock) begin
-        if (wr_en) mem[wr_addr] <= wr_data;
+        if (wr_en) begin
+            // one enable per slice: a full write asserts them all, a half write
+            // only the one wr_sel names. Infers the memory's byte enables.
+            for (h = 0; h < NSEL; h = h + 1)
+                if (wr_full || (wr_sel == h[SEL_W-1:0]))
+                    mem[wr_addr][h*WORD_BITS +: WORD_BITS] <=
+                        wr_data[h*WORD_BITS +: WORD_BITS];
+        end
         if (rd_en) begin
             dout  <= mem[rd_addr];
             sel_q <= rd_sel;

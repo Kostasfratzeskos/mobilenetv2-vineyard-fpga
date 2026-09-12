@@ -46,10 +46,20 @@
 //    n_ic    = ceil(IC/TN)             n_ent = ceil(IC/TM)   entries per pixel
 //    base_in = where this layer's input lives in the activation pool
 //
-//  The weight load port and the activation write port pass straight through
-//  to the buffers, so the DMA and the writeback stage drive them directly.
-//  The weight buffer must already hold the layer's full n_oc*n_ic rectangle,
-//  zero-padded per its tail contract, before `start`.
+//  The weight load port passes straight through to wgt_buffer, so the DMA
+//  drives it directly. The weight buffer must already hold the layer's full
+//  n_oc*n_ic rectangle, zero-padded per its tail contract, before `start`.
+//
+//  ---- the activation pool is NOT owned here ---------------------------
+//
+//  act_buffer lives at the top level, not inside this module. It is a SHARED
+//  resource: the depthwise path reads and writes the same feature maps, and a
+//  second instance would double 1.5 MB of on-chip memory for no reason. So this
+//  module drives a read address and consumes the word that comes back a cycle
+//  later (a_rd_en / a_addr / a_sel out, a_word in), and whoever assembles the
+//  system points those at the pool. The weight buffer stays inside because it
+//  genuinely belongs to the pointwise path - the depthwise weights have a
+//  different shape entirely (16 banks of 9 taps, not 32 of 16).
 //
 //  `stall` freezes the whole front end, addr_gen included, for as long as it
 //  is held - that is how the drain stage will apply back-pressure.
@@ -71,7 +81,7 @@
 //  the whole testbench. They are kept because they make the intent explicit
 //  and stay correct if addr_gen's behaviour ever changes.)
 //
-//  Run:  bash scripts/run_sim.sh pw_feeder addr_gen wgt_buffer act_buffer pe_array mac_lane
+//  Run:  bash scripts/run_sim.sh pw_feeder addr_gen wgt_buffer pe_array mac_lane
 //============================================================================
 module pw_feeder #(
     parameter DATA_W = 8,
@@ -85,8 +95,7 @@ module pw_feeder #(
     parameter ICT_W  = 8,
     parameter WA_W   = 10,        // weight buffer address width
     parameter AA_W   = 16,        // activation buffer address width
-    parameter WDEPTH = 1024,
-    parameter ADEPTH = 65536
+    parameter WDEPTH = 1024
 )(
     input  wire                   clock,
     input  wire                   rst_n,
@@ -106,10 +115,11 @@ module pw_feeder #(
     input  wire [WA_W-1:0]        wl_addr,
     input  wire [TN*DATA_W-1:0]   wl_data,
 
-    // ---- activation write port (straight through to act_buffer) --------
-    input  wire                   aw_en,
-    input  wire [AA_W-1:0]        aw_addr,
-    input  wire [TM*DATA_W-1:0]   aw_data,
+    // ---- activation pool read interface (the pool is at the top level) --
+    output wire                   a_rd_en,
+    output wire [AA_W-1:0]        a_addr,
+    output wire [SEL_W-1:0]       a_sel,
+    input  wire [TN*DATA_W-1:0]   a_word,    // arrives one cycle after a_addr
 
     // ---- results -------------------------------------------------------
     output wire [TM*ACC_W-1:0]    acc,        // Tm finished accumulators
@@ -155,25 +165,18 @@ module pw_feeder #(
         end
     end
 
-    wire [AA_W-1:0]  a_addr = pix_base + (ict >> 1);
-    wire [SEL_W-1:0] a_sel  = ict[SEL_W-1:0];
+    assign a_addr  = pix_base + (ict >> 1);
+    assign a_sel   = ict[SEL_W-1:0];
+    assign a_rd_en = ag_valid;
 
     // ================= the two buffers ==================================
     wire [TM*TN*DATA_W-1:0] w_word;
-    wire [TN*DATA_W-1:0]    a_word;
 
     wgt_buffer #(.DATA_W(DATA_W), .TM(TM), .TN(TN),
                  .DEPTH(WDEPTH), .ADDR_W(WA_W), .BANK_W(BANK_W)) u_wgt (
         .clock(clock),
         .wr_en(wl_en), .wr_bank(wl_bank), .wr_addr(wl_addr), .wr_data(wl_data),
         .rd_en(ag_valid), .rd_addr(w_addr), .rd_data(w_word)
-    );
-
-    act_buffer #(.DATA_W(DATA_W), .TM(TM), .TN(TN), .SEL_W(SEL_W),
-                 .DEPTH(ADEPTH), .ADDR_W(AA_W)) u_act (
-        .clock(clock),
-        .wr_en(aw_en), .wr_addr(aw_addr), .wr_data(aw_data),
-        .rd_en(ag_valid), .rd_addr(a_addr), .rd_sel(a_sel), .rd_data(a_word)
     );
 
     // ================= stage 1 : control delayed to meet the data =======

@@ -75,16 +75,31 @@ module pw_feeder_tb;
     wire [OCT_W-1:0]       acc_oct;
     wire                   busy, layer_done;
 
+    // the activation pool is a top-level resource now, shared with the
+    // depthwise path, so the testbench owns it and wires it in
+    wire                  a_rd_en;
+    wire [AA_W-1:0]       a_addr;
+    wire [SEL_W-1:0]      a_sel;
+    wire [TN*DATA_W-1:0]  a_word;
+
     pw_feeder #(.DATA_W(DATA_W), .TM(TM), .TN(TN), .ACC_W(ACC_W), .SEL_W(SEL_W),
                 .BANK_W(BANK_W), .PIX_W(PIX_W), .OCT_W(OCT_W), .ICT_W(ICT_W),
-                .WA_W(WA_W), .AA_W(AA_W), .WDEPTH(WDEPTH), .ADEPTH(ADEPTH)) u_dut (
+                .WA_W(WA_W), .AA_W(AA_W), .WDEPTH(WDEPTH)) u_dut (
         .clock(clock), .rst_n(rst_n),
         .start(start), .stall(stall),
         .n_pix(n_pix), .n_oc(n_oc), .n_ic(n_ic), .n_ent(n_ent), .base_in(base_in),
         .wl_en(wl_en), .wl_bank(wl_bank), .wl_addr(wl_addr), .wl_data(wl_data),
-        .aw_en(aw_en), .aw_addr(aw_addr), .aw_data(aw_data),
+        .a_rd_en(a_rd_en), .a_addr(a_addr), .a_sel(a_sel), .a_word(a_word),
         .acc(acc), .acc_valid(acc_valid), .acc_pix(acc_pix), .acc_oct(acc_oct),
         .busy(busy), .layer_done(layer_done)
+    );
+
+    act_buffer #(.DATA_W(DATA_W), .TM(TM), .TN(TN), .SEL_W(SEL_W),
+                 .DEPTH(ADEPTH), .ADDR_W(AA_W)) u_act (
+        .clock(clock),
+        .wr_en(aw_en), .wr_full(1'b1), .wr_sel({SEL_W{1'b0}}),
+        .wr_addr(aw_addr), .wr_data(aw_data),
+        .rd_en(a_rd_en), .rd_addr(a_addr), .rd_sel(a_sel), .rd_data(a_word)
     );
 
     initial clock = 1'b0;

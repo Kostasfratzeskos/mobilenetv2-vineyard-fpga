@@ -36,6 +36,8 @@ module act_buffer_tb;
 
     logic clock;
     logic                  wr_en, rd_en;
+    logic                  wr_full;
+    logic [SEL_W-1:0]      wr_sel;
     logic [ADDR_W-1:0]     wr_addr, rd_addr;
     logic [ENT_BITS-1:0]   wr_data;
     logic [SEL_W-1:0]      rd_sel;
@@ -44,7 +46,8 @@ module act_buffer_tb;
     act_buffer #(.DATA_W(DATA_W), .TM(TM), .TN(TN), .SEL_W(SEL_W),
                  .DEPTH(DEPTH), .ADDR_W(ADDR_W)) u_dut (
         .clock(clock),
-        .wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data),
+        .wr_en(wr_en), .wr_full(wr_full), .wr_sel(wr_sel),
+        .wr_addr(wr_addr), .wr_data(wr_data),
         .rd_en(rd_en), .rd_addr(rd_addr), .rd_sel(rd_sel), .rd_data(rd_data)
     );
 
@@ -70,6 +73,8 @@ module act_buffer_tb;
                 wr_data[k*DATA_W +: DATA_W] = (c < c_total) ? chan(p, c) : 8'hEE;
             end
             wr_addr = a[ADDR_W-1:0];
+            wr_full = 1'b1;
+            wr_sel  = {SEL_W{1'b0}};
             wr_en   = 1'b1;
             @(posedge clock);
             @(negedge clock);
@@ -138,6 +143,7 @@ module act_buffer_tb;
     integer j, bad;
     initial begin
         wr_en = 0; rd_en = 0; wr_addr = 0; rd_addr = 0; wr_data = 0; rd_sel = 0;
+        wr_full = 1; wr_sel = 0;
         repeat (2) @(negedge clock);
 
         $display("act_buffer: entry = %0d ch (%0d bit), read word = %0d ch (%0d bit)",
@@ -202,6 +208,88 @@ module act_buffer_tb;
         replay_layer(16, 48, "C=48");     // 2 entries, 3 tiles - odd split
         replay_layer(8,  16, "C=16");     // 1 entry, only the lower half used
         replay_layer(4,  320, "C=320");   // 10 entries, 20 tiles
+
+        // ---- 5. half writes: the depthwise path fills one slice at a time --
+        //  The depthwise array produces TN=16 channels per result, not TM=32, so
+        //  a pass fills half an entry and must leave the other half alone. The
+        //  convention is that the caller replicates its payload across the whole
+        //  word and wr_sel picks which copy lands.
+        $display("");
+        $display("half writes (the depthwise path):");
+
+        wr_entry(300, 3, 0, TM);                 // a full entry to start from
+        // overwrite ONLY the lower slice with a recognisable pattern
+        @(negedge clock);
+        for (j = 0; j < TM; j++) wr_data[j*DATA_W +: DATA_W] = 8'hA0 + j[3:0];
+        wr_addr = 16'd300; wr_full = 1'b0; wr_sel = 1'b0; wr_en = 1'b1;
+        @(posedge clock);
+        @(negedge clock);
+        wr_en = 1'b0; wr_full = 1'b1;
+        rd_word(300, 0, d0);
+        rd_word(300, 1, d1);
+        bad = 0;
+        for (j = 0; j < TN; j++) begin
+            // lower slice: the new pattern
+            if (d0[j*DATA_W +: DATA_W] !== (8'hA0 + j[3:0])) bad++;
+            // upper slice: untouched
+            if (d1[j*DATA_W +: DATA_W] !== chan(3, TN + j))  bad++;
+        end
+        total++;
+        if (bad != 0) begin
+            fails++;
+            $display("  [ERR] lower-slice write wrong in %0d of %0d bytes", bad, 2*TN);
+        end else
+            $display("  [ok ] sel=0 wrote channels 0-%0d, left %0d-%0d intact",
+                     TN-1, TN, TM-1);
+
+        // now ONLY the upper slice
+        wr_entry(301, 4, 0, TM);
+        @(negedge clock);
+        for (j = 0; j < TM; j++) wr_data[j*DATA_W +: DATA_W] = 8'hB0 + j[3:0];
+        wr_addr = 16'd301; wr_full = 1'b0; wr_sel = 1'b1; wr_en = 1'b1;
+        @(posedge clock);
+        @(negedge clock);
+        wr_en = 1'b0; wr_full = 1'b1;
+        rd_word(301, 0, d0);
+        rd_word(301, 1, d1);
+        bad = 0;
+        for (j = 0; j < TN; j++) begin
+            if (d0[j*DATA_W +: DATA_W] !== chan(4, j))       bad++;   // untouched
+            if (d1[j*DATA_W +: DATA_W] !== (8'hB0 + j[3:0])) bad++;   // new
+        end
+        total++;
+        if (bad != 0) begin
+            fails++;
+            $display("  [ERR] upper-slice write wrong in %0d of %0d bytes", bad, 2*TN);
+        end else
+            $display("  [ok ] sel=1 wrote channels %0d-%0d, left 0-%0d intact",
+                     TN, TM-1, TN-1);
+
+        // two half writes build one whole entry, which is how a depthwise layer
+        // with 32 channels actually lands: pass 0 then pass 1
+        @(negedge clock);
+        for (j = 0; j < TM; j++) wr_data[j*DATA_W +: DATA_W] = 8'hC0 + j[3:0];
+        wr_addr = 16'd302; wr_full = 1'b0; wr_sel = 1'b0; wr_en = 1'b1;
+        @(posedge clock);
+        @(negedge clock);
+        for (j = 0; j < TM; j++) wr_data[j*DATA_W +: DATA_W] = 8'hD0 + j[3:0];
+        wr_sel = 1'b1;
+        @(posedge clock);
+        @(negedge clock);
+        wr_en = 1'b0; wr_full = 1'b1;
+        rd_word(302, 0, d0);
+        rd_word(302, 1, d1);
+        bad = 0;
+        for (j = 0; j < TN; j++) begin
+            if (d0[j*DATA_W +: DATA_W] !== (8'hC0 + j[3:0])) bad++;
+            if (d1[j*DATA_W +: DATA_W] !== (8'hD0 + j[3:0])) bad++;
+        end
+        total++;
+        if (bad != 0) begin
+            fails++;
+            $display("  [ERR] two half writes did not build one entry (%0d bad)", bad);
+        end else
+            $display("  [ok ] two successive half writes build one whole entry");
 
         $display("");
         if (fails == 0) $display("ALL PASS  (%0d checks)", total);
