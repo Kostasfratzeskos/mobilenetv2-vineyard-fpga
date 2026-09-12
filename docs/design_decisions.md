@@ -228,3 +228,35 @@ argmax over the 4 int16 logits is the predicted class.
   layer is what R=32 avoids.
 - Revisit if: synthesis shows DSPs are tight after the stem and buffers are placed, or the
   requantize multiplier fails timing at 250 MHz and needs pipelining anyway.
+
+### DD-016 - Stem parallelism: TS = 8 output channels
+- Status: Accepted
+- Date: 2026-09-12
+- Context: the stem (features.0.0) is a standard 3x3 convolution, 224x224x3 -> 112x112x32
+  at stride 2, so each output element is a 27-tap dot product (3 channels x 3x3). Running
+  it one element per cycle costs 401,408 cycles, 1.76 ms, about a quarter of the whole
+  network. Each lane costs CIN*K*K = 27 multipliers, so TS is a real area decision.
+- Decision: **TS = 8 output channels in parallel** (216 multipliers, 108 DSP48E2).
+- Rationale: a line-buffer front end streams 225x225 input pixel-groups (the image plus
+  the virtual edge) and emits 112x112 windows, so there are exactly
+  50,625 / 12,544 = 4 input cycles per window. With OC=32 that makes ceil(32/TS) <= 4,
+  i.e. TS >= 8, the point where the compute stops exceeding the input stream. Measured
+  over the whole network with the cycle model:
+
+      TS   DSPs   stem ms   total ms   fps
+       1     14      1.76       4.97   201
+       2     27      0.96       4.16   240
+       4     54      0.55       3.76   266
+       8    108      0.35       3.56   281   <-- knee
+      16    216      0.25       3.46   289
+      32    432      0.20       3.41   293
+
+  Past 8 the input streaming dominates: TS=16 costs another 108 DSPs to buy 3% of
+  runtime. Below 8 the compute is the limit and the line buffer sits idle.
+- Alternatives considered: TS=32 (one window per cycle, no stalling at all, but 432 DSPs
+  for 4% over TS=8); TS=4 (half the DSPs but the stem climbs back to 15% of runtime).
+- Consequence: the stem stalls its input stream for 3 cycles per emitted window, since
+  windows arrive every 2 cycles inside an odd row rather than evenly spread. That is what
+  the 88,257-cycle figure already accounts for.
+- Revisit if: the DSP budget tightens after place-and-route, or the input resolution
+  changes (the 4-input-cycles-per-window ratio is a property of stride 2, not of 224).
