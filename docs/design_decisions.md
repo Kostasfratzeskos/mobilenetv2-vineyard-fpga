@@ -179,6 +179,22 @@ argmax over the 4 int16 logits is the predicted class.
   returns); sharing the pointwise array's DSPs (complexity without need).
 - Revisit if: the DSP budget gets tight once the stem and the buffers are placed and
   routed, or timing closure fails at 250 MHz.
+- **Correction, 2026-09-12 (the decision stands, the numbers were optimistic).** The cycle
+  model above counted OUTPUT pixels. A line-buffer window generator has to consume every
+  INPUT pixel to slide the window, even at stride 2 where only every other window is
+  emitted, and four depthwise layers are stride 2 (features.2/4/7/14.conv.1.0), where the
+  input grid is 4x the output grid. Corrected in analyze_workload.py, the depthwise costs
+  1.63x more than stated:
+
+      Tc    DSPs   dw ms   total ms   fps   dw share
+       1       5   14.96      18.84    53      79%
+       8      36    1.87       5.75   174      33%
+      16      72    0.94       4.81   208      19%   <-- still the knee
+      32     144    0.48       4.36   229      11%
+
+  Tc=16 remains the right choice: Tc=8 leaves the depthwise at a third of the runtime,
+  and Tc=32 buys 8 points of share for twice the DSPs. Total latency is 4.81 ms and
+  ~208 fps rather than 4.45 ms and 225 fps.
 
 ### DD-015 - One requantize unit per lane (R = Tm = 32)
 - Status: Accepted

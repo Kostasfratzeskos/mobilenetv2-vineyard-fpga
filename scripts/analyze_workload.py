@@ -59,7 +59,7 @@ def load_ops():
 
             if op["groups"] > 1:
                 key = "depthwise"
-                dw.append((op["name"], oh, ow, oc))
+                dw.append((op["name"], h, w, oh, ow, oc))
             elif kh == 1:
                 key = "pointwise"
                 pw.append((op["name"], oh, ow, c, oc))
@@ -154,18 +154,36 @@ def sec_tail(pw):
 
 
 def sec_depthwise(pw, dw, stem):
-    print("== depthwise bottleneck (section 6, DD-014) ==")
+    """Depthwise cost with Tc channels in parallel.
+
+    The cycle count is driven by the INPUT pixels, not the output ones: a
+    line-buffer window generator must consume every input pixel to slide the
+    window, even at stride 2 where only every other window is emitted. Four
+    depthwise layers are stride 2, so the input grid is 4x the output grid
+    there. The first version of this model used output pixels and came out
+    1.63x optimistic overall.
+    """
+    print("== depthwise cost (section 6, DD-014) ==")
     pw_c = sum(pw_cycles(oh, ow, ic, oc, TM, TN) for _, oh, ow, ic, oc in pw)
-    stem_c = stem[1] * stem[2] * stem[4]          # 1 element/cycle, 27 taps parallel
-    print(f"  {'Tc':>4} {'DSPs':>6} {'dw ms':>8} {'total ms':>10} {'fps':>7}")
+    stem_c = stem[1] * stem[2] * stem[4]     # 1 element/cycle, 27 taps parallel
+    print(f"  {'Tc':>4} {'DSPs':>6} {'dw ms':>8} {'total ms':>10}"
+          f" {'fps':>7} {'dw share':>10}")
     for tc in (1, 8, 16, 32):
-        dw_c = sum(math.ceil(oc / tc) * oh * ow for _, oh, ow, oc in dw)
+        dw_c = sum(math.ceil(oc / tc) * ih * iw
+                   for _, ih, iw, oh, ow, oc in dw)
         total = pw_c + dw_c + stem_c
         mark = "  <-- DD-014" if tc == TC else ""
-        print(f"  {tc:>4} {math.ceil(tc*9/2):>6} {1e3*dw_c/CLK:>8.2f} "
-              f"{1e3*total/CLK:>10.2f} {CLK/total:>7.0f}{mark}")
-    print(f"\n  pointwise array: {pw_c:,} cycles = {1e3*pw_c/CLK:.2f} ms")
+        print(f"  {tc:>4} {math.ceil(tc*9/2):>6} {1e3*dw_c/CLK:>8.2f}"
+              f" {1e3*total/CLK:>10.2f} {CLK/total:>7.0f}"
+              f" {100*dw_c/total:>9.0f}%{mark}")
+    print("")
+    print(f"  pointwise array: {pw_c:,} cycles = {1e3*pw_c/CLK:.2f} ms")
     print(f"  stem @1/cycle  : {stem_c:,} cycles = {1e3*stem_c/CLK:.2f} ms")
+    print("")
+    print("  stride-2 depthwise layers (input grid 4x the output grid):")
+    for name, ih, iw, oh, ow, oc in dw:
+        if ih != oh:
+            print(f"    {name:<24} {ih}x{iw} -> {oh}x{ow}, C={oc}")
 
 
 def sec_requant(pw):
