@@ -87,7 +87,6 @@ module stem_feeder #(
     input  wire [XW-1:0]             img_h,
     input  wire [OCTW-1:0]           n_oct,     // ceil(OC/TS) = 4
     input  wire [AA_W-1:0]           base_out,
-    input  wire signed [7:0]         relu6_qmax,
 
     // ---- weight load: TS banks of CIN*K*K bytes, address = oc_tile ------
     input  wire                      wl_en,
@@ -95,13 +94,16 @@ module stem_feeder #(
     input  wire [WA_W-1:0]           wl_addr,
     input  wire [CIN*K*K*DATA_W-1:0] wl_data,
 
-    // ---- parameter load (straight through to out_stage) -----------------
-    input  wire                      pl_en,
-    input  wire [PBANK_W-1:0]        pl_bank,
-    input  wire [PA_W-1:0]           pl_addr,
-    input  wire signed [BIAS_W-1:0]  pl_bias,
-    input  wire signed [M0_W-1:0]    pl_m0,
-    input  wire [SHIFT_W-1:0]        pl_shift,
+    // ---- the ONE shared requantize stage, which lives in accel_top -------
+    // Only one op runs at a time, so the accelerator has a single out_stage and
+    // every feeder drives it through these ports instead of carrying its own
+    // copy. `act` and `relu6_qmax` come from the instruction word now, so they
+    // are not this module's business either. See out_stage.v for the reasoning.
+    output wire [POOL_TM*ACC_W-1:0]  os_acc,
+    output wire                      os_acc_valid,
+    output wire [PA_W-1:0]           os_param_addr,
+    input  wire [POOL_TM*DATA_W-1:0] os_q,
+    input  wire                      os_q_valid,
 
     // ---- the image region ----------------------------------------------
     output wire                      im_rd_en,
@@ -119,7 +121,6 @@ module stem_feeder #(
 );
 
     localparam NT       = CIN*K*K;          // 27 taps
-    localparam ACT_RELU6 = 1'b1;
 
     // ================= stage 0 : the raster walk ========================
     reg [XW-1:0]  cy, cx;
@@ -250,27 +251,13 @@ module stem_feeder #(
     // OC <= POOL_TM for the stem, so every oc_tile shares parameter entry 0
     wire [PA_W-1:0] param_addr = {PA_W{1'b0}};
 
-    wire [POOL_TM*DATA_W-1:0] q;
-    wire                      q_valid;
+    // The requantize stage itself is in accel_top; this drives it.
+    assign os_acc        = acc_wide;
+    assign os_acc_valid  = sweeping;
+    assign os_param_addr = param_addr;
 
-    out_stage #(
-        .TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
-        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(PBANK_W)
-    ) u_out (
-        .clock      (clock),
-        .rst_n      (rst_n),
-        .flush      (start),
-        .act        (ACT_RELU6),
-        .relu6_qmax (relu6_qmax),
-        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
-        .acc        (acc_wide),
-        .acc_valid  (sweeping),
-        .param_addr (param_addr),
-        .q          (q),
-        .q_valid    (q_valid)
-    );
+    wire [POOL_TM*DATA_W-1:0] q       = os_q;
+    wire                      q_valid = os_q_valid;
 
     // ================= assemble four quarters into one entry ============
     reg [OCTW-1:0] oct_d1, oct_d2;

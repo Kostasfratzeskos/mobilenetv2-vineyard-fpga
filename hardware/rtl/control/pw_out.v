@@ -76,16 +76,17 @@ module pw_out #(
     input  wire                     start,
     input  wire [OCT_W-1:0]         n_oc,        // ceil(OC/TM)
     input  wire [AA_W-1:0]          base_out,    // output tensor base
-    input  wire                     act,         // 0 = NONE, 1 = RELU6
-    input  wire signed [7:0]        relu6_qmax,
 
-    // ---- parameter load port -------------------------------------------
-    input  wire                     pl_en,
-    input  wire [BANK_W-1:0]        pl_bank,
-    input  wire [PA_W-1:0]          pl_addr,
-    input  wire signed [BIAS_W-1:0] pl_bias,
-    input  wire signed [M0_W-1:0]   pl_m0,
-    input  wire [SHIFT_W-1:0]       pl_shift,
+    // ---- the ONE shared requantize stage, which lives in accel_top -------
+    // Only one op runs at a time, so the accelerator has a single out_stage and
+    // every feeder drives it through these ports instead of carrying its own
+    // copy. `act` and `relu6_qmax` come from the instruction word now, so they
+    // are not this module's business either. See out_stage.v for the reasoning.
+    output wire [TM*ACC_W-1:0]      os_acc,
+    output wire                     os_acc_valid,
+    output wire [PA_W-1:0]          os_param_addr,
+    input  wire [TM*DATA_W-1:0]     os_q,
+    input  wire                     os_q_valid,
 
     // ---- from pw_feeder ------------------------------------------------
     input  wire [TM*ACC_W-1:0]      acc,
@@ -106,26 +107,14 @@ module pw_out #(
     // These used to be inline here. They are now out_stage, because every
     // feeder needs exactly this pair and only one op runs at a time - see that
     // module's header for the DSP arithmetic.
-    wire q_valid;
 
-    out_stage #(
-        .TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
-        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)
-    ) u_out (
-        .clock      (clock),
-        .rst_n      (rst_n),
-        .flush      (start),
-        .act        (act),
-        .relu6_qmax (relu6_qmax),
-        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
-        .acc        (acc),
-        .acc_valid  (acc_valid),
-        .param_addr (acc_oct[PA_W-1:0]),
-        .q          (aw_data),
-        .q_valid    (q_valid)
-    );
+    // The requantize stage itself is in accel_top; this drives it.
+    assign os_acc        = acc;
+    assign os_acc_valid  = acc_valid;
+    assign os_param_addr = acc_oct[PA_W-1:0];
+
+    assign aw_data = os_q;
+    wire                      q_valid = os_q_valid;
 
     // ================= stage C : write ==================================
     assign aw_en = q_valid;

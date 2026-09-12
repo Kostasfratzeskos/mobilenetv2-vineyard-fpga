@@ -69,13 +69,16 @@ module gap_feeder #(
     input  wire [AA_W-1:0]           base_in,
     input  wire [AA_W-1:0]           base_out,
 
-    // ---- parameter load (straight through to out_stage) -----------------
-    input  wire                      pl_en,
-    input  wire [BANK_W-1:0]         pl_bank,
-    input  wire [PA_W-1:0]           pl_addr,
-    input  wire signed [BIAS_W-1:0]  pl_bias,
-    input  wire signed [M0_W-1:0]    pl_m0,
-    input  wire [SHIFT_W-1:0]        pl_shift,
+    // ---- the ONE shared requantize stage, which lives in accel_top -------
+    // Only one op runs at a time, so the accelerator has a single out_stage and
+    // every feeder drives it through these ports instead of carrying its own
+    // copy. `act` and `relu6_qmax` come from the instruction word now, so they
+    // are not this module's business either. See out_stage.v for the reasoning.
+    output wire [POOL_TM*ACC_W-1:0]  os_acc,
+    output wire                      os_acc_valid,
+    output wire [PA_W-1:0]           os_param_addr,
+    input  wire [POOL_TM*DATA_W-1:0] os_q,
+    input  wire                      os_q_valid,
 
     // ---- pool read -----------------------------------------------------
     output wire                      a_rd_en,
@@ -94,7 +97,6 @@ module gap_feeder #(
     output reg                       layer_done
 );
 
-    localparam ACT_NONE = 1'b0;
 
     // ================= stage 0 : slice-major, spatial-minor =============
     reg [SLW-1:0]   sl;
@@ -195,27 +197,13 @@ module gap_feeder #(
     wire [31:0]     sl2_half   = {{(32-SLW){1'b0}}, sl_d2} >> 1;
     wire [PA_W-1:0] param_addr = sl2_half[PA_W-1:0];
 
-    wire [POOL_TM*DATA_W-1:0] q;
-    wire                      q_valid;
+    // The requantize stage itself is in accel_top; this drives it.
+    assign os_acc        = acc_wide;
+    assign os_acc_valid  = sums_ready;
+    assign os_param_addr = param_addr;
 
-    out_stage #(
-        .TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
-        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)
-    ) u_out (
-        .clock      (clock),
-        .rst_n      (rst_n),
-        .flush      (start),
-        .act        (ACT_NONE),
-        .relu6_qmax (8'sd0),
-        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
-        .acc        (acc_wide),
-        .acc_valid  (sums_ready),
-        .param_addr (param_addr),
-        .q          (q),
-        .q_valid    (q_valid)
-    );
+    wire [POOL_TM*DATA_W-1:0] q       = os_q;
+    wire                      q_valid = os_q_valid;
 
     // ================= stage 3 : writeback ==============================
     // The output is 1x1xC, so there is no pixel index: slice s lands in entry

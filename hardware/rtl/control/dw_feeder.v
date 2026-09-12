@@ -104,8 +104,6 @@ module dw_feeder #(
     input  wire [AA_W-1:0]           n_ent,     // ceil(C/POOL_TM) per pixel
     input  wire [AA_W-1:0]           base_in,
     input  wire [AA_W-1:0]           base_out,
-    input  wire                      act,       // 0 = NONE, 1 = RELU6
-    input  wire signed [7:0]         relu6_qmax,
 
     // ---- weight load: TC banks of K*K bytes, address = group ------------
     input  wire                      wl_en,
@@ -113,13 +111,16 @@ module dw_feeder #(
     input  wire [WA_W-1:0]           wl_addr,
     input  wire [K*K*DATA_W-1:0]     wl_data,
 
-    // ---- parameter load: TC banks, address = group ----------------------
-    input  wire                      pl_en,
-    input  wire [POOL_BANK_W-1:0]    pl_bank,
-    input  wire [PA_W-1:0]           pl_addr,
-    input  wire signed [BIAS_W-1:0]  pl_bias,
-    input  wire signed [M0_W-1:0]    pl_m0,
-    input  wire [SHIFT_W-1:0]        pl_shift,
+    // ---- the ONE shared requantize stage, which lives in accel_top -------
+    // Only one op runs at a time, so the accelerator has a single out_stage and
+    // every feeder drives it through these ports instead of carrying its own
+    // copy. `act` and `relu6_qmax` come from the instruction word now, so they
+    // are not this module's business either. See out_stage.v for the reasoning.
+    output wire [POOL_TM*ACC_W-1:0]  os_acc,
+    output wire                      os_acc_valid,
+    output wire [PA_W-1:0]           os_param_addr,
+    input  wire [POOL_TM*DATA_W-1:0] os_q,
+    input  wire                      os_q_valid,
 
     // ---- activation pool: read -----------------------------------------
     output wire                      a_rd_en,
@@ -268,27 +269,13 @@ module dw_feeder #(
     wire [PA_W-1:0] param_addr_w =
         {{(PA_W-GRPW+1){1'b0}}, grp_d2[GRPW-1:1]};
 
-    wire [POOL_TM*DATA_W-1:0] q;
-    wire                      q_valid;
+    // The requantize stage itself is in accel_top; this drives it.
+    assign os_acc        = acc_wide;
+    assign os_acc_valid  = win_valid;
+    assign os_param_addr = param_addr_w;
 
-    out_stage #(
-        .TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
-        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(POOL_BANK_W)
-    ) u_out (
-        .clock      (clock),
-        .rst_n      (rst_n),
-        .flush      (start),
-        .act        (act),
-        .relu6_qmax (relu6_qmax),
-        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
-        .acc        (acc_wide),
-        .acc_valid  (win_valid),
-        .param_addr (param_addr_w),
-        .q          (q),
-        .q_valid    (q_valid)
-    );
+    wire [POOL_TM*DATA_W-1:0] q       = os_q;
+    wire                      q_valid = os_q_valid;
 
     // ================= stage C+4 : writeback ============================
     // out_stage registers the accumulators before requantizing, so the result

@@ -74,17 +74,37 @@ module pw_out_tb;
     wire [TM*DATA_W-1:0]     aw_data;
     wire                     tag_error;
 
+    // ---- the shared requantize stage, now outside the DUT -----------------
+    // out_stage is one instance for the whole accelerator (see its header), so
+    // the feeder only drives it. The testbench plays the part accel_top will.
+    wire [TM*ACC_W-1:0]  os_acc;
+    wire                   os_acc_valid;
+    wire [PA_W-1:0]        os_param_addr;
+    wire [TM*DATA_W-1:0] os_q;
+    wire                   os_q_valid;
+
     pw_out #(.TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
              .SHIFT_W(SHIFT_W), .DATA_W(DATA_W), .PIX_W(PIX_W), .OCT_W(OCT_W),
              .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W), .AA_W(AA_W)) u_dut (
         .clock(clock), .rst_n(rst_n),
         .start(start), .n_oc(n_oc), .base_out(base_out),
-        .act(act), .relu6_qmax(qmax),
-        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .os_acc(os_acc), .os_acc_valid(os_acc_valid),
+        .os_param_addr(os_param_addr),
+        .os_q(os_q), .os_q_valid(os_q_valid),
         .acc(acc_bus), .acc_valid(acc_valid), .acc_pix(acc_pix), .acc_oct(acc_oct),
         .aw_en(aw_en), .aw_addr(aw_addr), .aw_data(aw_data),
         .tag_error(tag_error)
+    );
+
+    out_stage #(.TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
+                .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
+                .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)) u_os (
+        .clock(clock), .rst_n(rst_n), .flush(start),
+        .act(act), .relu6_qmax(qmax),
+        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
+        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .acc(os_acc), .acc_valid(os_acc_valid), .param_addr(os_param_addr),
+        .q(os_q), .q_valid(os_q_valid)
     );
 
     initial clock = 1'b0;

@@ -134,6 +134,15 @@ module dw_datapath_tb;
     wire [AA_W-1:0]           aw_addr  = load_mode ? tb_aw_addr  : dw_aw_addr;
     wire [POOL_TM*DATA_W-1:0] aw_data  = load_mode ? tb_aw_data  : dw_aw_data;
 
+    // ---- the shared requantize stage, now outside the DUT -----------------
+    // out_stage is one instance for the whole accelerator (see its header), so
+    // the feeder only drives it. The testbench plays the part accel_top will.
+    wire [POOL_TM*ACC_W-1:0]  os_acc;
+    wire                   os_acc_valid;
+    wire [PA_W-1:0]        os_param_addr;
+    wire [POOL_TM*DATA_W-1:0] os_q;
+    wire                   os_q_valid;
+
     dw_feeder #(.DATA_W(DATA_W), .TC(TC), .K(K), .ACC_W(ACC_W),
                 .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W),
                 .POOL_TM(POOL_TM), .SEL_W(SEL_W), .XW(XW), .MAX_W(MAX_W),
@@ -143,14 +152,25 @@ module dw_datapath_tb;
         .clock(clock), .rst_n(rst_n),
         .start(start), .img_w(img_w), .img_h(img_h), .stride2(stride2),
         .n_grp(n_grp), .n_ent(n_ent), .base_in(base_in), .base_out(base_out),
-        .act(act), .relu6_qmax(qmax),
         .wl_en(wl_en), .wl_bank(wl_bank), .wl_addr(wl_addr), .wl_data(wl_data),
-        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .os_acc(os_acc), .os_acc_valid(os_acc_valid),
+        .os_param_addr(os_param_addr),
+        .os_q(os_q), .os_q_valid(os_q_valid),
         .a_rd_en(a_rd_en), .a_addr(a_addr), .a_sel(a_sel), .a_word(a_word),
         .aw_en(dw_aw_en), .aw_full(dw_aw_full), .aw_sel(dw_aw_sel),
         .aw_addr(dw_aw_addr), .aw_data(dw_aw_data),
         .busy(busy), .layer_done(layer_done)
+    );
+
+    out_stage #(.TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
+                .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
+                .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(PBANK_W)) u_os (
+        .clock(clock), .rst_n(rst_n), .flush(start),
+        .act(act), .relu6_qmax(qmax),
+        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
+        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .acc(os_acc), .acc_valid(os_acc_valid), .param_addr(os_param_addr),
+        .q(os_q), .q_valid(os_q_valid)
     );
 
     // The read port is muxed too, so that after the run the testbench can read

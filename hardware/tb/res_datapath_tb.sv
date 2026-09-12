@@ -94,6 +94,15 @@ module res_datapath_tb;
 
     wire                     busy, layer_done;
 
+    // ---- the shared requantize stage, now outside the DUT -----------------
+    // out_stage is one instance for the whole accelerator (see its header), so
+    // the feeder only drives it. The testbench plays the part accel_top will.
+    wire [POOL_TM*ACC_W-1:0]  os_acc;
+    wire                   os_acc_valid;
+    wire [PA_W-1:0]        os_param_addr;
+    wire [POOL_TM*DATA_W-1:0] os_q;
+    wire                   os_q_valid;
+
     res_feeder #(.DATA_W(DATA_W), .POOL_TM(POOL_TM), .TN(TN), .ACC_W(ACC_W),
                  .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W), .SEL_W(SEL_W),
                  .PA_W(PA_W), .BANK_W(BANK_W), .PDEPTH(PDEPTH), .AA_W(AA_W),
@@ -101,12 +110,24 @@ module res_datapath_tb;
         .clock(clock), .rst_n(rst_n),
         .start(start), .n_pix(n_pix), .n_sl(n_sl), .n_ent(n_ent),
         .base_in(base_in), .base_saved(base_saved), .base_out(base_out),
-        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
-        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .os_acc(os_acc), .os_acc_valid(os_acc_valid),
+        .os_param_addr(os_param_addr),
+        .os_q(os_q), .os_q_valid(os_q_valid),
         .a_rd_en(a_rd_en), .a_addr(a_addr), .a_sel(a_sel), .a_word(a_word),
         .aw_en(rs_aw_en), .aw_full(rs_aw_full), .aw_sel(rs_aw_sel),
         .aw_addr(rs_aw_addr), .aw_data(rs_aw_data),
         .busy(busy), .layer_done(layer_done)
+    );
+
+    out_stage #(.TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
+                .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
+                .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)) u_os (
+        .clock(clock), .rst_n(rst_n), .flush(start),
+        .act(1'b0), .relu6_qmax(8'sd0),
+        .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
+        .pl_bias(pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .acc(os_acc), .acc_valid(os_acc_valid), .param_addr(os_param_addr),
+        .q(os_q), .q_valid(os_q_valid)
     );
 
     // ---- the pool: loaded by the testbench, then written by the feeder ----
