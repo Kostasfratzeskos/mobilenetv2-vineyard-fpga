@@ -6,6 +6,11 @@
 //  Bit-exact hardware twin of requantize_elem() in
 //      software/cmodel/src/requantize.c
 //
+//  Parameterised by OUT_W: 8 for activations (clamp_i8) and 16 for the
+//  classifier's logits, where requantize_logits() applies clamp_i16 instead
+//  (DD-011). Everything else about the arithmetic is identical - the logit path
+//  is the ACT_NONE path with a wider saturation.
+//
 //  Per element:
 //      product = in_data * M0                  (full width, no truncation)
 //      rounded = product + (1 << (shift-1))    (round half-up toward +inf)
@@ -22,7 +27,8 @@
 module requantize #(
     parameter ACC_W   = 21,   // accumulator width (signed), matches the HW acc
     parameter M0_W    = 32,   // fixed-point multiplier width (signed), int32
-    parameter SHIFT_W = 6     // shift-amount width (unsigned). export: shift>=1
+    parameter SHIFT_W = 6,    // shift-amount width (unsigned). export: shift>=1
+    parameter OUT_W   = 8     // output width: 8 for activations, 16 for logits
 )(
     input  wire                      clock,
     input  wire                      rst_n,       // async active-low reset
@@ -32,7 +38,7 @@ module requantize #(
     input  wire signed [M0_W-1:0]    M0,          // fixed-point multiplier
     input  wire        [SHIFT_W-1:0] shift,       // right-shift amount (>= 1)
     input  wire signed [7:0]         relu6_qmax,  // ReLU6 ceiling q6 (<= 127)
-    output reg  signed [7:0]         quantized    // int8 activation output
+    output reg  signed [OUT_W-1:0]   quantized    // int8 activation, or int16 logit
 );
 
     // ---- op-kind encoding (mirrors the `activation` enum) -------------
@@ -42,6 +48,10 @@ module requantize #(
     // ---- widths -------------------------------------------------------
     // PROD_W is sized so in_data*M0 can never truncate (the C uses int64 for
     // exactly this). ROUND_W adds one bit of headroom for the +half add.
+    // saturation bounds for the output width: +-2^(OUT_W-1)
+    localparam signed [63:0] OUT_MAX = (64'sd1 <<< (OUT_W-1)) - 64'sd1;
+    localparam signed [63:0] OUT_MIN = -(64'sd1 <<< (OUT_W-1));
+
     localparam PROD_W  = ACC_W + M0_W;
     localparam ROUND_W = PROD_W + 1;
 
@@ -64,25 +74,27 @@ module requantize #(
     // ---- (4) activation + saturation (combinational) ------------------
     // Unsized literals (0, 127, -128) are 32-bit signed, so every compare
     // and assign below stays in signed arithmetic.
-    reg signed [7:0] sat;
+    reg signed [OUT_W-1:0] sat;
     always @(*) begin
         if (act == ACT_RELU6) begin
             // ReLU6 in quantized space: clamp to [0, relu6_qmax]. Since
             // 0 >= -128 and relu6_qmax <= 127, int8 saturation is subsumed.
             if      (shifted < 0)           sat = 0;
             else if (shifted > relu6_qmax)  sat = relu6_qmax;
-            else                            sat = shifted[7:0];
+            else                            sat = shifted[OUT_W-1:0];
         end else begin
-            // linear bottleneck / projection / logits: clamp_i8 [-128, 127].
-            if      (shifted < -128)        sat = -128;
-            else if (shifted > 127)         sat = 127;
-            else                            sat = shifted[7:0];
+            // linear bottleneck / projection / logits: saturate to the output
+            // width. OUT_W=8 is clamp_i8; OUT_W=16 is the clamp_i16 that
+            // requantize_logits() applies to the classifier (DD-011).
+            if      (shifted < OUT_MIN)     sat = OUT_MIN[OUT_W-1:0];
+            else if (shifted > OUT_MAX)     sat = OUT_MAX[OUT_W-1:0];
+            else                            sat = shifted[OUT_W-1:0];
         end
     end
 
     // ---- registered output --------------------------------------------
     always @(posedge clock or negedge rst_n) begin
-        if (!rst_n)   quantized <= 8'sd0;
+        if (!rst_n)   quantized <= {OUT_W{1'b0}};
         else if (en)  quantized <= sat;
     end
 
