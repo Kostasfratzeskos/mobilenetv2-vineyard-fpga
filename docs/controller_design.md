@@ -380,10 +380,10 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 - [x] ~~Οριστικοποίηση Tm/Tn~~ → **32×16** (§5). Μετρήθηκε σε όλα τα pointwise layers:
       92,1% vs 74,9% για το 64×8. Το `mac_lane.v` δεν αλλάζει.
 - [x] ~~Depthwise parallelism & διαμοιρασμός DSPs~~ → **Tc=16, ξεχωριστό engine** (§6).
-- [ ] Instruction format του top sequencer (πεδία ανά op).
+- [x] ~~Instruction format του top sequencer~~ → ορίστηκε, βλ. §9 (8 λέξεις × 32 bit).
+- [x] ~~Ping-pong activation buffer management~~ → **στατική κατανομή**, βλ. §9.
+- [x] ~~Χειρισμός residual~~ → το `save` είναι μόνο σήμανση διάρκειας ζωής, βλ. §9.
 - [ ] URAM banking scheme για το activation buffer (Tn/κύκλο) & το weight buffer (Tm×Tn/κύκλο).
-- [ ] Ping-pong activation buffer management μεταξύ layers.
-- [ ] Χειρισμός residual: πότε/πού κρατιέται το `saved` tensor on-chip.
 - [ ] Παραλληλισμός του stem (1,61 ms στο 1 στοιχείο/κύκλο = 12% του χρόνου· ~50 DSPs
       το κάνουν αμελητέο). Χαμηλή προτεραιότητα — τρέχει μία φορά.
 
@@ -391,7 +391,66 @@ layer και *θα μπορούσαν* να μοιράζονται πόρους 
 
 ---
 
-## 9. Πηγές (συγκεντρωτικά)
+## 9. Πρόγραμμα και κατανομή μνήμης (build plan #6)
+
+Το `scripts/gen_program.py` είναι ο compiler: διαβάζει το `manifest.json`, κατανέμει
+διευθύνσεις σε όλα τα feature maps και εκπέμπει το instruction stream.
+
+### Δύο ευρήματα από το C reference model
+
+**Το `save` δεν μετακινεί δεδομένα.** Η `run_inference()` κρατά κάθε έξοδο layer ζωντανή
+και το `residual_add` διαβάζει απευθείας το buffer του layer που την παρήγαγε. Άρα στο
+hardware το `save` είναι **μόνο σήμανση διάρκειας ζωής**: λέει στον allocator «αυτό το
+tensor πρέπει να ζήσει μέχρι το αντίστοιχο res_add». Κοστίζει **μηδέν κύκλους και καμία
+εντολή**: **74 ops → 64 instructions**.
+
+**Η είσοδος δεν μπαίνει στη δεξαμενή.** Το 224×224×3 ως entries των 32 καναλιών θα
+σπαταλούσε 91% του χώρου (1,53 MB για 147 KB δεδομένων). Η εικόνα ζει σε δική της περιοχή
+147 KB που γεμίζει το PS, και τη διαβάζει μόνο ο stem.
+
+### Στατική κατανομή, όχι ping-pong
+
+Το κλασικό ping-pong με δύο σταθερά μισά θέλει 2× το μεγαλύτερο feature map. Επειδή όμως
+ολόκληρο το πρόγραμμα είναι **γνωστό στατικά**, ο generator κάνει κανονικό register
+allocation: υπολογίζει διάρκειες ζωής και τοποθετεί με first-fit.
+
+| | entries | MB |
+|---|---:|---:|
+| μεγαλύτερο μεμονωμένο tensor | 37.632 | 1,15 |
+| **κορύφωση δεξαμενής** | **50.176** | **1,53** |
+| αντί για 2× με ping-pong | 75.264 | 2,30 |
+
+Η κορύφωση προκύπτει στο op 3 (`features.2.conv.0.0`), όπου η έξοδος των 37.632 entries
+κάθεται αμέσως μετά τη ζωντανή είσοδο των 12.544.
+
+Ο generator **επαληθεύει** την κατανομή: κανένα ζεύγος ταυτόχρονα ζωντανών tensors δεν
+επικαλύπτεται, και κανένα op δεν γράφει εκεί που διαβάζει.
+
+### Instruction word — 8 λέξεις × 32 bit
+
+Η πυκνότητα είναι αδιάφορη (64 ops = 2 KB όπως και να το κάνεις), οπότε η διάταξη
+επιλέχθηκε να διαβάζεται σε hex dump και να κόβεται εύκολα στο RTL.
+
+| word | bits | πεδίο |
+|---|---|---|
+| w0 | [3:0] | opcode: 1=STEM 2=PW 3=DW 4=RES_ADD 5=GAP 6=LINEAR |
+| | [11:4] / [19:12] | `img_w` / `img_h` (διαστάσεις **εισόδου**) |
+| | [20] / [21] | `stride2` / `act` (0=NONE, 1=RELU6) |
+| | [31:24] | `relu6_qmax` |
+| w1 | [15:0] / [23:16] / [31:24] | `n_pix` / `n_oc` / `n_ic` |
+| w2 | [7:0] / [15:8] / [23:16] | `n_grp` / `n_ent_in` / `n_ent_out` |
+| w3 | [15:0] / [31:16] | `base_in` / `base_out` |
+| w4 | [15:0] | `base_saved` (μόνο RES_ADD) |
+| w5 | [23:0] | `wgt_off` — byte offset στο weight blob |
+| w6 | [19:0] | `wgt_bytes` |
+| w7 | [15:0] | `pchan` — κανάλια per-channel παραμέτρων προς φόρτωση |
+
+Έξοδος: `software/export/program.hex` (512 λέξεις, για `$readmemh`) και `program.txt`
+(αναγνώσιμο listing — αυτό διαβάζεις όταν το hardware διαφωνεί με το C model).
+
+---
+
+## 10. Πηγές (συγκεντρωτικά)
 
 **CNN-on-FPGA controllers / accelerators**
 - Guo et al., *Angel-Eye: A Complete Design Flow for Mapping CNN onto Embedded FPGA*, TCAD 2018. *(PDF στο docs/references/)*
