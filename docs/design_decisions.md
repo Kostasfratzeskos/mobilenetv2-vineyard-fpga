@@ -179,3 +179,36 @@ argmax over the 4 int16 logits is the predicted class.
   returns); sharing the pointwise array's DSPs (complexity without need).
 - Revisit if: the DSP budget gets tight once the stem and the buffers are placed and
   routed, or timing closure fails at 250 MHz.
+
+### DD-015 - One requantize unit per lane (R = Tm = 32)
+- Status: Accepted
+- Date: 2026-09-12
+- Context: pe_array finishes Tm=32 accumulators every n_ic cycles, and each has to go
+  through bias_add + requantize before it can be stored. With R parallel requantize units
+  the drain takes ceil(Tm/R) cycles, so an output tile costs max(n_ic, ceil(Tm/R)).
+  Each unit is a 21x32 multiply, which is 2 DSP48E2 - so R is a real area decision.
+- Decision: **R = 32, one unit per lane.**
+- Rationale: measured over all 35 pointwise layers with
+  `python scripts/analyze_workload.py requant`:
+
+      R    DSPs   drain   cycles       vs base   layers stalled
+      1      2      32    4,359,316    +667%     28/35
+      8     16       4      797,016     +40%      7/35
+     16     32       2      605,720      +6.6%    1/35
+     32     64       1      568,088       0%      0/35
+
+  R=16 is the knee on cycles, but the reason for R=32 is not in the table: at R=32 an
+  entire control path stops existing. With R<32 the output stage needs a shadow register
+  to hold the accumulators while the array moves on (32x21 = 672 bit), a drain counter, a
+  stall path back into addr_gen, and logic to assemble the 256-bit act_buffer word in
+  pieces. At R=32 all 32 results appear in one cycle and already ARE that word. The extra
+  32 DSPs are 1.9% of the chip; the control logic they remove is a place for bugs, and
+  DSPs are not the scarce resource here - the whole budget is ~442 DSP = 26% of the
+  XCZU7EV (array 256 + requantize 64 + depthwise 72 + stem ~50).
+- Alternatives considered: R=16 (half the DSPs, +6.6% runtime, but needs the whole drain
+  machine); R=8 (16 DSPs but +40% and 7 layers stalled). Note the single layer that R=16
+  would stall is features.2.conv.0.0 with IC=16 - the same outlier that forced
+  act_buffer's 256-bit entries (DD: act_buffer width). Designing a drain FSM around one
+  layer is what R=32 avoids.
+- Revisit if: synthesis shows DSPs are tight after the stem and buffers are placed, or the
+  requantize multiplier fails timing at 250 MHz and needs pipelining anyway.

@@ -11,7 +11,7 @@ Usage:
     python scripts/analyze_workload.py roofline   # one section
     python scripts/analyze_workload.py sweep depthwise
 
-Sections: roofline | sweep | tail | depthwise
+Sections: roofline | sweep | tail | depthwise | requant
 """
 import json
 import math
@@ -168,11 +168,43 @@ def sec_depthwise(pw, dw, stem):
     print(f"  stem @1/cycle  : {stem_c:,} cycles = {1e3*stem_c/CLK:.2f} ms")
 
 
+def sec_requant(pw):
+    """How many parallel requantize units does the drain need?
+
+    The array finishes TM accumulators every n_ic cycles. A shadow register
+    lets the drain overlap the next dot product, so with R units an output
+    tile costs max(n_ic, ceil(TM/R)) cycles instead of n_ic. Layers with a
+    small n_ic are the ones that stall.
+    """
+    print("== requantize parallelism (build plan #4) ==")
+    base = sum(pw_cycles(oh, ow, ic, oc, TM, TN) for _, oh, ow, ic, oc in pw)
+    print(f"  no-drain baseline: {base:,} cycles = {1e3*base/CLK:.2f} ms")
+    print("")
+    print(f"  {'R':>3} {'DSPs':>6} {'drain':>7} {'cycles':>11}"
+          f" {'vs base':>9} {'ms':>7} {'layers hit':>11}")
+    for r in (1, 2, 4, 8, 16, 32):
+        drain = math.ceil(TM / r)
+        tot = 0
+        hit = 0
+        for _, oh, ow, ic, oc in pw:
+            nic = math.ceil(ic / TN)
+            noc = math.ceil(oc / TM)
+            tot += oh * ow * noc * max(nic, drain)
+            if drain > nic:
+                hit += 1
+        over = 100 * (tot / base - 1)
+        print(f"  {r:>3} {2*r:>6} {drain:>7} {tot:>11,} {over:>8.1f}%"
+              f" {1e3*tot/CLK:>7.2f} {hit:>7}/{len(pw)}")
+    print("")
+    print("  (each unit is a 21x32 multiply -> 2 DSP48E2; the array is 256)")
+
+
 SECTIONS = {
     "roofline": lambda ctx: sec_roofline(ctx["macs"], ctx["wbytes"], ctx["bias"]),
     "sweep": lambda ctx: sec_sweep(ctx["pw"]),
     "tail": lambda ctx: sec_tail(ctx["pw"]),
     "depthwise": lambda ctx: sec_depthwise(ctx["pw"], ctx["dw"], ctx["stem"]),
+    "requant": lambda ctx: sec_requant(ctx["pw"]),
 }
 
 
