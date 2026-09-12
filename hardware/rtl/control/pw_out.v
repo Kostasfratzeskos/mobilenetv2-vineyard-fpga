@@ -53,7 +53,7 @@
 //  n_oc, base_out, act and relu6_qmax are per layer. The parameter buffer
 //  must already hold this layer's channels, loaded through pl_*.
 //
-//  Run:  bash scripts/run_sim.sh pw_out param_buffer rq_bank bias_add requantize
+//  Run:  bash scripts/run_sim.sh pw_out out_stage param_buffer rq_bank bias_add requantize
 //============================================================================
 module pw_out #(
     parameter TM      = 32,
@@ -102,54 +102,27 @@ module pw_out #(
     output reg                      tag_error    // sticky until `start`
 );
 
-    // ================= stage A : capture + parameter fetch ==============
-    reg [TM*ACC_W-1:0] acc_q;
-    reg                vA;
-
-    always @(posedge clock or negedge rst_n) begin
-        if (!rst_n) begin
-            acc_q <= {TM*ACC_W{1'b0}};
-            vA    <= 1'b0;
-        end else if (start) begin
-            vA    <= 1'b0;
-        end else begin
-            vA <= acc_valid;
-            if (acc_valid) acc_q <= acc;
-        end
-    end
-
-    wire [TM*BIAS_W-1:0]  p_bias;
-    wire [TM*M0_W-1:0]    p_m0;
-    wire [TM*SHIFT_W-1:0] p_shift;
-
-    param_buffer #(
-        .TM(TM), .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W),
-        .DEPTH(PDEPTH), .ADDR_W(PA_W), .BANK_W(BANK_W)
-    ) u_param (
-        .clock    (clock),
-        .wr_en    (pl_en), .wr_bank(pl_bank), .wr_addr(pl_addr),
-        .wr_bias  (pl_bias), .wr_m0(pl_m0), .wr_shift(pl_shift),
-        .rd_en    (acc_valid),
-        .rd_addr  (acc_oct[PA_W-1:0]),
-        .rd_bias  (p_bias), .rd_m0(p_m0), .rd_shift(p_shift)
-    );
-
-    // ================= stage B : requantize all Tm lanes ================
+    // ================= stages A and B : the shared requantize stage ======
+    // These used to be inline here. They are now out_stage, because every
+    // feeder needs exactly this pair and only one op runs at a time - see that
+    // module's header for the DSP arithmetic.
     wire q_valid;
 
-    rq_bank #(
+    out_stage #(
         .TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W)
-    ) u_rq (
+        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
+        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)
+    ) u_out (
         .clock      (clock),
         .rst_n      (rst_n),
-        .en         (vA),
+        .flush      (start),
         .act        (act),
         .relu6_qmax (relu6_qmax),
-        .acc        (acc_q),
-        .bias       (p_bias),
-        .m0         (p_m0),
-        .shift      (p_shift),
+        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
+        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .acc        (acc),
+        .acc_valid  (acc_valid),
+        .param_addr (acc_oct[PA_W-1:0]),
         .q          (aw_data),
         .q_valid    (q_valid)
     );

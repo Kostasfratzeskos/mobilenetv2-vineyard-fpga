@@ -35,8 +35,8 @@
 //  not fit.
 //
 //  Run:  bash scripts/run_sim.sh dw_datapath dw_feeder line_buffer dw_array \
-//          dwconv3x3 wgt_buffer param_buffer rq_bank bias_add requantize \
-//          act_buffer
+//          dwconv3x3 wgt_buffer out_stage param_buffer rq_bank bias_add \
+//          requantize act_buffer
 //============================================================================
 module dw_datapath_tb;
 
@@ -61,7 +61,8 @@ module dw_datapath_tb;
     localparam AA_W    = 16;
     localparam WA_W    = 6;
     localparam PA_W    = 6;
-    localparam BANK_W  = 4;
+    localparam BANK_W  = 4;       // weight banks  = clog2(TC)
+    localparam PBANK_W = 5;       // shared param banks = clog2(POOL_TM)
     localparam WDEPTH  = 64;
     localparam PDEPTH  = 64;
     localparam BIAS_W  = 32;
@@ -102,7 +103,7 @@ module dw_datapath_tb;
     logic [NT*DATA_W-1:0]    wl_data;
 
     logic                    pl_en;
-    logic [BANK_W-1:0]       pl_bank;
+    logic [PBANK_W-1:0]      pl_bank;
     logic [PA_W-1:0]         pl_addr;
     logic signed [BIAS_W-1:0] pl_bias;
     logic signed [M0_W-1:0]  pl_m0;
@@ -137,7 +138,8 @@ module dw_datapath_tb;
                 .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W),
                 .POOL_TM(POOL_TM), .SEL_W(SEL_W), .XW(XW), .MAX_W(MAX_W),
                 .GRPW(GRPW), .AA_W(AA_W), .WA_W(WA_W), .PA_W(PA_W),
-                .BANK_W(BANK_W), .WDEPTH(WDEPTH), .PDEPTH(PDEPTH)) u_dw (
+                .BANK_W(BANK_W), .POOL_BANK_W(PBANK_W),
+                .WDEPTH(WDEPTH), .PDEPTH(PDEPTH)) u_dw (
         .clock(clock), .rst_n(rst_n),
         .start(start), .img_w(img_w), .img_h(img_h), .stride2(stride2),
         .n_grp(n_grp), .n_ent(n_ent), .base_in(base_in), .base_out(base_out),
@@ -194,7 +196,9 @@ module dw_datapath_tb;
                 x = p % W;
                 for (m = 0; m < TC; m++) begin
                     c    = dw_aw_sel*TC + m;
-                    got  = dw_aw_data[m*DATA_W +: DATA_W];
+                    // the results now sit in the half of the word that wr_sel
+                    // stores, not replicated across it, so index by channel
+                    got  = dw_aw_data[c*DATA_W +: DATA_W];
                     expd = gold_mem[(c*H + y)*W + x];
                     checked++;
                     if (got !== expd) begin
@@ -266,9 +270,12 @@ module dw_datapath_tb;
             for (g = 0; g < N_GRP; g++)
                 for (m = 0; m < TC; m++) begin
                     @(negedge clock);
+                    // the shared parameter buffer has POOL_TM banks and one
+                    // entry per 32 channels, so channel ch lives in bank
+                    // ch%POOL_TM at address ch/POOL_TM
                     ch       = g*TC + m;
-                    pl_bank  = m[BANK_W-1:0];
-                    pl_addr  = g[PA_W-1:0];
+                    pl_bank  = (ch % POOL_TM);
+                    pl_addr  = (ch / POOL_TM);
                     pl_bias  = (ch < C) ? b_mem[ch]  : 32'sd0;
                     pl_m0    = (ch < C) ? m0_mem[ch] : 32'sd0;
                     pl_shift = (ch < C) ? sh_mem[ch][SHIFT_W-1:0] : {SHIFT_W{1'b0}};

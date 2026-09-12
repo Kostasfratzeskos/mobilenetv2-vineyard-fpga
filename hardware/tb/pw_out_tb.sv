@@ -22,11 +22,11 @@
 //  tag_error, and `start` must clear it. A self-check that cannot fire is
 //  worse than none, because it reads as reassurance.
 //
-//  param_buffer has no testbench of its own: every write port is driven here
-//  and every read field changes the results, so a separate one would only
-//  duplicate this coverage. Runs at the real ACC_W = 21.
+//  param_buffer and out_stage have no testbenches of their own: every write port
+//  is driven here and every read field changes the results, so separate ones
+//  would only duplicate this coverage. Runs at the real ACC_W = 21.
 //
-//  Run:  bash scripts/run_sim.sh pw_out param_buffer rq_bank bias_add requantize
+//  Run:  bash scripts/run_sim.sh pw_out out_stage param_buffer rq_bank bias_add requantize
 //============================================================================
 module pw_out_tb;
 

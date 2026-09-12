@@ -57,12 +57,19 @@
 //  ---- writeback is a HALF entry ---------------------------------------
 //
 //  TC=16 channels fill half of a 32-channel pool entry, so the write asserts
-//  act_buffer's wr_full low with wr_sel = grp[0], and replicates the TC-byte
-//  payload across the word per that module's convention. The other half is left
-//  as the neighbouring group wrote it.
+//  act_buffer's wr_full low with wr_sel = grp[0]. The other half is left as the
+//  neighbouring group wrote it.
+//
+//  The requantize stage is the SHARED out_stage (32 lanes), not a private
+//  16-lane one, because only one op runs at a time. Rather than rotate the 16
+//  accumulators down to lanes 0-15, they are driven into lanes (grp&1)*16 ..
+//  +15 and the parameters are read at grp>>1. Both sides then line up for free:
+//  a parameter entry covers 32 consecutive channels, so those banks already hold
+//  channels 16g..16g+15, and `q` comes back with the results in exactly the half
+//  of the word that wr_sel = grp&1 stores. No rotation, no replication.
 //
 //  Run:  bash scripts/run_sim.sh dw_feeder line_buffer dw_array dwconv3x3 \
-//          wgt_buffer param_buffer rq_bank bias_add requantize
+//          wgt_buffer out_stage param_buffer rq_bank bias_add requantize
 //============================================================================
 module dw_feeder #(
     parameter DATA_W  = 8,
@@ -80,7 +87,8 @@ module dw_feeder #(
     parameter AA_W    = 16,     // activation pool address width
     parameter WA_W    = 6,      // depthwise weight buffer address width
     parameter PA_W    = 6,      // parameter buffer address width
-    parameter BANK_W  = 4,      // clog2(TC)
+    parameter BANK_W  = 4,      // clog2(TC), for the weight banks
+    parameter POOL_BANK_W = 5,  // clog2(POOL_TM), for the shared param banks
     parameter WDEPTH  = 64,
     parameter PDEPTH  = 64
 )(
@@ -107,7 +115,7 @@ module dw_feeder #(
 
     // ---- parameter load: TC banks, address = group ----------------------
     input  wire                      pl_en,
-    input  wire [BANK_W-1:0]         pl_bank,
+    input  wire [POOL_BANK_W-1:0]    pl_bank,
     input  wire [PA_W-1:0]           pl_addr,
     input  wire signed [BIAS_W-1:0]  pl_bias,
     input  wire signed [M0_W-1:0]    pl_m0,
@@ -194,8 +202,10 @@ module dw_feeder #(
     reg            v_d1, real_d1;
 
     always @(posedge clock or negedge rst_n) begin
-        if (!rst_n)     begin v_d1 <= 1'b0; real_d1 <= 1'b0; end
-        else if (start) begin v_d1 <= 1'b0; real_d1 <= 1'b0; end
+        if (!rst_n) begin
+            v_d1 <= 1'b0; real_d1 <= 1'b0;
+            grp_d1 <= {GRPW{1'b0}}; y_d1 <= {XW{1'b0}}; x_d1 <= {XW{1'b0}};
+        end else if (start) begin v_d1 <= 1'b0; real_d1 <= 1'b0; end
         else begin
             v_d1    <= step;
             real_d1 <= is_real;
@@ -234,24 +244,11 @@ module dw_feeder #(
         .rd_en(v_d1), .rd_addr(grp_d1[WA_W-1:0]), .rd_data(wk)
     );
 
-    wire [TC*BIAS_W-1:0]  p_bias;
-    wire [TC*M0_W-1:0]    p_m0;
-    wire [TC*SHIFT_W-1:0] p_shift;
-
-    param_buffer #(
-        .TM(TC), .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W),
-        .DEPTH(PDEPTH), .ADDR_W(PA_W), .BANK_W(BANK_W)
-    ) u_param (
-        .clock(clock),
-        .wr_en(pl_en), .wr_bank(pl_bank), .wr_addr(pl_addr),
-        .wr_bias(pl_bias), .wr_m0(pl_m0), .wr_shift(pl_shift),
-        .rd_en(v_d1), .rd_addr(grp_d1[PA_W-1:0]),
-        .rd_bias(p_bias), .rd_m0(p_m0), .rd_shift(p_shift)
-    );
-
     // ================= stage C+2 : the array and requantize =============
     reg [GRPW-1:0] grp_d2;
-    always @(posedge clock) grp_d2 <= grp_d1;
+    always @(posedge clock or negedge rst_n)
+        if (!rst_n) grp_d2 <= {GRPW{1'b0}};
+        else        grp_d2 <= grp_d1;
 
     wire [TC*ACC_W-1:0] acc;
 
@@ -259,28 +256,60 @@ module dw_feeder #(
         .win(win), .wk(wk), .acc(acc)
     );
 
-    wire [TC*DATA_W-1:0] q;
-    wire                 q_valid;
+    // Place the TC accumulators in the half of the 32-lane bus that matches this
+    // group, so the parameter banks and the half write line up without any
+    // rotation - see the header.
+    wire [POOL_TM*ACC_W-1:0] acc_wide =
+        grp_d2[0] ? {acc, {TC*ACC_W{1'b0}}} : {{TC*ACC_W{1'b0}}, acc};
 
-    rq_bank #(
-        .TM(TC), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
-        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W)
-    ) u_rq (
-        .clock(clock), .rst_n(rst_n),
-        .en(win_valid), .act(act), .relu6_qmax(relu6_qmax),
-        .acc(acc), .bias(p_bias), .m0(p_m0), .shift(p_shift),
-        .q(q), .q_valid(q_valid)
+    // Size the parameter address EXACTLY to the port. A narrower expression on
+    // a wider input port leaves the top bits undriven in xsim, and mem[X] reads
+    // X - which is what a whole word of xxxx turned out to be.
+    wire [PA_W-1:0] param_addr_w =
+        {{(PA_W-GRPW+1){1'b0}}, grp_d2[GRPW-1:1]};
+
+    wire [POOL_TM*DATA_W-1:0] q;
+    wire                      q_valid;
+
+    out_stage #(
+        .TM(POOL_TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
+        .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
+        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(POOL_BANK_W)
+    ) u_out (
+        .clock      (clock),
+        .rst_n      (rst_n),
+        .flush      (start),
+        .act        (act),
+        .relu6_qmax (relu6_qmax),
+        .pl_en      (pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
+        .pl_bias    (pl_bias), .pl_m0(pl_m0), .pl_shift(pl_shift),
+        .acc        (acc_wide),
+        .acc_valid  (win_valid),
+        .param_addr (param_addr_w),
+        .q          (q),
+        .q_valid    (q_valid)
     );
 
-    // ================= stage C+3 : writeback ============================
-    reg [GRPW-1:0] grp_d3;
-    always @(posedge clock) grp_d3 <= grp_d2;
+    // ================= stage C+4 : writeback ============================
+    // out_stage registers the accumulators before requantizing, so the result
+    // lands one cycle later than a private rq_bank would have produced it, and
+    // the group index needs one more stage to stay with it.
+    reg [GRPW-1:0] grp_d3, grp_d4;
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n) begin
+            grp_d3 <= {GRPW{1'b0}};
+            grp_d4 <= {GRPW{1'b0}};
+        end else begin
+            grp_d3 <= grp_d2;
+            grp_d4 <= grp_d3;
+        end
+    end
 
     reg [AA_W-1:0] opix_off;
     reg [GRPW-1:0] grp_wr_prev;
     reg            wrote_any;
 
-    wire new_grp_wr = !wrote_any || (grp_d3 != grp_wr_prev);
+    wire new_grp_wr = !wrote_any || (grp_d4 != grp_wr_prev);
     wire [AA_W-1:0] cur_off = new_grp_wr ? {AA_W{1'b0}} : opix_off;
 
     always @(posedge clock or negedge rst_n) begin
@@ -290,17 +319,18 @@ module dw_feeder #(
             opix_off <= {AA_W{1'b0}}; wrote_any <= 1'b0;
         end else if (q_valid) begin
             opix_off    <= cur_off + n_ent;
-            grp_wr_prev <= grp_d3;
+            grp_wr_prev <= grp_d4;
             wrote_any   <= 1'b1;
         end
     end
 
     assign aw_en   = q_valid;
     assign aw_full = (TC == POOL_TM);           // constant: 0 for TC=16
-    assign aw_sel  = grp_d3[SEL_W-1:0];
-    assign aw_addr = base_out + {{(AA_W-GRPW+1){1'b0}}, grp_d3[GRPW-1:1]} + cur_off;
-    // act_buffer's convention: replicate the payload, wr_sel picks the copy
-    assign aw_data = {(POOL_TM/TC){q}};
+    assign aw_sel  = grp_d4[SEL_W-1:0];
+    assign aw_addr = base_out + {{(AA_W-GRPW+1){1'b0}}, grp_d4[GRPW-1:1]} + cur_off;
+    // q already carries the results in the half wr_sel will store, so it goes
+    // straight through - the replication convention is not needed here.
+    assign aw_data = q;
 
     // ================= busy, including the pipeline drain ===============
     // The counters finish three stages before the last result is written, so
@@ -310,7 +340,7 @@ module dw_feeder #(
     always @(posedge clock or negedge rst_n) begin
         if (!rst_n)              drain <= 3'd0;
         else if (start)          drain <= 3'd0;
-        else if (layer_done)     drain <= 3'd6;
+        else if (layer_done)     drain <= 3'd7;
         else if (drain != 3'd0)  drain <= drain - 3'd1;
     end
 
