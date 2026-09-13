@@ -135,6 +135,7 @@ module pw_feeder #(
     wire [OCT_W-1:0] oct;
     wire [ICT_W-1:0] ict;
     wire             ag_valid, ag_first, ag_last;
+    wire             ag_busy;
 
     addr_gen #(.PIX_W(PIX_W), .OCT_W(OCT_W), .ICT_W(ICT_W)) u_addr (
         .clock(clock), .rst_n(rst_n),
@@ -142,8 +143,27 @@ module pw_feeder #(
         .n_pix(n_pix), .n_oc(n_oc), .n_ic(n_ic),
         .pix(pix), .oct(oct), .ict(ict),
         .valid(ag_valid), .first(ag_first), .last(ag_last),
-        .busy(busy), .layer_done(layer_done)
+        .busy(ag_busy), .layer_done(layer_done)
     );
+
+    // ---- busy has to outlive addr_gen ----------------------------------
+    // addr_gen's own `busy` drops the moment it CONSUMES the last tile, but
+    // that tile's result is still in pe_array, and two more cycles behind that
+    // in the shared out_stage. Exposing addr_gen's busy directly made `busy`
+    // mean "I have stopped reading", when every caller reads it as "my writes
+    // have landed" - and at the top level that cost the last two pixels of
+    // every pointwise layer, which accel_tb caught. The other four feeders
+    // already carried this counter; this one was the odd case out because its
+    // address generator happened to expose a busy of its own.
+    reg [2:0] drain;
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n)             drain <= 3'd0;
+        else if (start)         drain <= 3'd0;
+        else if (layer_done)    drain <= 3'd7;
+        else if (drain != 3'd0) drain <= drain - 3'd1;
+    end
+
+    assign busy = ag_busy || layer_done || (drain != 3'd0);
 
     // end of one dot product, and end of all the dot products of this pixel
     wire tile_last = ag_valid & ag_last;

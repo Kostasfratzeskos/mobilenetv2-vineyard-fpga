@@ -403,3 +403,42 @@ wrote quant_scales.json  (53 layers)
 - Next: the datapath top that muxes the six feeders around the shared out_stage and the
   one activation pool, the weight DMA behind top_seq's ld_req handshake, and then Vivado
   synthesis - timing at 250 MHz and the real resource numbers are still unknown.
+
+### 2026-09-13 - accel_top: the sharing becomes real, and two busy bugs
+- Did: wrote accel_top.v (the datapath top) and accel_tb.sv (the first multi-op
+  integration test), and fixed the two bugs it found. Also wrote run_all_sims.sh.
+- Found / decided:
+  - The DSP saving out_stage was factored out for had never actually been collected.
+    out_stage was shared as a MODULE while every feeder still instantiated its own,
+    so five 32-lane requantize banks were still being inferred. Making it real meant
+    giving each feeder os_acc / os_acc_valid / os_param_addr out and os_q / os_q_valid
+    back, and lifting the stage itself to the top. The five datapath testbenches now
+    instantiate out_stage themselves, which means they exercise the same split
+    accel_top uses - all five still bit-exact, so the split is faithful.
+  - act and relu6_qmax went with it. Three feeders hardwired them (res/gap ACT_NONE,
+    stem ACT_RELU6); with one shared stage they come from the instruction word, so
+    what was an RTL property is now an obligation on gen_program.py. It already emits
+    exactly those values, and accel_tb checks it against the real program.
+  - DD-017, from accel_tb: `busy` has to mean "my writes have landed", not "I stopped
+    reading". Four feeders had a ONE-CYCLE hole in busy - `drain` is loaded by
+    layer_done, which pulses in the same cycle `run` drops, so for one cycle both read
+    zero. top_seq leaves S_RUN on the first !busy, so it took the hole for completion
+    and started loading the next layer's parameters over the scales the in-flight
+    results were about to use. pw_feeder had the same bug in a different shape: no
+    drain counter at all, because addr_gen exposes a busy of its own and wiring it
+    straight to the port looked like plumbing rather than a decision. That one cost
+    the last two pixels of every pointwise layer - 32 of 200,704 elements, which is
+    exactly the kind of tail a spot check misses.
+  - Both bugs needed a SECOND op to exist before they could do damage. No standalone
+    testbench could have found them: they all wait on layer_done or run to a fixed
+    time, so none ever samples busy at that cycle. This is the first thing the
+    integration level has caught that the unit level structurally could not.
+  - accel_tb now counts busy pulses - exactly one per op - so both stay fixed.
+  - The three ops chain correctly on the allocator's addresses alone: op 1 reads from
+    base=12544 with nothing telling it to except the instruction word.
+- Blocked on: nothing
+- Next: the weight DMA behind ld_req/ld_done, and a generator fix - RES_ADD and GAP
+  are emitted with pchan=0, so top_seq takes its no_load path and never asks for the
+  (m0, shift) they need, one value broadcast to every channel. That is why accel_tb
+  stops at three ops rather than running all 64. Then Vivado synthesis: timing at
+  250 MHz and the real resource numbers are still unknown.

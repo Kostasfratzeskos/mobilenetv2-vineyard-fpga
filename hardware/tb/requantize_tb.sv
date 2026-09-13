@@ -15,10 +15,7 @@
 //  int8 -> clamp_i8 is the identity, so the int8 output equals the core value.
 //  The out-of-range and ReLU6 cases come straight from check_elem().
 //
-//  Run (Vivado xsim):
-//     xvlog -sv requantize_tb.sv ../rtl/kernels/requantize.v
-//     xelab requantize_tb -s rq -timescale 1ns/1ps
-//     xsim rq -runall
+//  Run:  bash scripts/run_sim.sh requantize
 //============================================================================
 module requantize_tb;
 

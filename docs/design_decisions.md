@@ -260,3 +260,41 @@ argmax over the 4 int16 logits is the predicted class.
   the 88,257-cycle figure already accounts for.
 - Revisit if: the DSP budget tightens after place-and-route, or the input resolution
   changes (the 4-input-cycles-per-window ratio is a property of stride 2, not of 224).
+
+### DD-017 - `busy` means "my writes have landed", not "I stopped reading"
+
+- Context: `top_seq` is sequential. It starts a feeder, waits for `busy` to rise, waits
+  for it to fall, idles GAP_CYC cycles, then fetches the next instruction and asks the DMA
+  to refill the weight and parameter memories. Every feeder exposes `busy`, so what that
+  signal promises is the entire interface between the sequencer and the datapath.
+- Decision: `busy` stays high until the last result of the layer has been WRITTEN to the
+  activation pool - not until the address generator has issued its last read.
+
+      assign busy = run || layer_done || (drain != 0);
+
+  All five feeders now use this shape, including the three terms.
+- Why all three terms are load-bearing:
+  - `run` covers the body of the layer.
+  - `drain` covers the pipeline behind it: results are still in the arrays, and two more
+    stages behind that in the shared `out_stage`.
+  - `layer_done` covers the ONE cycle between them. `drain` is loaded by `layer_done`, but
+    a register loaded at the end of a cycle is not readable until the next one, and `run`
+    has already dropped by then. Without this term `busy` reads low for exactly one cycle
+    in the middle of the op.
+- What that one cycle cost: `top_seq` leaves S_RUN on the first `!busy` it sees, so it took
+  the hole for completion. It then spent GAP_CYC + 8 fetch cycles and began LOADING THE
+  NEXT LAYER'S PARAMETERS while the previous op still had its whole drain to go - writing
+  over the scales that the in-flight results were about to be requantized with.
+- How it was found: only by `accel_tb`. Every standalone datapath testbench waits on
+  `layer_done` or runs to a fixed time, so none of them ever samples `busy` at that cycle.
+  The bug needed a second op to exist before it could do any damage, which is precisely
+  what the integration testbench adds.
+- `pw_feeder` was the same mistake wearing different clothes: it had no drain counter at
+  all, because `addr_gen` happens to expose a `busy` of its own and connecting it straight
+  to the port looked like wiring rather than a decision. It stops a full pipeline depth
+  early, which cost the last two pixels of every pointwise layer.
+- Consequence: a layer now costs ~7 extra cycles of `busy`. Against 64 instructions that is
+  under 500 cycles on a ~3.5 ms inference - unmeasurable - and it buys a handshake whose
+  meaning does not depend on the caller knowing each feeder's pipeline depth.
+- Revisit if: a feeder is ever given a deeper tail than 7 cycles, the counter has to grow
+  with it. The testbench guards this by counting `busy` pulses: exactly one per op.

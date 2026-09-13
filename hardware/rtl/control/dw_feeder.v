@@ -331,7 +331,15 @@ module dw_feeder #(
         else if (drain != 3'd0)  drain <= drain - 3'd1;
     end
 
-    assign busy = run || (drain != 3'd0);
+    // `layer_done` is in here for a reason that only shows up at the top level.
+    // It pulses in the SAME cycle `run` drops, but `drain` is not loaded until
+    // the edge at the END of that cycle - so without it there is exactly one
+    // cycle where run=0 and drain=0 and `busy` reads low. top_seq leaves S_RUN
+    // on the first !busy it sees, so that one-cycle hole made it start the next
+    // op's weight load while this one still had its whole drain to go. Found by
+    // accel_tb; invisible to a standalone testbench, which waits on layer_done
+    // rather than on busy falling.
+    assign busy = run || layer_done || (drain != 3'd0);
 
 endmodule
 
