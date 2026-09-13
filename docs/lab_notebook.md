@@ -442,3 +442,39 @@ wrote quant_scales.json  (53 layers)
   (m0, shift) they need, one value broadcast to every channel. That is why accel_tb
   stops at three ops rather than running all 64. Then Vivado synthesis: timing at
   250 MHz and the real resource numbers are still unknown.
+
+### 2026-09-13 (later) - the whole network runs, bit-exact
+- Did: extended accel_tb from 3 ops to all 64 and fixed the three things that stopped it.
+  One image in, four logits out, every intermediate tensor compared: 6,895,780 elements
+  bit-exact, logits -2278/11929/-6915/-2884 exactly as the software model, predicted
+  class 1 = esca.
+- Found / decided:
+  - The DMA needs NO per-layer table. top_seq hands out (wgt_off, wgt_bytes, pchan), and
+    taps-per-output-channel = wgt_bytes/pchan - 27 for the stem, 9 for a depthwise, and
+    for a pointwise it is IC itself. So the same three numbers that say WHERE to read also
+    say HOW to deal the bytes into banks. That was not designed in; it fell out of the
+    instruction format and is worth keeping.
+  - RES_ADD and GAP were emitted with pchan=0, so top_seq took its no_load path and never
+    asked for their (m0, shift). They need one triple broadcast to every channel, so pchan
+    is now the channel count and the parameter blob carries the constant repeated. No RTL
+    change: no_load = (wgt_bytes==0 && pchan==0) already meant the right thing.
+  - GAP was getting n_pix=1. The field means "spatial positions the feeder WALKS", which
+    equals the output pixel count for every op except global pooling, where the feeder
+    consumes h*w inputs to emit one. It was averaging a single pixel. 1157 of 1280 channels
+    wrong - and ops 0..61 were all bit-exact, which is what made it obvious where to look.
+  - The compiler now emits the two blobs a real DMA reads: weights.hex (random access by
+    wgt_off) and params_*.hex (sequential, because ops run in program order). The parameter
+    padding to a whole TM tile is IN the blob, so the DMA does no arithmetic beyond the
+    round-up. weights.hex is gitignored - 8.8 MB that is a byte-for-byte concatenation of
+    the per-layer files already tracked.
+  - program_ops.svh is generated too, and cross-checks itself: the golden file comes from
+    golden_manifest.json matched by name, and the shape it declares is compared against the
+    shape the compiler derived independently by replaying the network. If those disagree
+    the build stops - comparing against the WRONG tensor is the one failure a bit-exact
+    check cannot see by itself.
+  - FIRST REAL CYCLE MEASUREMENT: 951,833 cycles with a feeder busy = 3.807 ms at 250 MHz.
+    The cycle model predicted 3.56 ms, so +7% - good agreement for a model with no pipeline
+    fill/drain in it. 250 MHz is still a TARGET; nothing has been synthesised.
+- Blocked on: nothing
+- Next: the weight DMA itself (accel_tb shows the ld_req/ld_done interface is sufficient),
+  then Vivado synthesis - timing and real resource numbers are still unknown.

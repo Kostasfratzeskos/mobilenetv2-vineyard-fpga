@@ -41,6 +41,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, "software", "export", "manifest.json")
 OUT_DIR = os.path.join(ROOT, "software", "export")
+GOLDEN_DIR = os.path.join(ROOT, "software", "golden", "image_1")
+TB_INCLUDE = os.path.join(ROOT, "hardware", "tb", "program_ops.svh")
 
 # --- datapath constants (keep in sync with the RTL parameters) ---------------
 TM = 32          # pointwise lanes / channels per pool entry
@@ -128,7 +130,8 @@ def build_ops(manifest):
                 n_ent_in=math.ceil(c / POOL_TM),
                 n_ent_out=math.ceil(oc / POOL_TM),
                 t_in=inp, t_saved=None, t_out=out,
-                wbytes=wbytes, pchan=oc))
+                wbytes=wbytes, pchan=oc,
+                files=op["files"], pconst=None))
             if inp is not None:
                 tensors[inp]["last_use"] = idx
             cur = out
@@ -145,8 +148,15 @@ def build_ops(manifest):
                 n_ent_in=math.ceil(c / POOL_TM),
                 n_ent_out=math.ceil(c / POOL_TM),
                 t_in=cur, t_saved=saved, t_out=out,
-                wbytes=0, pchan=0,
-                m0=op["m0"], shift=op["shift"]))
+                # pchan is the channel count, NOT zero. The rescale of the skip
+                # branch runs on the shared out_stage, which reads (bias, m0,
+                # shift) out of the parameter banks like any other op - it just
+                # happens to want the same triple in every channel. Leaving
+                # pchan at 0 made top_seq take its `no_load` path and never ask
+                # the DMA for them, so the banks still held the PREVIOUS layer's
+                # scales.
+                wbytes=0, pchan=c,
+                files=None, pconst=(0, op["m0"], op["shift"])))
             tensors[cur]["last_use"] = idx
             if saved is not None:
                 tensors[saved]["last_use"] = idx
@@ -159,12 +169,18 @@ def build_ops(manifest):
                 idx=idx, opcode=OP_GAP, name="avgpool",
                 img_h=h, img_w=w, out_h=1, out_w=1, in_c=c, out_c=c,
                 stride2=False, act=0, qmax=0,
-                n_pix=1, n_oc=math.ceil(c / TM), n_ic=math.ceil(c / TN),
+                # n_pix is how many spatial positions the FEEDER walks, which
+                # for every other op is the output pixel count. Global pooling
+                # is the one op that consumes more positions than it produces:
+                # gap_feeder accumulates over h*w inputs to emit one. Emitting
+                # the output count here (1) made it average a single pixel.
+                n_pix=h * w, n_oc=math.ceil(c / TM), n_ic=math.ceil(c / TN),
                 n_grp=math.ceil(c / TC),
                 n_ent_in=math.ceil(c / POOL_TM),
                 n_ent_out=math.ceil(c / POOL_TM),
                 t_in=cur, t_saved=None, t_out=out,
-                wbytes=0, pchan=0))
+                wbytes=0, pchan=c,
+                files=None, pconst=(0, op["m0"], op["shift"])))
             tensors[cur]["last_use"] = idx
             cur = out
             h = w = 1
@@ -181,7 +197,8 @@ def build_ops(manifest):
                 n_ent_in=math.ceil(ic / POOL_TM),
                 n_ent_out=math.ceil(oc / POOL_TM),
                 t_in=cur, t_saved=None, t_out=out,
-                wbytes=oc * ic, pchan=oc))
+                wbytes=oc * ic, pchan=oc,
+                files=op["files"], pconst=None))
             tensors[cur]["last_use"] = idx
             cur = out
             c = oc
@@ -256,6 +273,8 @@ def verify(ops, tensors):
 #   w0  [3:0] opcode  [11:4] img_w  [19:12] img_h  [20] stride2  [21] act
 #       [31:24] relu6_qmax
 #   w1  [15:0] n_pix  [23:16] n_oc  [31:24] n_ic
+#           n_pix = spatial positions the feeder WALKS: the output pixel
+#           count for every op except GAP, which walks its input.
 #   w2  [7:0]  n_grp  [15:8] n_ent_in  [23:16] n_ent_out
 #   w3  [15:0] base_in   [31:16] base_out
 #   w4  [15:0] base_saved
@@ -284,6 +303,168 @@ def encode(op, tensors):
     w[6] = op["wbytes"] & 0xFFFFF
     w[7] = op["pchan"] & 0xFFFF
     return w
+
+
+# --- the two blobs the DMA reads --------------------------------------------
+#  The sequencer hands the DMA (wgt_off, wgt_bytes, pchan) per op, so:
+#
+#    weights.hex   RANDOM access. wgt_off is a byte offset into this file and
+#                  wgt_bytes is the length, both already in the instruction.
+#    params_*.hex  SEQUENTIAL. There is no parameter offset in the instruction
+#                  and there does not need to be: ops execute in program order,
+#                  so the DMA keeps a running index and advances it by
+#                  ceil(pchan/TM)*TM triples per op. Reset it on `start`.
+#
+#  The padding to a multiple of TM is IN the blob rather than left to the DMA.
+#  A parameter entry covers TM consecutive channels and the banks are read a
+#  whole tile at a time, so channels past pchan would otherwise be read as X -
+#  and X survives being multiplied by the next layer's zero weights, which is
+#  what the tail contract relies on being harmless. Zeros there make it so.
+def read_lines(name):
+    with open(os.path.join(OUT_DIR, name), encoding="utf-8") as fh:
+        return [ln.strip() for ln in fh if ln.strip()]
+
+
+def emit_blobs(ops):
+    wbytes_seen = 0
+    wlines = []
+    b_lines, m0_lines, sh_lines = [], [], []
+    problems = []
+
+    for op in ops:
+        # ---- weights -------------------------------------------------
+        if op["wbytes"]:
+            w = read_lines(op["files"]["w"])
+            if len(w) != op["wbytes"]:
+                problems.append(
+                    f"op {op['idx']} ({op['name']}): {op['files']['w']} has "
+                    f"{len(w)} bytes, instruction says {op['wbytes']}")
+            if op["wgt_off"] != wbytes_seen:
+                problems.append(
+                    f"op {op['idx']} ({op['name']}): wgt_off {op['wgt_off']} "
+                    f"but blob is at {wbytes_seen}")
+            wlines.extend(w)
+            wbytes_seen += len(w)
+
+        # ---- parameters, padded to a whole tile ----------------------
+        npad = math.ceil(op["pchan"] / TM) * TM if op["pchan"] else 0
+        if npad == 0:
+            continue
+        if op["pconst"] is not None:
+            bias, m0, sh = op["pconst"]
+            b_lines .extend([f"{bias & 0xFFFFFFFF:08x}"] * npad)
+            m0_lines.extend([f"{m0 & 0xFFFFFFFF:08x}"]   * npad)
+            sh_lines.extend([f"{sh & 0xFF:02x}"]         * npad)
+        else:
+            bb = read_lines(op["files"]["b"])
+            mm = read_lines(op["files"]["m0"])
+            ss = read_lines(op["files"]["shift"])
+            if not (len(bb) == len(mm) == len(ss) == op["pchan"]):
+                problems.append(
+                    f"op {op['idx']} ({op['name']}): parameter files are "
+                    f"{len(bb)}/{len(mm)}/{len(ss)} long, pchan is {op['pchan']}")
+            for ch in range(npad):
+                inside = ch < len(bb)
+                b_lines .append(bb[ch] if inside else "00000000")
+                m0_lines.append(mm[ch] if inside else "00000000")
+                sh_lines.append(ss[ch] if inside else "00")
+
+    return wlines, b_lines, m0_lines, sh_lines, problems
+
+
+# --- the testbench's view of the program ------------------------------------
+#  accel_tb walks all 64 ops and compares each against its golden vector. It
+#  needs two things per op that the instruction word does not carry: the exact
+#  output geometry in ELEMENTS (the instruction has tile counts) and which
+#  golden file to compare against. Both are generated here rather than typed
+#  into the testbench, because a hand-written table is a second source of truth
+#  that silently stops matching the first one.
+#
+#  The golden file comes from golden_manifest.json, matched BY NAME, and the
+#  shape it declares is cross-checked against the shape this compiler derived
+#  independently by replaying the network. If those two ever disagree the build
+#  stops - that disagreement would mean the RTL is being compared against the
+#  wrong tensor, which is the one failure mode a bit-exact check cannot see.
+def emit_tb_include(ops):
+    with open(os.path.join(GOLDEN_DIR, "golden_manifest.json"), encoding="utf-8") as fh:
+        gm = json.load(fh)
+    by_name = {f["name"]: f for f in gm["files"]}
+
+    rows, problems = [], []
+    for op in ops:
+        g = by_name.get(op["name"])
+        split = False
+        if g is None:
+            # the classifier's golden is split into int32 accumulators and the
+            # int16 logits; the logits are what the hardware emits
+            g = by_name.get(op["name"] + ".logits_int16")
+            split = True
+        if g is None:
+            problems.append(f"op {op['idx']} ({op['name']}): no golden vector")
+            continue
+        if not split and g["seq"] != op["idx"] + 1:
+            problems.append(
+                f"op {op['idx']} ({op['name']}): golden seq {g['seq']}, "
+                f"expected {op['idx'] + 1}")
+        if not split:
+            shape = g["shape"]           # [1, C, H, W] or [1, C]
+            gc = shape[1]
+            gh = shape[2] if len(shape) > 2 else 1
+            gw = shape[3] if len(shape) > 3 else 1
+            if (gc, gh, gw) != (op["out_c"], op["out_h"], op["out_w"]):
+                problems.append(
+                    f"op {op['idx']} ({op['name']}): golden is "
+                    f"{gc}x{gh}x{gw}, compiler says "
+                    f"{op['out_c']}x{op['out_h']}x{op['out_w']}")
+        rows.append((op, g["file"]))
+
+    if problems:
+        print()
+        print(f"GOLDEN TABLE INVALID - {len(problems)} problems:")
+        for e in problems[:10]:
+            print("  " + e)
+        sys.exit(1)
+
+    L = []
+    L.append("// GENERATED by scripts/gen_program.py --emit -- DO NOT EDIT")
+    L.append("// Per-op geometry and golden vectors for accel_tb.")
+    L.append("//")
+    L.append("// Include this INSIDE the module, after gold_mem is declared:")
+    L.append("//     `include \"program_ops.svh\"")
+    L.append("// then call load_op_table once before using the arrays.")
+    L.append("")
+    L.append(f"localparam integer N_PROG_OPS = {len(rows)};")
+    L.append("")
+    for nm in ("OP_OPCODE", "OP_OC", "OP_IC", "OP_OH", "OP_OW"):
+        L.append(f"integer {nm} [0:N_PROG_OPS-1];")
+    L.append("")
+    L.append("task automatic load_op_table;")
+    L.append("    begin")
+    for op, _ in rows:
+        L.append(f"        OP_OPCODE[{op['idx']}]={op['opcode']}; "
+                 f"OP_OC[{op['idx']}]={op['out_c']}; "
+                 f"OP_IC[{op['idx']}]={op['in_c']}; "
+                 f"OP_OH[{op['idx']}]={op['out_h']}; "
+                 f"OP_OW[{op['idx']}]={op['out_w']};"
+                 f"  // {OPNAME[op['opcode']]} {op['name']}")
+    L.append("    end")
+    L.append("endtask")
+    L.append("")
+    L.append("// $readmemh needs a literal, so this is a case rather than a string array.")
+    L.append("task automatic load_golden(input integer k);")
+    L.append("    begin")
+    L.append("        case (k)")
+    for op, fname in rows:
+        L.append(f'        {op["idx"]}: $readmemh("../../software/golden/image_1/{fname}", gold_mem);')
+    L.append("        default: $display(\"  [ERR] no golden vector for op %0d\", k);")
+    L.append("        endcase")
+    L.append("    end")
+    L.append("endtask")
+    L.append("")
+
+    with open(TB_INCLUDE, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(L))
+    print(f"wrote {TB_INCLUDE} ({len(rows)} ops)")
 
 
 def main():
@@ -368,6 +549,24 @@ def main():
             fh.write(listing + "\n")
         print(f"wrote {hexpath} ({len(ops)*8} words)")
         print(f"wrote {txtpath}")
+
+        wlines, b_lines, m0_lines, sh_lines, problems = emit_blobs(ops)
+        if problems:
+            print()
+            print(f"BLOBS INVALID - {len(problems)} problems:")
+            for e in problems[:10]:
+                print("  " + e)
+            sys.exit(1)
+        for name, lines in (("weights.hex",      wlines),
+                            ("params_b.hex",     b_lines),
+                            ("params_m0.hex",    m0_lines),
+                            ("params_shift.hex", sh_lines)):
+            path = os.path.join(OUT_DIR, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            print(f"wrote {path} ({len(lines):,} lines)")
+
+        emit_tb_include(ops)
 
 
 if __name__ == "__main__":

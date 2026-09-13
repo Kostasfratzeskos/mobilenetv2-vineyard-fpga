@@ -85,7 +85,9 @@ echo "== vivado bin : $VIVADO_BIN"
 echo
 
 echo "== xvlog =="
-"$VIVADO_BIN/xvlog.bat" -sv "${SRCS[@]}"
+# -i hardware/tb so a testbench can `include a generated table (program_ops.svh)
+# without depending on how the tool resolves paths relative to the source file.
+"$VIVADO_BIN/xvlog.bat" -sv -i "$ROOT/hardware/tb" "${SRCS[@]}"
 
 # -debug typical makes signals probeable in the GUI; only needed for waves
 DEBUG_FLAG=()

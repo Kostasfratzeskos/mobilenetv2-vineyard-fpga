@@ -1,52 +1,58 @@
 `timescale 1ns / 1ps
 //============================================================================
-//  accel_tb.sv  -  INTEGRATION: the whole accelerator, three real ops
+//  accel_tb.sv  -  INTEGRATION: the whole network, all 64 instructions
 //
-//  Runs the first three instructions of the REAL compiled program end to end
-//  and checks each op's output against the software golden:
-//
-//      op 0  STEM  features.0.0        224x224x3  -> 112x112x32   golden 001
-//      op 1  DW    features.1.conv.0.0 112x112x32 -> 112x112x32   golden 002
-//      op 2  PW    features.1.conv.1   112x112x32 -> 112x112x16   golden 003
+//  Runs the REAL compiled program end to end - one image in, four logits and a
+//  predicted class out - and compares EVERY intermediate tensor against the
+//  software golden, layer by layer. 6,895,780 elements across 64 ops.
 //
 //  The individual datapath testbenches already proved each feeder in isolation.
-//  What is new here, and what this file exists to test, is everything BETWEEN
-//  them - which is exactly what accel_top adds:
+//  What this file exists to test is everything between them:
 //
-//    1. the opcode mux. Three different feeders run back to back through ONE
-//       out_stage, one act_buffer and one parameter bank. If the mux selected
-//       the wrong source, or an idle feeder's writes reached the pool, the
-//       golden check fails.
-//    2. the base-address handoff. Nothing tells op 1 where op 0 put its output
-//       except gen_program.py's static allocator, through base_in / base_out in
-//       the instruction word. The three ops form a chain, so a wrong address is
-//       not a silent offset - op 1 reads garbage.
-//    3. the drain between ops. top_seq waits for busy to fall and then idles
-//       GAP_CYC cycles before the next op_start, which also flushes out_stage.
-//       If that window is too short the tail of each op is destroyed - and the
-//       tail is the LAST pixels, which a spot check would miss, so every
-//       element is compared.
-//    4. the load handshake actually feeding hardware. top_seq raises ld_req and
-//       this testbench plays the DMA: it fills whichever weight buffer the
-//       opcode names, pads the parameter banks to a multiple of TM with zeros
-//       (the tail contract - see below), and answers ld_done.
+//    1. the opcode mux. Six feeders take turns through ONE out_stage, one
+//       act_buffer and one parameter bank. A wrong selection, or an idle
+//       feeder's write reaching the pool, shows up as a wrong tensor.
+//    2. the allocator. Nothing tells an op where its input is except
+//       gen_program.py's static allocation, through base_in / base_out /
+//       base_saved. The residual adds are the sharp case: base_saved points at
+//       a tensor produced up to three ops earlier that the allocator had to
+//       keep alive across everything in between.
+//    3. the drain between ops. top_seq waits for busy to fall, idles GAP_CYC
+//       cycles, and flushes out_stage on the next op_start. Too short a window
+//       destroys the TAIL of each layer, so every element is compared rather
+//       than a sample.
+//    4. the load handshake feeding real hardware. This testbench plays the DMA
+//       exactly as the instruction describes it - see below.
 //
-//  ---- the parameter tail contract -------------------------------------
+//  ---- the testbench as DMA, driven only by the instruction ---------------
 //
-//  ld_pchan is the real channel count, 16 for op 2. The parameter banks are
-//  read a full TM-lane tile at a time, so lanes 16..31 would read banks that
-//  were never written - X, not garbage - and X survives being multiplied by
-//  the next layer's zero weights. So the DMA rounds up to a multiple of TM and
-//  writes zeros past pchan. That is a rule it can apply from ld_pchan alone,
-//  which is why the instruction does not need to carry it.
+//  top_seq hands out (wgt_off, wgt_bytes, pchan) and waits for ld_done. That
+//  turns out to be enough to load anything, with no per-layer table at all:
 //
-//  ---- what this does NOT cover yet ------------------------------------
+//      taps per output channel = wgt_bytes / pchan
 //
-//  Only three of the 64 instructions run. RES_ADD and GAP are not reachable
-//  here for a concrete reason rather than convenience: gen_program emits them
-//  with wbytes=0 and pchan=0, so top_seq takes its `no_load` path and never
-//  asks for their (m0, shift) - which they do need, one value broadcast to
-//  every channel. Fixing that is a generator change, not an accel_top change.
+//  which is 27 for the stem (3 channels x 3 x 3), 9 for a depthwise, and for a
+//  pointwise it is IC itself. So the same three numbers that tell the DMA WHERE
+//  to read also tell it HOW to deal the bytes into banks. The only thing the
+//  testbench knows that the hardware does not is which golden file to compare
+//  against, and even that is generated - see program_ops.svh.
+//
+//  Weights come from weights.hex by offset; parameters come from params_*.hex
+//  sequentially, because ops execute in program order and the blob is already
+//  padded to whole TM-channel tiles. Both are written by
+//
+//      python scripts/gen_program.py --emit
+//
+//  which must be run before this testbench (weights.hex is gitignored: it is a
+//  byte-for-byte concatenation of the per-layer files already in the tree).
+//
+//  ---- the two ops that are not a tensor ---------------------------------
+//
+//  GAP writes 1x1x1280, which the same pool check handles with npix = 1.
+//  LINEAR writes no tensor at all - its result is four int16 logits out of
+//  logit_out, not int8 activations - so it is checked against
+//  065_classifier_1_logits_int16.hex and the argmax against the class the
+//  software model predicted.
 //
 //  Run:  bash scripts/run_sim.sh accel accel_top top_seq \
 //          pw_feeder pw_out dw_feeder res_feeder gap_feeder stem_feeder \
@@ -86,24 +92,14 @@ module accel_tb;
     localparam IDX_W   = 2;
     localparam LOG_W   = 16;
 
-    localparam N_OPS   = 3;          // STEM -> DW -> PW
-    localparam IH = 224, IW = 224;   // the image
-    localparam NIN = CIN*IH*IW;      // 150,528
-    localparam MAXOUT = 401408;      // 32 x 112 x 112, the biggest golden here
-    localparam MAXW   = 1024;        // the biggest weight blob here (864 B)
+    localparam IH = 224, IW = 224;
+    localparam NIN    = CIN*IH*IW;   // 150,528
+    localparam MAXOUT = 1204224;     // largest single output tensor (96x112x112)
+    localparam WBLOB  = 2194880;     // weights.hex
+    localparam PBLOB  = 19264;       // params_*.hex, padded to whole tiles
 
-    // ---- the three ops, in program order ----------------------------------
-    // Read straight off gen_program.py's listing. OC and IC are needed because
-    // the tail contract is about REAL channels, which the instruction word only
-    // carries as tile counts.
-    //   k  opcode  OC  IC   OH   OW
-    //   0  STEM    32   3   112  112
-    //   1  DW      32  32   112  112
-    //   2  PW      16  32   112  112
-    integer OP_OC [0:N_OPS-1];
-    integer OP_IC [0:N_OPS-1];
-    integer OP_OH [0:N_OPS-1];
-    integer OP_OW [0:N_OPS-1];
+    localparam [3:0] OP_STEM = 4'd1, OP_PW = 4'd2, OP_DW = 4'd3,
+                     OP_RES  = 4'd4, OP_GAP = 4'd5, OP_LINEAR = 4'd6;
 
     // ---- DUT interface ----------------------------------------------------
     logic                      clock, rst_n;
@@ -197,54 +193,41 @@ module accel_tb;
     reg [31:0] prog     [0:511];
     reg [7:0]  img_mem  [0:NIN-1];
     reg [7:0]  gold_mem [0:MAXOUT-1];
-    reg [7:0]  wq_mem   [0:MAXW-1];
-    reg signed [31:0] b_mem  [0:TM-1];
-    reg signed [31:0] m0_mem [0:TM-1];
-    reg [31:0]        sh_mem [0:TM-1];
+    reg [15:0] gold_log [0:NLOG-1];
+    reg [7:0]  wblob    [0:WBLOB-1];
+    reg signed [31:0] pb_blob [0:PBLOB-1];
+    reg signed [31:0] pm_blob [0:PBLOB-1];
+    reg [7:0]         ps_blob [0:PBLOB-1];
 
-    integer total = 0, fails = 0, checked = 0;
+    // The per-op geometry and golden-vector table, generated by the compiler
+    // so it cannot drift from what was actually emitted. Declares N_PROG_OPS,
+    // OP_OPCODE/OC/IC/OH/OW, load_op_table and load_golden (which fills
+    // gold_mem, declared above).
+    `include "program_ops.svh"
+
+    localparam N_OPS = N_PROG_OPS;
+
+    integer total = 0, fails = 0, checked = 0, ld_count = 0;
+    integer pidx = 0;            // running index into the parameter blob
 
     // ======================================================================
     //  the testbench as DMA
     // ======================================================================
-    task automatic load_files(input integer k);
-        begin
-            case (k)
-            0: begin
-                $readmemh("../../software/export/features_0_0_w.hex",     wq_mem);
-                $readmemh("../../software/export/features_0_0_b.hex",     b_mem);
-                $readmemh("../../software/export/features_0_0_m0.hex",    m0_mem);
-                $readmemh("../../software/export/features_0_0_shift.hex", sh_mem);
-            end
-            1: begin
-                $readmemh("../../software/export/features_1_conv_0_0_w.hex",     wq_mem);
-                $readmemh("../../software/export/features_1_conv_0_0_b.hex",     b_mem);
-                $readmemh("../../software/export/features_1_conv_0_0_m0.hex",    m0_mem);
-                $readmemh("../../software/export/features_1_conv_0_0_shift.hex", sh_mem);
-            end
-            2: begin
-                $readmemh("../../software/export/features_1_conv_1_w.hex",     wq_mem);
-                $readmemh("../../software/export/features_1_conv_1_b.hex",     b_mem);
-                $readmemh("../../software/export/features_1_conv_1_m0.hex",    m0_mem);
-                $readmemh("../../software/export/features_1_conv_1_shift.hex", sh_mem);
-            end
-            endcase
-        end
-    endtask
 
     // ---- stem: bank = lane within the tile, address = oc_tile -------------
-    task automatic fill_stem_weights(input integer oc);
+    task automatic fill_stem_weights(input integer off, input integer nbytes,
+                                     input integer pchan);
         integer ot, m, i, ocx, n_oct, nt;
         begin
-            nt    = CIN*K*K;                 // 27 bytes per output channel
-            n_oct = (oc + TS - 1) / TS;
+            nt    = nbytes / pchan;          // 27
+            n_oct = (pchan + TS - 1) / TS;
             for (ot = 0; ot < n_oct; ot++)
                 for (m = 0; m < TS; m++) begin
                     @(negedge clock);
                     ocx = ot*TS + m;
                     for (i = 0; i < nt; i++)
                         st_wl_data[i*DATA_W +: DATA_W] =
-                            (ocx < oc) ? wq_mem[ocx*nt + i] : 8'h00;
+                            (ocx < pchan) ? wblob[off + ocx*nt + i] : 8'h00;
                     st_wl_bank = m[ST_BANK_W-1:0];
                     st_wl_addr = ot[ST_WA_W-1:0];
                     st_wl_en   = 1'b1;
@@ -256,18 +239,19 @@ module accel_tb;
     endtask
 
     // ---- depthwise: bank = channel within group, address = group ----------
-    task automatic fill_dw_weights(input integer c);
+    task automatic fill_dw_weights(input integer off, input integer nbytes,
+                                   input integer pchan);
         integer g, m, i, ch, n_grp, nt;
         begin
-            nt    = K*K;
-            n_grp = (c + TC - 1) / TC;
+            nt    = nbytes / pchan;          // 9
+            n_grp = (pchan + TC - 1) / TC;
             for (g = 0; g < n_grp; g++)
                 for (m = 0; m < TC; m++) begin
                     @(negedge clock);
                     ch = g*TC + m;
                     for (i = 0; i < nt; i++)
                         dw_wl_data[i*DATA_W +: DATA_W] =
-                            (ch < c) ? wq_mem[ch*nt + i] : 8'h00;
+                            (ch < pchan) ? wblob[off + ch*nt + i] : 8'h00;
                     dw_wl_bank = m[DW_BANK_W-1:0];
                     dw_wl_addr = g[DW_WA_W-1:0];
                     dw_wl_en   = 1'b1;
@@ -279,10 +263,14 @@ module accel_tb;
     endtask
 
     // ---- pointwise: bank = lane, address = oc_tile*n_ic + ic_tile ---------
-    task automatic fill_pw_weights(input integer oc, input integer ic);
-        integer ot, it, m, j, ocx, icx, n_oc, n_ic;
+    // The tail contract: zero wherever the channel does not exist, so padded
+    // lanes contribute nothing and padded input channels multiply by zero.
+    task automatic fill_pw_weights(input integer off, input integer nbytes,
+                                   input integer pchan);
+        integer ot, it, m, j, ocx, icx, n_oc, n_ic, ic;
         begin
-            n_oc = (oc + TM - 1) / TM;
+            ic   = nbytes / pchan;
+            n_oc = (pchan + TM - 1) / TM;
             n_ic = (ic + TN - 1) / TN;
             for (ot = 0; ot < n_oc; ot++)
                 for (it = 0; it < n_ic; it++)
@@ -292,7 +280,8 @@ module accel_tb;
                         for (j = 0; j < TN; j++) begin
                             icx = it*TN + j;
                             pw_wl_data[j*DATA_W +: DATA_W] =
-                                (ocx < oc && icx < ic) ? wq_mem[ocx*ic + icx] : 8'h00;
+                                (ocx < pchan && icx < ic)
+                                    ? wblob[off + ocx*ic + icx] : 8'h00;
                         end
                         pw_wl_bank = m[BANK_W-1:0];
                         pw_wl_addr = (ot*n_ic + it);
@@ -304,7 +293,9 @@ module accel_tb;
         end
     endtask
 
-    // ---- the shared parameter banks, padded to a multiple of TM -----------
+    // ---- the shared parameter banks ---------------------------------------
+    // The blob already carries the padding to a whole TM-channel tile, so this
+    // is a straight copy: bank = ch % TM, address = ch / TM.
     task automatic fill_params(input integer pchan);
         integer ch, npad;
         begin
@@ -313,9 +304,9 @@ module accel_tb;
                 @(negedge clock);
                 pl_bank  = ch % TM;
                 pl_addr  = ch / TM;
-                pl_bias  = (ch < pchan) ? b_mem[ch]  : 32'sd0;
-                pl_m0    = (ch < pchan) ? m0_mem[ch] : 32'sd0;
-                pl_shift = (ch < pchan) ? sh_mem[ch][SHIFT_W-1:0] : {SHIFT_W{1'b0}};
+                pl_bias  = pb_blob[pidx + ch];
+                pl_m0    = pm_blob[pidx + ch];
+                pl_shift = ps_blob[pidx + ch][SHIFT_W-1:0];
                 pl_en    = 1'b1;
                 @(posedge clock);
                 @(negedge clock);
@@ -324,27 +315,42 @@ module accel_tb;
         end
     endtask
 
-    // ---- one whole load, driven by what the sequencer is asking for -------
-    localparam [3:0] OP_STEM = 4'd1, OP_PW = 4'd2, OP_DW = 4'd3,
-                     OP_RES  = 4'd4, OP_GAP = 4'd5, OP_LINEAR = 4'd6;
-
-    integer ld_count = 0;
+    // ---- the classifier's four classes go to logit_out instead ------------
+    task automatic fill_logit_params(input integer pchan);
+        integer i;
+        begin
+            for (i = 0; i < NLOG; i++) begin
+                @(negedge clock);
+                lg_pl_idx   = i[IDX_W-1:0];
+                lg_pl_bias  = pb_blob[pidx + i];
+                lg_pl_m0    = pm_blob[pidx + i];
+                lg_pl_shift = ps_blob[pidx + i][SHIFT_W-1:0];
+                lg_pl_en    = 1'b1;
+                @(posedge clock);
+                @(negedge clock);
+                lg_pl_en = 1'b0;
+            end
+        end
+    endtask
 
     task automatic serve_load;
-        integer k;
+        integer npad;
         begin
-            k = pc;
-            load_files(k);
             case (u_dut.op_code)
-                OP_STEM: fill_stem_weights(OP_OC[k]);
-                OP_DW:   fill_dw_weights(OP_OC[k]);
-                OP_PW:   fill_pw_weights(OP_OC[k], OP_IC[k]);
-                default: ;
+                OP_STEM:   fill_stem_weights(ld_off, ld_bytes, ld_pchan);
+                OP_DW:     fill_dw_weights  (ld_off, ld_bytes, ld_pchan);
+                OP_PW,
+                OP_LINEAR: fill_pw_weights  (ld_off, ld_bytes, ld_pchan);
+                default:   ;      // RES_ADD and GAP carry no weights
             endcase
-            fill_params(ld_pchan);
+
+            if (u_dut.op_code == OP_LINEAR) fill_logit_params(ld_pchan);
+            else                            fill_params(ld_pchan);
+
+            // the blob is sequential: advance by a whole tile either way
+            npad = ((ld_pchan + TM - 1) / TM) * TM;
+            pidx = pidx + npad;
             ld_count++;
-            $display("  [dma] op %0d opcode=%0d : %0d weight bytes, %0d channels",
-                     k, u_dut.op_code, ld_bytes, ld_pchan);
         end
     endtask
 
@@ -364,87 +370,109 @@ module accel_tb;
     end
 
     // ======================================================================
-    //  checking: after each op, compare its whole output against the golden
-    //  Hierarchical reads of the pool take no simulation time, so the check
-    //  fits inside the GAP window between two ops.
+    //  checking
     // ======================================================================
-    task automatic load_golden(input integer k);
-        begin
-            case (k)
-            0: $readmemh("../../software/golden/image_1/001_features_0_0.hex",        gold_mem);
-            1: $readmemh("../../software/golden/image_1/002_features_1_conv_0_0.hex", gold_mem);
-            2: $readmemh("../../software/golden/image_1/003_features_1_conv_1.hex",   gold_mem);
-            endcase
-        end
-    endtask
+    reg [NLOG*LOG_W-1:0] logits_q;
+    reg [IDX_W-1:0]      argmax_q;
+    reg                  got_logits, got_argmax;
 
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            got_logits <= 1'b0;
+            got_argmax <= 1'b0;
+        end else begin
+            if (logits_valid) begin logits_q <= logits; got_logits <= 1'b1; end
+            if (argmax_valid) begin argmax_q <= argmax; got_argmax <= 1'b1; end
+        end
+    end
+
+    // Hierarchical reads of the pool take no simulation time, so a whole
+    // tensor can be compared inside the gap between two ops.
     task automatic check_op(input integer k);
-        integer p, c, oc, npix, n_ent, bad;
-        integer base;
+        integer p, c, oc, npix, n_ent, bad, base;
         reg [TM*DATA_W-1:0] ent;
         reg signed [7:0] got, expd;
         begin
-            load_golden(k);
-            oc    = OP_OC[k];
-            npix  = OP_OH[k]*OP_OW[k];
-            n_ent = (oc + TM - 1) / TM;
-            base  = u_dut.op_base_out;
-            bad   = 0;
+            if (OP_OPCODE[k] == OP_LINEAR) begin
+                checked++;
+                $display("  [ok ] op %2d LINEAR   : checked after the run", k);
+            end else begin
+                load_golden(k);
+                oc    = OP_OC[k];
+                npix  = OP_OH[k]*OP_OW[k];
+                n_ent = (oc + TM - 1) / TM;
+                base  = u_dut.op_base_out;
+                bad   = 0;
 
-            for (p = 0; p < npix; p++)
-                for (c = 0; c < oc; c++) begin
-                    ent  = u_dut.u_act.mem[base + p*n_ent + (c/TM)];
-                    got  = ent[(c%TM)*DATA_W +: DATA_W];
-                    expd = gold_mem[c*npix + p];
-                    total++;
-                    if (got !== expd) begin
-                        bad++;
-                        if (bad <= 5)
-                            $display("  [ERR] op %0d pix %0d ch %0d : got %0d, golden %0d",
-                                     k, p, c, got, expd);
+                for (p = 0; p < npix; p++)
+                    for (c = 0; c < oc; c++) begin
+                        ent  = u_dut.u_act.mem[base + p*n_ent + (c/TM)];
+                        got  = ent[(c%TM)*DATA_W +: DATA_W];
+                        expd = gold_mem[c*npix + p];
+                        total++;
+                        if (got !== expd) begin
+                            bad++;
+                            if (bad <= 3)
+                                $display("  [ERR] op %0d pix %0d ch %0d : got %0d, golden %0d",
+                                         k, p, c, got, expd);
+                        end
                     end
-                end
 
-            fails += bad;
-            checked++;
-            if (bad == 0)
-                $display("  [ok ] op %0d : %0d elements bit-exact  (base=%0d, %0d entries/pixel)",
-                         k, npix*oc, base, n_ent);
-            else
-                $display("  [ERR] op %0d : %0d of %0d elements wrong",
-                         k, bad, npix*oc);
+                fails += bad;
+                checked++;
+                if (bad == 0)
+                    $display("  [ok ] op %2d %-8s : %7d elements bit-exact  (base=%0d)",
+                             k, opname(OP_OPCODE[k]), npix*oc, base);
+                else
+                    $display("  [ERR] op %2d %-8s : %0d of %0d elements wrong",
+                             k, opname(OP_OPCODE[k]), bad, npix*oc);
+            end
         end
     endtask
 
-    // ---- ops must not overlap, and the right feeder must run --------------
-    integer started = 0, ended = 0;
-    reg     was_busy;
-
-    always @(posedge clock) begin
-        if (rst_n && u_dut.op_start) begin
-            if (u_dut.op_busy)
-                begin
-                    fails++;
-                    $display("  [ERR] op %0d started while the previous one was still busy",
-                             started);
-                end
-            started++;
-        end
-    end
+    function automatic string opname(input integer code);
+        case (code)
+            1: return "STEM";    2: return "PW";     3: return "DW";
+            4: return "RES_ADD"; 5: return "GAP";    6: return "LINEAR";
+            default: return "?";
+        endcase
+    endfunction
 
     // ---- op_busy must pulse exactly ONCE per op --------------------------
     // Not a style check. top_seq leaves S_RUN on the first !busy it sees, so a
     // feeder whose busy dips mid-op makes the sequencer start the next op's
     // weight load on top of a pipeline that is still draining. Four of the five
-    // feeders used to do exactly that for one cycle - `drain` is loaded by
-    // layer_done, which pulses in the same cycle `run` drops, so busy read low
-    // in between - and pw_feeder exposed its address generator's busy, which
-    // stops a full pipeline-depth early. Both are fixed; this counts the edges
-    // so they stay fixed.
-    // The falling edge is also where each op is checked: hierarchical reads of
-    // the pool take no simulation time, so the whole comparison fits between
-    // this op finishing and the next one starting.
-    integer busy_pulses = 0;
+    // feeders used to do exactly that for one cycle, and pw_feeder exposed its
+    // address generator's busy, which stops a full pipeline depth early. Both
+    // are fixed (DD-017); this counts the edges so they stay fixed.
+    integer busy_pulses = 0, started = 0, ended = 0;
+    reg     was_busy;
+
+    // ---- how long the hardware actually computes --------------------------
+    // busy_cycles is the number the cycle model in docs/controller_design.md
+    // predicts: time a feeder is working. run_cycles also counts the gaps, and
+    // those are dominated by THIS TESTBENCH acting as the DMA two cycles per
+    // bank word - a real DMA is wider and would overlap with compute - so
+    // run_cycles is an upper bound on a system that does not exist yet, not a
+    // measurement of the accelerator.
+    integer busy_cycles = 0, run_cycles = 0;
+    always @(posedge clock) begin
+        if (rst_n && running) begin
+            run_cycles++;
+            if (u_dut.op_busy) busy_cycles++;
+        end
+    end
+
+    always @(posedge clock) begin
+        if (rst_n && u_dut.op_start) begin
+            if (u_dut.op_busy) begin
+                fails++;
+                $display("  [ERR] op %0d started while the previous one was still busy",
+                         started);
+            end
+            started++;
+        end
+    end
 
     always @(posedge clock) begin
         if (!rst_n) was_busy <= 1'b0;
@@ -459,14 +487,19 @@ module accel_tb;
     end
 
     // ======================================================================
-    integer i, y, x, c0;
+    integer i, y, x, c0, bad_log;
+    logic signed [15:0] got_l, exp_l;
     initial begin
-        OP_OC[0] = 32; OP_IC[0] =  3; OP_OH[0] = 112; OP_OW[0] = 112;
-        OP_OC[1] = 32; OP_IC[1] = 32; OP_OH[1] = 112; OP_OW[1] = 112;
-        OP_OC[2] = 16; OP_IC[2] = 32; OP_OH[2] = 112; OP_OW[2] = 112;
+        load_op_table;
 
         $readmemh("../../software/export/program.hex",           prog);
         $readmemh("../../software/golden/image_1/000_input.hex", img_mem);
+        $readmemh("../../software/export/weights.hex",           wblob);
+        $readmemh("../../software/export/params_b.hex",          pb_blob);
+        $readmemh("../../software/export/params_m0.hex",         pm_blob);
+        $readmemh("../../software/export/params_shift.hex",      ps_blob);
+        $readmemh("../../software/golden/image_1/065_classifier_1_logits_int16.hex",
+                  gold_log);
 
         start = 0; n_instr = 0;
         pg_en = 0; pg_addr = 0; pg_data = 0;
@@ -480,9 +513,9 @@ module accel_tb;
         repeat (4) @(negedge clock);
         rst_n = 1;
 
-        $display("INTEGRATION: accel_top running the first %0d instructions of the real program", N_OPS);
-        $display("  STEM features.0.0 -> DW features.1.conv.0.0 -> PW features.1.conv.1");
-        $display("  one out_stage, one act_buffer, one parameter bank, three feeders");
+        $display("INTEGRATION: accel_top running the whole network");
+        $display("  %0d instructions, one image in, %0d logits out", N_OPS, NLOG);
+        $display("  one out_stage, one act_buffer, one parameter bank, six feeders");
         $display("");
 
         // ---- the program ---------------------------------------------
@@ -509,9 +542,8 @@ module accel_tb;
                 @(negedge clock);
                 im_wr_en = 1'b0;
             end
-            if ((y + 1) % 64 == 0)
-                $display("  ... %0d/%0d image rows loaded", y+1, IH);
         end
+        $display("loaded the %0dx%0d image", IH, IW);
         $display("");
 
         // ---- go -------------------------------------------------------
@@ -525,6 +557,42 @@ module accel_tb;
         wait (done === 1'b1);
         @(negedge clock);
 
+        // ---- the classifier -------------------------------------------
+        $display("");
+        $display("the answer:");
+        bad_log = 0;
+        if (!got_logits) begin
+            fails++;
+            $display("  [ERR] logits_valid never pulsed");
+        end else begin
+            for (i = 0; i < NLOG; i++) begin
+                got_l = logits_q[i*LOG_W +: LOG_W];
+                exp_l = gold_log[i];
+                total++;
+                if (got_l !== exp_l) begin
+                    bad_log++;
+                    $display("  [ERR] logit %0d : got %0d, golden %0d", i, got_l, exp_l);
+                end
+            end
+            fails += bad_log;
+            if (bad_log == 0)
+                $display("  [ok ] logits  %0d %0d %0d %0d  bit-exact",
+                         $signed(logits_q[0*LOG_W +: LOG_W]),
+                         $signed(logits_q[1*LOG_W +: LOG_W]),
+                         $signed(logits_q[2*LOG_W +: LOG_W]),
+                         $signed(logits_q[3*LOG_W +: LOG_W]));
+        end
+
+        if (!got_argmax) begin
+            fails++;
+            $display("  [ERR] argmax_valid never pulsed");
+        end else if (argmax_q !== 2'd1) begin
+            fails++;
+            $display("  [ERR] predicted class %0d, golden 1 (esca)", argmax_q);
+        end else
+            $display("  [ok ] predicted class 1 = esca, as the software model");
+
+        // ---- structure -------------------------------------------------
         $display("");
         if (tag_error) begin
             fails++;
@@ -557,8 +625,16 @@ module accel_tb;
         end
 
         $display("");
+        $display("cycles:");
+        $display("  feeders busy : %0d cycles = %0.3f ms at 250 MHz", busy_cycles,
+                 busy_cycles / 250000.0);
+        $display("  start to done: %0d cycles  (includes this testbench's DMA, which",
+                 run_cycles);
+        $display("                 is not the hardware - see the note in the source)");
+
+        $display("");
         if (fails == 0)
-            $display("ALL PASS  (%0d elements bit-exact vs the software model, %0d ops chained)",
+            $display("ALL PASS  (%0d elements bit-exact vs the software model, %0d ops, one whole inference)",
                      total, N_OPS);
         else
             $display("FAILED    (%0d mismatches out of %0d)", fails, total);
@@ -566,7 +642,7 @@ module accel_tb;
     end
 
     initial begin
-        #40_000_000;
+        #200_000_000;
         $display("FAILED    (timeout)");
         $finish;
     end
