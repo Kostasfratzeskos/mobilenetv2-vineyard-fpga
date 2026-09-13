@@ -298,3 +298,70 @@ argmax over the 4 int16 logits is the predicted class.
   meaning does not depend on the caller knowing each feeder's pipeline depth.
 - Revisit if: a feeder is ever given a deeper tail than 7 cycles, the counter has to grow
   with it. The testbench guards this by counting `busy` pulses: exactly one per op.
+
+### DD-018 - The MAC trees need pipelining before the clock target means anything
+
+- Context: everything the docs said about area and frequency was arithmetic on a
+  spreadsheet - ~442 DSP, 26% of the XCZU7EV, 250 MHz. `scripts/run_synth.sh` synthesises
+  `accel_top` out of context for xczu7ev-ffvc1156-2-e and turns those into measurements.
+  Two runs, because the first one's failure said what to change.
+- Measured, run 1 (everything left to the tool):
+
+  | | measured | |
+  |:--|--:|:--|
+  | CLB LUTs | 191,372 | 83.06% |
+  | Block RAM | 560 tiles | **179.49% - does not fit** |
+  | URAM | 0 | 0% |
+  | DSPs | 72 | 4.17% |
+  | WNS | -7.123 ns | Fmax 89.9 MHz |
+
+  Two things were wrong at once. The activation pool is 50,176 x 256 bit = 12.85 Mbit,
+  which is more than every BRAM on the device put together (11.0 Mbit) - and the tool
+  mapped it to BRAM anyway while leaving all 96 URAMs idle. And the multipliers went to
+  fabric: 72 DSPs for a datapath that needs 512 in the pointwise array alone, which is
+  where the 191k LUTs came from.
+
+- Decision, and run 2: two synthesis DIRECTIVES, no behavioural change (xsim ignores
+  attributes, so all 31 testbenches stay valid as written):
+  - `(* ram_style = "ultra" *)` on act_buffer's memory.
+  - `(* use_dsp = "yes" *)` on mac_lane, conv1x1, dwconv3x3 and conv3x3_std.
+
+  | | run 1 | run 2 | |
+  |:--|--:|--:|:--|
+  | CLB LUTs | 191,372 (83%) | **32,387** | 14.06% |
+  | CLB Registers | 13,342 | 5,705 | 1.24% |
+  | Block RAM | 560 (**179%**) | **176** | 56.41% |
+  | URAM | 0 | **52** | 54.17% |
+  | DSPs | 72 (4%) | **944** | 54.63% |
+  | WNS | -7.123 ns | **-17.357 ns** | Fmax 46.8 MHz |
+
+  The design now FITS. 944 DSPs is 2.1x the 442 the docs predicted, and the gap is
+  explained exactly: 442 assumed int8 packing, two MACs per DSP48E2 (WP486), which is
+  not implemented. Without packing the count is 512 (pointwise) + 144 (depthwise 16x9)
+  + 216 (stem 8x27) + the requantize stage, which is 944 to within a few.
+
+- TIMING GOT WORSE, and that is the real finding. The worst path:
+
+      Slack -17.357 ns, logic 19.454 ns (91%), route 1.884 ns (9%)
+      Logic Levels: 65  (DSP_ALU=27, DSP_OUTPUT=27, ...)
+
+  A 27-deep DSP cascade with nothing registered in it - the stem's 27 taps
+  (CIN*K*K = 3*3*3), summed combinationally in ONE clock cycle. `mac_lane` has the same
+  shape with 16. A DSP48E2 only reaches its rated speed with its internal A/B/M/P
+  registers used; chained combinationally it is slow, which is why forcing DSPs improved
+  area and hurt timing.
+- Consequence: 250 MHz is not reachable by constraint or attribute. It needs the MAC
+  trees PIPELINED - register the products, then a balanced adder tree with registers
+  between stages, so each DSP uses its own pipeline registers and the cascade is broken
+  into clocked stages. mac_lane.v's own header already anticipated this ("on the real
+  ZCU104 the Tn products + sum map onto DSP48E2 cascades... here we describe it
+  behaviourally and verify bit-exact"); this puts a number on what that costs.
+- Why it is not done in the same change: pipelining adds latency, and latency is a
+  contract. Every feeder's drain counter, every `busy` deadline (DD-017) and every
+  testbench's expected result ordering depends on it. It is a build step of its own,
+  with the 6,895,780-element end-to-end check as the thing that has to still pass.
+- Note on the route numbers: run 1's delay was 65% routing, which at synthesis is an
+  estimate from a wireload model and is pessimistic. Run 2's is 9% routing and 91% logic,
+  so this conclusion does not depend on that estimate at all.
+- Revisit: after pipelining, and again after place-and-route, which is the only thing
+  that produces a real Fmax.

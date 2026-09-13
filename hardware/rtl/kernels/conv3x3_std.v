@@ -21,6 +21,12 @@
 //  Tap ordering is arbitrary but `win` and `wk` must agree; the sum is
 //  order-independent. The C uses i = (ic*K + ky)*K + kx within an oc block.
 //============================================================================
+// Force the multipliers into DSP48E2. Left on "auto", Vivado put almost all of
+// them in fabric: the first synthesis run of accel_top used 191,372 LUTs (83%
+// of the device) and only 72 DSPs, for a datapath that needs 512 multipliers
+// in the pointwise array alone. The header below already says these are meant
+// to be DSP cascades; this makes the tool agree.
+(* use_dsp = "yes" *)
 module conv3x3_std #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter K      = 3,     // KxK spatial kernel

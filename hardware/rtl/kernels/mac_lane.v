@@ -20,6 +20,12 @@
 //  On the real ZCU104 the Tn products + sum map onto DSP48E2 cascades (int8
 //  packing, PCOUT->PCIN). Here we describe it behaviourally and verify bit-exact.
 //============================================================================
+// Force the multipliers into DSP48E2. Left on "auto", Vivado put almost all of
+// them in fabric: the first synthesis run of accel_top used 191,372 LUTs (83%
+// of the device) and only 72 DSPs, for a datapath that needs 512 multipliers
+// in the pointwise array alone. The header below already says these are meant
+// to be DSP cascades; this makes the tool agree.
+(* use_dsp = "yes" *)
 module mac_lane #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter TN     = 16,    // input channels processed per cycle

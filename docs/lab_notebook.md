@@ -478,3 +478,38 @@ wrote quant_scales.json  (53 layers)
 - Blocked on: nothing
 - Next: the weight DMA itself (accel_tb shows the ld_req/ld_done interface is sufficient),
   then Vivado synthesis - timing and real resource numbers are still unknown.
+
+### 2026-09-13 (later still) - first synthesis: the numbers stop being estimates
+- Did: wrote scripts/synth.tcl + run_synth.sh + an OOC constraints file and synthesised
+  accel_top for xczu7ev-ffvc1156-2-e. Two runs; the first one's failure told me what to
+  change. Written up as DD-018.
+- Found / decided:
+  - Run 1, everything left to the tool: Block RAM 560 tiles of 312 = 179%, DOES NOT FIT,
+    with all 96 URAMs idle. 191,372 LUTs (83%). Only 72 DSPs. WNS -7.123 ns.
+  - The activation pool is 12.85 Mbit and the whole device has 11.0 Mbit of BRAM, so
+    mapping it to BRAM cannot fit - and the tool did it anyway. Forced it to URAM.
+    The multipliers were going to fabric too; forced them to DSP. Both are attributes,
+    so xsim ignores them and all 31 testbenches stay valid exactly as written (checked).
+  - Run 2: LUTs 191,372 -> 32,387 (14%). BRAM 560 -> 176 (56%). URAM 0 -> 52 (54%).
+    DSP 72 -> 944 (55%). The design FITS.
+  - 944 DSPs against the 442 the docs predicted. Not a surprise once looked at: 442
+    assumed int8 packing, two MACs per DSP48E2, which was never implemented. Unpacked
+    the count is 512 + 144 + 216 + requantize = 944. The estimate was right about the
+    arithmetic and wrong about assuming an optimisation that does not exist yet.
+  - TIMING GOT WORSE: -7.123 -> -17.357 ns. That is the real result. The worst path is
+    65 logic levels with DSP_ALU=27 and DSP_OUTPUT=27 - a 27-deep DSP cascade with
+    nothing registered inside it, which is the stem's 27 taps summed combinationally in
+    one cycle. mac_lane does the same with 16. A DSP48E2 is only fast with its internal
+    pipeline registers used, so forcing DSPs fixed area and exposed the real problem.
+  - So 250 MHz is not reachable by constraint or attribute. It needs the MAC trees
+    pipelined. Not doing that in the same change: latency is a contract that every
+    feeder's drain counter, every busy deadline (DD-017) and every testbench's expected
+    ordering depends on. It is its own build step, gated by the 6.9M-element end-to-end
+    check still passing.
+  - Also: my synth.tcl counted resources with get_cells -filter PRIMITIVE_TYPE because it
+    looked tidier than parsing a report. It reported 8,496 DSPs and 0 LUTs where
+    report_utilization said 944 and 32,387 - the filter matches sub-cells of a macro.
+    Removed; run_synth.sh greps the report, which is authoritative.
+- Blocked on: nothing
+- Next: pipeline the MAC trees, re-synthesise, then place-and-route (the only thing that
+  gives a real Fmax). The weight DMA is still outstanding too.

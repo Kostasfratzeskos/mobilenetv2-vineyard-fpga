@@ -88,6 +88,13 @@ module act_buffer #(
     localparam ENT_BITS  = TM*DATA_W;     // 256
     localparam WORD_BITS = TN*DATA_W;     // 128
 
+    // URAM, not BRAM, and not left to the tool to decide. 50,176 entries of
+    // 256 bit is 12.85 Mbit, which is more than every BRAM on the XCZU7EV put
+    // together (11.0 Mbit) - so mapping it to BRAM cannot fit, and the first
+    // synthesis run proved it does exactly that if asked nicely: Block RAM
+    // 560 tiles of 312 available, 179%, with all 96 URAMs sitting unused.
+    // URAM holds 27.0 Mbit, and this needs 52 of the 96.
+    (* ram_style = "ultra" *)
     reg [ENT_BITS-1:0]  mem [0:DEPTH-1];
     reg [ENT_BITS-1:0]  dout;
     reg [SEL_W-1:0]     sel_q;            // travels with the data

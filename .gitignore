@@ -82,3 +82,18 @@ software/cmodel/build/
 #  The small params_*.hex are tracked, because they are NOT a concatenation:
 #  they materialise the RES_ADD and GAP constants per channel.
 software/export/weights.hex
+
+# ── Synthesis artifacts ──────────────────────────────
+#  The .rpt files are small and are the evidence behind the numbers in
+#  docs/, so they stay. The checkpoint and the tool log are large and
+#  regenerable with: bash scripts/run_synth.sh
+build/synth/*.dcp
+build/synth/vivado.log
+build/synth/*.jou
+#  The timing reports are ~1 MB of text between them. utilization.rpt and
+#  utilization_hier.rpt are small and stay; DD-018 quotes the timing numbers
+#  that matter (WNS, the logic/route split, the 27-deep DSP cascade) verbatim.
+build/synth/timing_paths.rpt
+build/synth/timing_summary.rpt
+.Xil/
+build/synth/*backup.log

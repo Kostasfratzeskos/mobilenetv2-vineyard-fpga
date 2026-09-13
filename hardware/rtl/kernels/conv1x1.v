@@ -23,6 +23,12 @@
 //    last   - this valid pair is the final element -> `done` pulses next cycle
 //  When `done` is high, `acc` holds the completed dot product (same edge).
 //============================================================================
+// Force the multipliers into DSP48E2. Left on "auto", Vivado put almost all of
+// them in fabric: the first synthesis run of accel_top used 191,372 LUTs (83%
+// of the device) and only 72 DSPs, for a datapath that needs 512 multipliers
+// in the pointwise array alone. The header below already says these are meant
+// to be DSP cascades; this makes the tool agree.
+(* use_dsp = "yes" *)
 module conv1x1 #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
