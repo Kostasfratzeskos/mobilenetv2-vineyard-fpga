@@ -97,3 +97,9 @@ build/synth/timing_paths.rpt
 build/synth/timing_summary.rpt
 .Xil/
 build/synth/*backup.log
+
+# ── Vivado GUI project ───────────────────────────────
+#  Entirely regenerable, and it references sources where they live, so nothing
+#  here is a source of truth. Delete it and re-run whenever:
+#      vivado -mode batch -source scripts/make_project.tcl
+build/vivado/
