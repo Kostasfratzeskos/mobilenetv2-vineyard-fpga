@@ -12,7 +12,8 @@
 #  ESTIMATE; this file is the first thing that can turn one into a measurement.
 #=============================================================================
 
-create_clock -period 4.000 -name clock [get_ports clock]
+# I changed the frequency of the clock to Fmax = 40MHz to chek if there is still time violations
+create_clock -period 25.000 -name clock [get_ports clock]       
 
 # The load ports (program, image, weights, parameters) are fed by a DMA that
 # does not exist yet, so there is no real launch/capture clock on the other
