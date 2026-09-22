@@ -46,7 +46,7 @@
 //============================================================================
 module out_stage #(
     parameter TM      = 32,
-    parameter ACC_W   = 21,
+    parameter ACC_W   = 26,
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

@@ -20,7 +20,7 @@
 //  overflows ACC_W, so truncation is exact.
 //============================================================================
 module bias_add #(
-    parameter ACC_W  = 21,    // accumulator width (in and out)
+    parameter ACC_W  = 26,    // accumulator width (in and out)
     parameter BIAS_W = 32     // int32 bias as stored in the manifest
 )(
     input  wire signed [ACC_W-1:0]  acc_in,

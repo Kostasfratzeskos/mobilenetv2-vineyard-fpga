@@ -29,7 +29,7 @@
 module mac_lane #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter TN     = 16,    // input channels processed per cycle
-    parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
+    parameter ACC_W  = 26     // accumulator width (matches HW / requantize in)
 )(
     input  wire                     clock,
     input  wire                     rst_n,

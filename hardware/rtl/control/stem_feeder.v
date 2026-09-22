@@ -61,7 +61,7 @@ module stem_feeder #(
     parameter TS      = 8,      // output channels in parallel (DD-016)
     parameter CIN     = 3,      // image channels
     parameter K       = 3,
-    parameter ACC_W   = 21,     // 27 taps: a bound, not a precondition
+    parameter ACC_W   = 26,     // 27 taps: a bound, not a precondition
     parameter POOL_TM = 32,     // channels per pool entry
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,

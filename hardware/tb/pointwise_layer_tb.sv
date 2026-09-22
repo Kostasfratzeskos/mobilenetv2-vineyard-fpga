@@ -124,12 +124,12 @@ module pointwise_layer_tb;
     logic [7:0] got, expd;
     initial begin
         // load everything (relative to ROOT/sim/xsim_pointwise_layer/)
-        $readmemh("../../software/golden/image_1/002_features_1_conv_0_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/002_features_1_conv_0_0.hex", in_mem);
         $readmemh("../../software/export/features_1_conv_1_w.hex",            wq_mem);
         $readmemh("../../software/export/features_1_conv_1_b.hex",            b_mem);
         $readmemh("../../software/export/features_1_conv_1_m0.hex",           m0_mem);
         $readmemh("../../software/export/features_1_conv_1_shift.hex",        sh_mem);
-        $readmemh("../../software/golden/image_1/003_features_1_conv_1.hex",  gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/003_features_1_conv_1.hex",  gold_mem);
 
         cv_valid = 0; cv_first = 0; cv_last = 0; a_r = 0; w_r = 0;
         rq_en = 0; act_r = 0; m0_r = 0; sh_r = 0; qmax_r = 0; bias_r = 0;

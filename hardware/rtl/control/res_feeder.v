@@ -57,7 +57,7 @@ module res_feeder #(
     parameter DATA_W  = 8,
     parameter POOL_TM = 32,     // channels per pool entry / lanes in out_stage
     parameter TN      = 16,     // channels per slice
-    parameter ACC_W   = 21,
+    parameter ACC_W   = 26,
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

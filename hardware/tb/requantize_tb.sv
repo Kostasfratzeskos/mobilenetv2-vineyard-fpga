@@ -31,7 +31,7 @@ module requantize_tb;
     logic                      rst_n;
     logic                      en;
     logic                      act;
-    logic signed [20:0]        in_data;      // ACC_W = 21
+    logic signed [25:0]        in_data;      // ACC_W = 26
     logic signed [31:0]        M0;           // M0_W  = 32
     logic        [5:0]         shift;        // SHIFT_W = 6
     logic signed [7:0]         relu6_qmax;

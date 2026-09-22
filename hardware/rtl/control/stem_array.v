@@ -44,12 +44,12 @@
 //  lane. The weights already arrive in conv3x3_std's order because the
 //  manifest stores (OC, IC, KH, KW) row-major, which is the same thing.
 //
-//  ---- ACC_W = 21 -------------------------------------------------------
+//  ---- ACC_W = 26 -------------------------------------------------------
 //
-//  27 taps bound the sum at 27*128*127 = 439,  well inside 21 bits:
-//  27 * 128 * 127 = 438,912, which needs 20 bits signed. Tighter than the
-//  depthwise's 9 taps but still a bound rather than a precondition, unlike the
-//  pointwise array where IC reaches 1280.
+//  27 * 128 * 127 = 438,912, which needs 20 bits signed - well inside the
+//  26-bit accumulator. Tighter than the depthwise's 9 taps but still a bound
+//  rather than a precondition, unlike the pointwise array where IC reaches
+//  1280. See logit_out.v for why the width is 26 and not 21.
 //
 //  Purely combinational, like the conv3x3_std it wraps.
 //============================================================================
@@ -58,7 +58,7 @@ module stem_array #(
     parameter TS     = 8,     // output channels in parallel (DD-016)
     parameter CIN    = 3,     // input channels (the image)
     parameter K      = 3,     // KxK spatial kernel
-    parameter ACC_W  = 21
+    parameter ACC_W  = 26
 )(
     input  wire [K*K*CIN*DATA_W-1:0]    win,  // from line_buffer: tap-major
     input  wire [TS*CIN*K*K*DATA_W-1:0] wk,   // per-lane, already conv-ordered

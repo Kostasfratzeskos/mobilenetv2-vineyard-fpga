@@ -25,7 +25,7 @@
 //  >>> and the compares), so the signedness here is load-bearing.
 //============================================================================
 module requantize #(
-    parameter ACC_W   = 21,   // accumulator width (signed), matches the HW acc
+    parameter ACC_W   = 26,   // accumulator width (signed), matches the HW acc
     parameter M0_W    = 32,   // fixed-point multiplier width (signed), int32
     parameter SHIFT_W = 6,    // shift-amount width (unsigned). export: shift>=1
     parameter OUT_W   = 8     // output width: 8 for activations, 16 for logits

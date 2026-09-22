@@ -28,7 +28,7 @@
 module rq_bank_tb;
 
     localparam TM      = 32;
-    localparam ACC_W   = 21;        // the real datapath width
+    localparam ACC_W   = 26;        // the real datapath width
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
     localparam SHIFT_W = 6;

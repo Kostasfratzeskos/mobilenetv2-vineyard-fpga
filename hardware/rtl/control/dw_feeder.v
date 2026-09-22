@@ -75,7 +75,7 @@ module dw_feeder #(
     parameter DATA_W  = 8,
     parameter TC      = 16,     // channels in parallel (DD-014)
     parameter K       = 3,
-    parameter ACC_W   = 21,     // provably enough for 9 taps, see dw_array
+    parameter ACC_W   = 26,     // provably enough for 9 taps, see dw_array
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

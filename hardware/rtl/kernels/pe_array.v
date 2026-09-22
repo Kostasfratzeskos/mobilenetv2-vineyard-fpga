@@ -35,7 +35,7 @@ module pe_array #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter TM     = 32,    // output channels (lanes) in parallel
     parameter TN     = 16,    // input channels per cycle, per lane
-    parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
+    parameter ACC_W  = 26     // accumulator width (matches HW / requantize in)
 )(
     input  wire                       clock,
     input  wire                       rst_n,     // async active-low reset

@@ -513,3 +513,46 @@ wrote quant_scales.json  (53 layers)
 - Blocked on: nothing
 - Next: pipeline the MAC trees, re-synthesise, then place-and-route (the only thing that
   gives a real Fmax). The weight DMA is still outstanding too.
+
+### 2026-09-22 - a second image, and what it found
+- Did: made the testbenches image-agnostic, generated a golden set for a second image
+  (a Healthy leaf), and ran the whole suite against it. Written up as DD-019.
+- Found / decided:
+  - FIRST: the export in git was five weeks older than the checkpoint on disk. The model
+    was retrained 2026-07-22; `software/export/` was last regenerated 2026-06-15. Running
+    export.py to make the new golden set moved the weights to the new checkpoint while
+    accel_tb still loaded image_1's June goldens - 4.4M mismatches, starting at op 0.
+    Neither artefact said which model it came from. Both manifests carry `ckpt_sha256`
+    now, and gen_program.py refuses to build the testbench table if the two disagree.
+  - `image_1` CANNOT be regenerated: its source file is gone from data/ (the dataset was
+    resplit and the classes renamed), and the checkpoint it came from has been
+    overwritten. The set the whole project was verified against for three months is
+    unreproducible. Marked `stale` in its manifest; everything now uses healthy_hl6025.
+  - SECOND, and the real finding: with weights and goldens finally from the same
+    checkpoint, ops 0-5 were bit-exact and op 6 was wrong in exactly 3,136 of 451,584
+    elements - one channel, every pixel, hardware 0 where the model said 63 (= the ReLU6
+    ceiling). That is an accumulator wrapping negative and being clamped. Confirmed:
+    features.3.conv.0.0 channel 110 has bias = 1,184,089, and ACC_W=21 holds +-1,048,576.
+    The bias alone does not fit, for ANY image. See DD-019.
+  - So the answer to "does a second image test anything?" is yes, but not for the reason
+    I expected. It did not find a data-dependent edge case; it found that the accumulator
+    was sized from a measurement rather than a bound, and the retrain had invalidated the
+    measurement months earlier. Every run since 2026-07-22 would have been wrong the
+    moment the export was refreshed.
+  - ACC_W 21 -> 26. The provable bound sum|w|*max|a| + |bias| is 5,094,750 (24 bits) at
+    classifier.1; 26 gives 6.6x margin and stays inside the DSP48E2's 27-bit operand, so
+    the requantize multiply stays at 2 DSP/lane instead of 4. export.py computes the
+    bound every run and exits non-zero if the RTL cannot hold it - verified by feeding it
+    ACC_W=21, which it correctly refuses.
+  - Two testbench bugs this exposed, both of the same kind - a constant typed in one
+    place that another place was free to change: the input image and expected logits were
+    hardcoded to image_1 while the compiler pointed elsewhere, and the expected class was
+    hardcoded to "1 (esca)" so the failure message named the wrong class. Both are
+    generated into program_ops.svh now, from the golden manifest.
+- Result: ALL 31 testbenches pass on the current checkpoint, including the 6,895,780
+  element end-to-end check. `[ok] logits -4950 -6177 15185 -5486 bit-exact`,
+  `[ok] predicted class 2 = Healthy`.
+- Blocked on: nothing
+- Next: re-synthesise at ACC_W=26 (area cost is ~160 flops, but the number should be
+  measured); then the MAC-tree pipelining of DD-018, for which the async resets need to
+  become synchronous first or Vivado cannot fold the new registers into the DSPs.

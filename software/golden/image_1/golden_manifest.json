@@ -1,5 +1,7 @@
 {
   "image": "C:\\Users\\el208\\Documents\\\u03a3\u03a7\u039f\u039b\u0397\\\u0394\u03b9\u03c0\u03bb\u03c9\u03bc\u03b1\u03c4\u03b9\u03ba\u03ae(Grape IoT)\\mobilenetv2-vineyard-fpga\\data\\grape\\esca\\image_1.jpg",
+  "ckpt_sha256": null,
+  "stale": "Generated 2026-06 from a checkpoint that has since been overwritten by the 2026-07-22 retrain, and from an image no longer present in data/. Cannot be regenerated; kept for history only. Superseded by healthy_hl6025.",
   "predicted_class": "esca",
   "logits_int16": [
     -2278,

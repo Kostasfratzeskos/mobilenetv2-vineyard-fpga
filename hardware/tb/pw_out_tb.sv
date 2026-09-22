@@ -31,7 +31,7 @@
 module pw_out_tb;
 
     localparam TM      = 32;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
     localparam SHIFT_W = 6;

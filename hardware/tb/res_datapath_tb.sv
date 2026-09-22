@@ -44,7 +44,7 @@ module res_datapath_tb;
     localparam DATA_W  = 8;
     localparam POOL_TM = 32;
     localparam TN      = 16;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
     localparam SHIFT_W = 6;
@@ -290,9 +290,9 @@ module res_datapath_tb;
     integer p, y, x, m, c, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/image_1/009_features_3_conv_2.hex", tgt_mem);
-        $readmemh("../../software/golden/image_1/006_features_2_conv_2.hex", sav_mem);
-        $readmemh("../../software/golden/image_1/010_features_3_add.hex",    gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/009_features_3_conv_2.hex", tgt_mem);
+        $readmemh("../../software/golden/healthy_hl6025/006_features_2_conv_2.hex", sav_mem);
+        $readmemh("../../software/golden/healthy_hl6025/010_features_3_add.hex",    gold_mem);
 
         start = 0; load_mode = 0; tb_rd = 0; mon_on = 0;
         pl_en = 0; pl_bank = 0; pl_addr = 0; pl_bias = 0; pl_m0 = 0; pl_shift = 0;

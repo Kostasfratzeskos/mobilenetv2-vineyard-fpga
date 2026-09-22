@@ -26,7 +26,7 @@ module stem_array_tb;
     localparam CIN    = 3;
     localparam K      = 3;
     localparam NT     = CIN*K*K;      // 27
-    localparam ACC_W  = 21;
+    localparam ACC_W  = 26;
 
     logic [K*K*CIN*DATA_W-1:0]    win;
     logic [TS*NT*DATA_W-1:0]      wk;

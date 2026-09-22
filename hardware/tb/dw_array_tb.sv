@@ -30,7 +30,7 @@ module dw_array_tb;
     localparam TC     = 16;
     localparam K      = 3;
     localparam NT     = K*K;
-    localparam ACC_W  = 21;
+    localparam ACC_W  = 26;
 
     // ---- DUT ---------------------------------------------------------------
     logic [NT*TC*DATA_W-1:0] win;

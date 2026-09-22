@@ -35,11 +35,27 @@
 //
 //  ---- a note on the accumulator ---------------------------------------
 //
-//  This op has the network's longest dot product, IC=1280, so it is the
-//  tightest point for ACC_W=21. Measured on the golden image the post-bias
-//  accumulator peaks at 355,971 against a limit of 1,048,576 - 34% of the
-//  range, where every other layer sits below 3%. It fits, but it is the one
-//  place worth re-measuring if the model is retrained.
+//  This op has the network's longest dot product, IC=1280, and it IS the
+//  tightest point in the network - 5,094,750 against the provable bound. The
+//  header used to say so on the strength of a measurement, and that is the
+//  part that was wrong.
+//
+//  ACC_W used to be 21, sized from what ONE image through ONE checkpoint
+//  happened to produce: the post-bias accumulator peaked at 355,971 here
+//  against a limit of 1,048,576, and every other layer sat below 3% of the
+//  range. This header said "worth re-measuring if the model is retrained" -
+//  right instinct, wrong mechanism. The 2026-07 retrain gave
+//  features.3.conv.0.0 channel 110 a bias of 1,184,089, which does not fit a
+//  21-bit accumulator ON ITS OWN, whatever the image. It wrapped negative,
+//  ReLU6 clamped it to 0, and 2.2M elements downstream went wrong in silence.
+//  A measurement cannot catch that, because the failure was never about data.
+//
+//  ACC_W is 26 now, and it is not a measurement any more. export.py computes
+//  the PROVABLE bound - sum|w| * max|a| + |bias| per channel, which no input
+//  can exceed, adversarial included - and refuses to export a model that does
+//  not fit the RTL's width. Network worst case 5,094,750 needs 24 signed bits;
+//  26 gives 6.6x margin and stays inside the DSP48E2's 27-bit operand port, so
+//  the requantize multiply is still 2 DSPs per lane rather than 4.
 //
 //  Run:  bash scripts/run_sim.sh logit_out bias_add requantize
 //============================================================================
@@ -47,7 +63,7 @@ module logit_out #(
     parameter TM      = 32,    // lanes arriving from pe_array
     parameter NLOG    = 4,     // classes
     parameter IDX_W   = 2,     // clog2(NLOG)
-    parameter ACC_W   = 21,
+    parameter ACC_W   = 26,
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

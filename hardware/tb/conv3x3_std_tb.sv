@@ -16,7 +16,7 @@ module conv3x3_std_tb;
     localparam K      = 3;
     localparam CIN    = 3;
     localparam NT     = K*K*CIN;     // 27
-    localparam ACC_W  = 21;
+    localparam ACC_W  = 26;
 
     logic [NT*DATA_W-1:0]     win_v, wk_v;
     wire  signed [ACC_W-1:0]  acc;

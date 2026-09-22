@@ -41,7 +41,7 @@ module stem_datapath_tb;
     // ---- datapath ---------------------------------------------------------
     localparam DATA_W  = 8;
     localparam TS      = 8;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam POOL_TM = 32;
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
@@ -309,8 +309,8 @@ module stem_datapath_tb;
     integer p, y, x, m, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/image_1/000_input.hex",         img_mem);
-        $readmemh("../../software/golden/image_1/001_features_0_0.hex",  gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/000_input.hex",         img_mem);
+        $readmemh("../../software/golden/healthy_hl6025/001_features_0_0.hex",  gold_mem);
         $readmemh("../../software/export/features_0_0_w.hex",            wq_mem);
         $readmemh("../../software/export/features_0_0_b.hex",            b_mem);
         $readmemh("../../software/export/features_0_0_m0.hex",           m0_mem);

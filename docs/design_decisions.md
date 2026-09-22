@@ -365,3 +365,62 @@ argmax over the 4 int16 logits is the predicted class.
   so this conclusion does not depend on that estimate at all.
 - Revisit: after pipelining, and again after place-and-route, which is the only thing
   that produces a real Fmax.
+
+### DD-019 - Accumulator width from a provable bound, not a measurement (ACC_W = 26)
+- Status: Accepted
+- Date: 2026-09-22
+- Context: `ACC_W=21` was justified by measurement. DD-015's integration note recorded
+  "max |acc+bias| = 20,888 against a limit of +-1,048,576 -> 5 bits headroom", and
+  logit_out.v recorded 355,971 at the classifier, the network's longest dot product.
+  Both numbers were real. Both were observations of ONE image through ONE checkpoint.
+- What broke it: the model was retrained on 2026-07-22, five weeks after
+  `software/export/` was last regenerated. Running export.py again moved the weights to
+  the new checkpoint and `features.3.conv.0.0` channel 110 came out with a bias of
+  **1,184,089** - which does not fit a 21-bit signed accumulator ON ITS OWN, for any
+  input whatsoever. The hardware wrapped it negative, ReLU6 clamped the result to 0, and
+  2,215,904 of 6,895,780 elements were wrong downstream. Ops 0-5 were bit-exact, op 6
+  was wrong in exactly 3,136 of 451,584 elements - one channel, every pixel - and
+  everything after that was contamination. Nothing in the RTL detects accumulator
+  overflow, so the only symptom was the golden comparison.
+- Decision: **ACC_W = 26**, and the width is now checked against a bound rather than
+  chosen from a measurement. export.py computes, per output channel,
+
+      |acc + bias|  <=  ( sum_taps |w[oc,tap]| ) * max|a|  +  |bias_oc|
+
+  and exits non-zero if the network's worst case does not fit the ACC_W it reads out of
+  `hardware/rtl/control/accel_top.v`. `max|a|` is a property of the format, not the data:
+  activations entering a layer are either a ReLU6 output in [0, relu6_qmax] or a plain
+  int8 in [-128,127]. No image can exceed the bound, so fitting it is sufficient for
+  every possible input, adversarial ones included.
+- The numbers, this checkpoint:
+
+  | | value | bits |
+  |:--|--:|--:|
+  | measured, one image | 1,198,084 | 22 |
+  | **provable bound, any image** | **5,094,750** (classifier.1) | **24** |
+  | loose geometric worst case (taps x 128 x 128) | 15,743,028 | 25 |
+  | ACC_W=26 range | +-33,554,432 | 6.6x margin |
+
+  Note that the measurement and the bound point at different layers - the measured worst
+  was features.3.conv.0.0 (an outlier bias), the provable worst is the classifier (the
+  longest dot product). Sizing from the measurement would have been wrong even with the
+  right number.
+- Rationale for 26 rather than 24 or 32: the requantize multiply is `ACC_W x M0_W`, i.e.
+  ACC_W x 32, and the DSP48E2 multiplier is 27x18. At ACC_W <= 27 one operand fits whole
+  and M0 splits 18+14, so it costs **2 DSP per lane**; at ACC_W >= 28 both operands split
+  and it costs **4**, which over R=32 lanes is +64 DSP for nothing. So 27 bits is free and
+  28 is expensive: 26 takes essentially all the headroom the free zone offers (6.6x)
+  while 24 would take only 1.6x. ACC_W=32 buys no correctness the bound does not already
+  guarantee, and costs those 64 DSPs.
+- Alternatives considered: re-quantizing so the biases fit (changes accuracy, and leaves
+  the same class of problem for the next retrain); saturating instead of wrapping (fails
+  loudly rather than silently, but still fails); testing more images (cannot establish a
+  bound, only raise confidence - and would have missed this, since the overflow was in
+  the bias and independent of the image).
+- Cost: +5 bits on every accumulator path. The pool still stores int8, so this is the
+  feeder-to-out_stage buses (32 lanes), `out_stage`'s capture register and the 5-way
+  feeder mux - about 160 extra flip-flops out of 230,400. Re-synthesis pending.
+- Verification: all 31 testbenches pass at ACC_W=26 against a golden set regenerated from
+  the current checkpoint, including the 6,895,780-element end-to-end check.
+- Revisit if: never by measurement. The export-time check is the mechanism now; if it
+  fires, widen ACC_W (staying <= 27) or fix the quantization.

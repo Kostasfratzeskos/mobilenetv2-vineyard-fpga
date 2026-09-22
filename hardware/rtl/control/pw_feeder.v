@@ -87,7 +87,7 @@ module pw_feeder #(
     parameter DATA_W = 8,
     parameter TM     = 32,        // lanes / output channels in parallel
     parameter TN     = 16,        // input channels per cycle
-    parameter ACC_W  = 21,
+    parameter ACC_W  = 26,
     parameter SEL_W  = 1,         // clog2(TM/TN)
     parameter BANK_W = 5,         // clog2(TM)
     parameter PIX_W  = 16,

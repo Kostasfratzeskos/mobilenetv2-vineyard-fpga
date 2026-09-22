@@ -31,7 +31,7 @@
 (* use_dsp = "yes" *)
 module conv1x1 #(
     parameter DATA_W = 8,     // int8 activations and weights
-    parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
+    parameter ACC_W  = 26     // accumulator width (matches HW / requantize in)
 )(
     input  wire                     clock,
     input  wire                     rst_n,     // async active-low reset

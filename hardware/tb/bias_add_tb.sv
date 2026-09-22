@@ -12,7 +12,7 @@
 //============================================================================
 module bias_add_tb;
 
-    localparam ACC_W  = 21;
+    localparam ACC_W  = 26;
     localparam BIAS_W = 32;
 
     localparam longint ACC_MAX =  (longint'(1) << (ACC_W-1)) - 1;   //  1048575

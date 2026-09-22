@@ -31,7 +31,7 @@
 //
 //  ---- widths -----------------------------------------------------------
 //
-//  ACC_W=21 is PROVABLY enough, like the depthwise and unlike the pointwise
+//  ACC_W=26 is PROVABLY enough, like the depthwise and unlike the pointwise
 //  array: the worst case is 49 * 128 = 6,272, which needs 14 bits. The input to
 //  a GAP is always a ReLU6 output too, so in practice it is non-negative and
 //  even smaller.
@@ -46,7 +46,7 @@ module gap_feeder #(
     parameter DATA_W  = 8,
     parameter POOL_TM = 32,     // channels per pool entry
     parameter TN      = 16,     // channels accumulated in parallel
-    parameter ACC_W   = 21,     // provably sufficient, see above
+    parameter ACC_W   = 26,     // provably sufficient, see above
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

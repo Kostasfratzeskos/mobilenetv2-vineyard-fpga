@@ -80,7 +80,7 @@ module accel_top #(
     parameter TSLOG   = 3,      // clog2(TS) -- keep in step with TS
     parameter CIN     = 3,
     parameter K       = 3,
-    parameter ACC_W   = 21,
+    parameter ACC_W   = 26,
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

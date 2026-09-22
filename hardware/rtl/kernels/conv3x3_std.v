@@ -31,7 +31,7 @@ module conv3x3_std #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter K      = 3,     // KxK spatial kernel
     parameter CIN    = 3,     // input channels (3 for the stem)
-    parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
+    parameter ACC_W  = 26     // accumulator width (matches HW / requantize in)
 )(
     input  wire [K*K*CIN*DATA_W-1:0] win,   // window x channels, tap-major
     input  wire [K*K*CIN*DATA_W-1:0] wk,    // matching weights for this oc

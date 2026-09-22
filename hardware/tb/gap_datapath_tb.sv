@@ -41,7 +41,7 @@ module gap_datapath_tb;
     localparam DATA_W  = 8;
     localparam POOL_TM = 32;
     localparam TN      = 16;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
     localparam SHIFT_W = 6;
@@ -271,8 +271,8 @@ module gap_datapath_tb;
     integer c, m, k, ch, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/image_1/062_features_18_0.hex", in_mem);
-        $readmemh("../../software/golden/image_1/063_avgpool.hex",       gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/062_features_18_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/063_avgpool.hex",       gold_mem);
 
         start = 0; load_mode = 0; tb_rd = 0; mon_on = 0;
         pl_en = 0; pl_bank = 0; pl_addr = 0; pl_bias = 0; pl_m0 = 0; pl_shift = 0;

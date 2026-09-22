@@ -71,7 +71,7 @@ module accel_tb;
     localparam TS      = 8;
     localparam CIN     = 3;
     localparam K       = 3;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
     localparam SHIFT_W = 6;
@@ -493,13 +493,18 @@ module accel_tb;
         load_op_table;
 
         $readmemh("../../software/export/program.hex",           prog);
-        $readmemh("../../software/golden/image_1/000_input.hex", img_mem);
         $readmemh("../../software/export/weights.hex",           wblob);
         $readmemh("../../software/export/params_b.hex",          pb_blob);
         $readmemh("../../software/export/params_m0.hex",         pm_blob);
         $readmemh("../../software/export/params_shift.hex",      ps_blob);
-        $readmemh("../../software/golden/image_1/065_classifier_1_logits_int16.hex",
-                  gold_log);
+
+        // The input image and the expected logits come from program_ops.svh,
+        // like the per-op goldens, so all three name the SAME golden set. They
+        // used to be typed here against image_1 while the compiler pointed
+        // somewhere else - which is how a golden set from one checkpoint got
+        // compared against weights from another.
+        load_input;
+        load_gold_logits;
 
         start = 0; n_instr = 0;
         pg_en = 0; pg_addr = 0; pg_data = 0;
@@ -586,11 +591,13 @@ module accel_tb;
         if (!got_argmax) begin
             fails++;
             $display("  [ERR] argmax_valid never pulsed");
-        end else if (argmax_q !== 2'd1) begin
+        end else if (argmax_q !== GOLDEN_ARGMAX[IDX_W-1:0]) begin
             fails++;
-            $display("  [ERR] predicted class %0d, golden 1 (esca)", argmax_q);
+            $display("  [ERR] predicted class %0d, golden %0d (%s)",
+                     argmax_q, GOLDEN_ARGMAX, GOLDEN_CLASS);
         end else
-            $display("  [ok ] predicted class 1 = esca, as the software model");
+            $display("  [ok ] predicted class %0d = %s, as the software model",
+                     argmax_q, GOLDEN_CLASS);
 
         // ---- structure -------------------------------------------------
         $display("");

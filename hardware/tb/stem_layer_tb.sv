@@ -120,12 +120,12 @@ module stem_layer_tb;
     integer r, oy, ox, oc;
     logic [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/image_1/000_input.hex",           in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/000_input.hex",           in_mem);
         $readmemh("../../software/export/features_0_0_w.hex",              w_mem);
         $readmemh("../../software/export/features_0_0_b.hex",              b_mem);
         $readmemh("../../software/export/features_0_0_m0.hex",             m0_mem);
         $readmemh("../../software/export/features_0_0_shift.hex",          sh_mem);
-        $readmemh("../../software/golden/image_1/001_features_0_0.hex",    gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/001_features_0_0.hex",    gold_mem);
 
         win_v = 0; wk_v = 0; bias_r = 0; rq_en = 0; act_r = 0;
         m0_r = 0; sh_r = 0; qmax_r = 0;

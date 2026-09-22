@@ -31,7 +31,7 @@
 module dwconv3x3 #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter K      = 3,     // KxK kernel (3x3 depthwise)
-    parameter ACC_W  = 21     // accumulator width (matches HW / requantize in)
+    parameter ACC_W  = 26     // accumulator width (matches HW / requantize in)
 )(
     input  wire [K*K*DATA_W-1:0]   win,   // KxK activation window, tap-major
     input  wire [K*K*DATA_W-1:0]   wk,    // KxK weights for this channel

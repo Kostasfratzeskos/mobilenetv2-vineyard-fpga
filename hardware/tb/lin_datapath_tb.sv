@@ -38,7 +38,7 @@ module lin_datapath_tb;
     localparam DATA_W  = 8;
     localparam TM      = 32;
     localparam TN      = 16;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam SEL_W   = 1;
     localparam BANK_W  = 5;
     localparam PIX_W   = 16;
@@ -171,13 +171,13 @@ module lin_datapath_tb;
     integer c, k, it, ocx, icx, best;
     logic signed [15:0] got16, exp16;
     initial begin
-        $readmemh("../../software/golden/image_1/063_avgpool.hex",                  in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/063_avgpool.hex",                  in_mem);
         $readmemh("../../software/export/classifier_1_w.hex",                       wq_mem);
         $readmemh("../../software/export/classifier_1_b.hex",                       b_mem);
         $readmemh("../../software/export/classifier_1_m0.hex",                      m0_mem);
         $readmemh("../../software/export/classifier_1_shift.hex",                   sh_mem);
-        $readmemh("../../software/golden/image_1/064_classifier_1_acc_int32.hex",   gacc);
-        $readmemh("../../software/golden/image_1/065_classifier_1_logits_int16.hex", glogit);
+        $readmemh("../../software/golden/healthy_hl6025/064_classifier_1_acc_int32.hex",   gacc);
+        $readmemh("../../software/golden/healthy_hl6025/065_classifier_1_logits_int16.hex", glogit);
 
         start = 0; stall = 0; acc_seen = 0; log_seen = 0; arg_seen = 0;
         wl_en = 0; wl_bank = 0; wl_addr = 0; wl_data = 0;

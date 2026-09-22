@@ -39,9 +39,9 @@ module residual_layer_tb;
     integer i, total = 0, fails = 0;
     logic [7:0] expd;
     initial begin
-        $readmemh("../../software/golden/image_1/006_features_2_conv_2.hex", saved_mem);
-        $readmemh("../../software/golden/image_1/009_features_3_conv_2.hex", target_mem);
-        $readmemh("../../software/golden/image_1/010_features_3_add.hex",    gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/006_features_2_conv_2.hex", saved_mem);
+        $readmemh("../../software/golden/healthy_hl6025/009_features_3_conv_2.hex", target_mem);
+        $readmemh("../../software/golden/healthy_hl6025/010_features_3_add.hex",    gold_mem);
 
         m0 = M0; shift = SHIFT;
         $display("integration: features.3.add residual (N=%0d)", N);

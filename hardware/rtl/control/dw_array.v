@@ -29,15 +29,15 @@
 //  that stride wrong would mix channels while still producing plausible sums,
 //  which is what the testbench is built to catch.
 //
-//  ---- ACC_W = 21 is PROVABLY enough here ------------------------------
+//  ---- ACC_W = 26 is PROVABLY enough here ------------------------------
 //
 //  Worth stating, because it differs from the pointwise side. A depthwise dot
 //  product is always exactly K*K = 9 taps, so the worst case is
 //
 //      9 * 128 * 127 = 146,304   ->  needs 19 bits signed
 //
-//  against the 21-bit accumulator's +-1,048,576. Unlike pe_array, where IC
-//  reaches 960 and 21 bits is a data-dependent PRECONDITION (measured at 5 bits
+//  against the 26-bit accumulator's +-33,554,432. Unlike pe_array, where IC
+//  reaches 960 and 21 bits was a data-dependent PRECONDITION (measured at 5 bits
 //  of headroom in pw_datapath_tb), here it is a bound: no input can overflow
 //  it. The testbench therefore runs full-range random int8 at the real width.
 //
@@ -48,7 +48,7 @@ module dw_array #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter TC     = 16,    // channels in parallel (DD-014)
     parameter K      = 3,     // KxK depthwise kernel
-    parameter ACC_W  = 21     // accumulator width; provably sufficient, see above
+    parameter ACC_W  = 26     // accumulator width; provably sufficient, see above
 )(
     input  wire [K*K*TC*DATA_W-1:0] win,   // from line_buffer: tap-major
     input  wire [TC*K*K*DATA_W-1:0] wk,    // from wgt_buffer: channel-major

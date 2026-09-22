@@ -56,7 +56,7 @@
 //============================================================================
 module rq_bank #(
     parameter TM      = 32,    // lanes, one requantize each
-    parameter ACC_W   = 21,    // accumulator width from pe_array
+    parameter ACC_W   = 26,    // accumulator width from pe_array
     parameter BIAS_W  = 32,    // int32 bias, as exported
     parameter M0_W    = 32,    // int32 fixed-point multiplier
     parameter SHIFT_W = 6,     // right-shift amount

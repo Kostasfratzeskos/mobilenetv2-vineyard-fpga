@@ -52,7 +52,7 @@ module dw_datapath_tb;
     localparam TC      = 16;
     localparam K       = 3;
     localparam NT      = K*K;
-    localparam ACC_W   = 21;
+    localparam ACC_W   = 26;
     localparam POOL_TM = 32;
     localparam SEL_W   = 1;
     localparam XW      = 8;
@@ -351,8 +351,8 @@ module dw_datapath_tb;
     endtask
 
     initial begin
-        $readmemh("../../software/golden/image_1/001_features_0_0.hex",         in_mem);
-        $readmemh("../../software/golden/image_1/002_features_1_conv_0_0.hex",  gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/001_features_0_0.hex",         in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/002_features_1_conv_0_0.hex",  gold_mem);
         $readmemh("../../software/export/features_1_conv_0_0_w.hex",            wq_mem);
         $readmemh("../../software/export/features_1_conv_0_0_b.hex",            b_mem);
         $readmemh("../../software/export/features_1_conv_0_0_m0.hex",           m0_mem);

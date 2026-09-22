@@ -82,8 +82,8 @@ module avgpool_layer_tb;
     integer c;
     logic [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/image_1/062_features_18_0.hex", in_mem);
-        $readmemh("../../software/golden/image_1/063_avgpool.hex",       gold_mem);
+        $readmemh("../../software/golden/healthy_hl6025/062_features_18_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_hl6025/063_avgpool.hex",       gold_mem);
 
         ap_valid=0; ap_first=0; ap_last=0; a_r=0; rq_en=0; act_r=0;
         m0_r=0; sh_r=0; qmax_r=0;

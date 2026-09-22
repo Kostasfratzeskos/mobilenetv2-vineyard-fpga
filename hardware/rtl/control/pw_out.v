@@ -43,7 +43,7 @@
 //
 //  So the stage costs two cycles of latency and none of throughput: one
 //  result in, one write out. Registering the accumulators here is ONE
-//  pipeline register (Tm*ACC_W = 672 bit), not the shadow register DD-015
+//  pipeline register (Tm*ACC_W = 832 bit), not the shadow register DD-015
 //  avoided - what R=32 removed was the drain counter and the stall path back
 //  into addr_gen, and those are still absent.
 //
@@ -57,7 +57,7 @@
 //============================================================================
 module pw_out #(
     parameter TM      = 32,
-    parameter ACC_W   = 21,
+    parameter ACC_W   = 26,
     parameter BIAS_W  = 32,
     parameter M0_W    = 32,
     parameter SHIFT_W = 6,

@@ -23,7 +23,7 @@
 //============================================================================
 module avgpool #(
     parameter DATA_W = 8,     // int8 activations
-    parameter ACC_W  = 21     // accumulator width (feeds requantize in_data)
+    parameter ACC_W  = 26     // accumulator width (feeds requantize in_data)
 )(
     input  wire                     clock,
     input  wire                     rst_n,     // async active-low reset

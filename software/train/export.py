@@ -349,6 +349,80 @@ def preprocess_image(path, ckpt):
 def _fname(name): return name.replace(".", "_")
 
 
+# ----------------------------------------------------------------------------
+# ACCUMULATOR WIDTH  --  a PROVABLE bound, checked every export
+# ----------------------------------------------------------------------------
+#  ACC_W used to be 21, chosen from a measurement: the largest |acc+bias| seen
+#  while running ONE image through ONE checkpoint. That is not a bound, it is an
+#  observation, and the 2026-07 retrain falsified it - features.3.conv.0.0
+#  channel 110 came out with a bias of 1,184,089, which overflows a 21-bit
+#  accumulator on its own, for every possible input. The hardware wrapped it
+#  negative, ReLU6 clamped it to zero, and 2.2M elements downstream were wrong
+#  with nothing anywhere saying why.
+#
+#  What follows is a bound instead, and it does not depend on the image at all:
+#
+#      |acc_oc|        <=  ( sum_taps |w[oc,tap]| ) * max|a|
+#      |acc_oc + bias| <=  the above + |bias_oc|
+#
+#  max|a| is a property of the FORMAT, not of the data: activations entering a
+#  layer are either a ReLU6 output in [0, relu6_qmax] or a plain int8 in
+#  [-128,127]. No input, however adversarial, can exceed this. So if the bound
+#  fits ACC_W, no image can ever overflow - and if it does not fit, the export
+#  stops here rather than three months later in a simulation log.
+RTL_TOP = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "..", "..", "hardware", "rtl", "control", "accel_top.v")
+
+
+def rtl_acc_w(path=RTL_TOP):
+    """The ACC_W the RTL is actually built with, so the two cannot drift."""
+    import re
+    try:
+        with open(path, encoding="utf-8") as fh:
+            m = re.search(r"parameter\s+ACC_W\s*=\s*(\d+)", fh.read())
+        return int(m.group(1)) if m else None
+    except OSError:
+        return None
+
+
+def check_acc_width(plan, acc_w):
+    a_max = 128                       # the int8 input image
+    worst, worst_name, rows = 0, "?", []
+    for op in plan:
+        if op.kind in ("conv", "linear"):
+            w = np.abs(op.wq.reshape(op.wq.shape[0], -1).astype(np.int64)).sum(axis=1)
+            bound = w * a_max + np.abs(op.bq.astype(np.int64))
+            peak = int(bound.max())
+            rows.append((op.name, peak))
+            if peak > worst:
+                worst, worst_name = peak, op.name
+        # what this op puts on the wire for the next one
+        if op.kind == "save":
+            continue
+        if op.kind == "conv" and getattr(op, "relu6", False):
+            a_max = max(int(op.q6), 1)
+        else:
+            a_max = 128
+
+    need = int(np.ceil(np.log2(max(worst, 1))) + 1)
+    print(f"\naccumulator bound (provable, any input):")
+    print(f"  worst |acc+bias| = {worst:,}  in {worst_name}  -> needs {need} signed bits")
+    if acc_w is None:
+        print("  WARNING: could not read ACC_W from the RTL - not checked")
+        return
+    limit = 1 << (acc_w - 1)
+    print(f"  RTL ACC_W = {acc_w}  -> range +/-{limit:,}  "
+          f"({limit/max(worst,1):.1f}x margin)")
+    if worst >= limit:
+        over = [f"{n} ({p:,})" for n, p in rows if p >= limit]
+        sys.exit(
+            f"\nACCUMULATOR TOO NARROW - the export is not safe on this RTL.\n"
+            f"  ACC_W={acc_w} holds +/-{limit:,}, this model needs {need} signed bits.\n"
+            f"  layers that do not fit: {', '.join(over)}\n"
+            f"Widen ACC_W in hardware/rtl/ (26 keeps the requantize multiply at "
+            f"2 DSP/lane; 28+ doubles it), or requantize so the biases fit.")
+
+
 def export_weights(plan, outdir):
     os.makedirs(outdir, exist_ok=True)
     entries = []
@@ -385,7 +459,27 @@ def export_weights(plan, outdir):
     return entries
 
 
-def export_golden(executor, plan, ckpt, image_path, golden_dir, s_first):
+def sha256_file(path):
+    """Identify the checkpoint a set of artifacts came from.
+
+    The weights in software/export/ and every golden set are derived from one
+    .pth, which is not in git. Once they were derived from two different ones:
+    the model was retrained five weeks after the export was committed, and a
+    later re-export silently moved the weights to the new checkpoint while the
+    golden vectors stayed on the old. Nothing in the artifacts said so. Both
+    manifests carry this hash now, and gen_program.py refuses to build a
+    testbench table when the two disagree.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def export_golden(executor, plan, ckpt, image_path, golden_dir, s_first,
+                  ckpt_sha=None):
     stem = os.path.splitext(os.path.basename(image_path))[0]
     gdir = os.path.join(golden_dir, stem)
     os.makedirs(gdir, exist_ok=True)
@@ -405,6 +499,7 @@ def export_golden(executor, plan, ckpt, image_path, golden_dir, s_first):
 
     classes = ckpt["classes"]
     gman = {"image": os.path.abspath(image_path),
+            "ckpt_sha256": ckpt_sha,
             "predicted_class": classes[pred],
             "logits_int16": [int(v) for v in logits],
             "layout": "activations (N,C,H,W) row-major, one value/line, $readmemh",
@@ -530,6 +625,8 @@ def main():
         ap.error("--data and --ckpt are required (or use --selftest)")
 
     device = "cpu"   # bit-exact reference: keep everything deterministic on CPU
+    ckpt_sha = sha256_file(args.ckpt)
+    print(f"checkpoint sha256: {ckpt_sha}")
     print("loading checkpoint + scales...")
     model, ckpt = load_checkpoint(args.ckpt, map_location=device)
     model.to(device).eval()
@@ -562,11 +659,16 @@ def main():
           f"json has {len(act)} layers")
     assign_scales(plan, act, s_logit)
 
+    # ---- the accumulator has to hold this model before anything is written ----
+    check_acc_width(plan, rtl_acc_w())
+
     # ---- export weights + manifest ----
     entries = export_weights(plan, args.outdir)
     s_first = act["features.0.0"]
     manifest = {
         "scheme": scales["scheme"],
+        "ckpt": os.path.abspath(args.ckpt),
+        "ckpt_sha256": ckpt_sha,
         "classes": classes,
         "img_size": ckpt.get("img_size", 224),
         "norm_mean": ckpt.get("norm_mean"), "norm_std": ckpt.get("norm_std"),
@@ -605,7 +707,7 @@ def main():
     # ---- golden vectors ----
     if args.image:
         gdir, pred = export_golden(executor, plan, ckpt, args.image,
-                                   args.golden_dir, s_first)
+                                   args.golden_dir, s_first, ckpt_sha)
         print(f"\ngolden vectors -> {gdir}")
         print(f"predicted class for golden image: {pred}")
     else:
