@@ -1,5 +1,6 @@
 {
   "scheme": "symmetric_int8_perchannel_w_pertensor_a_minmax",
+  "ckpt": "software/runs/mobilenetv2_grape.pth",
   "ckpt_sha256": "268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092",
   "classes": [
     "Black Rot",

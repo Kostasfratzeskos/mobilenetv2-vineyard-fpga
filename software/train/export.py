@@ -667,7 +667,13 @@ def main():
     s_first = act["features.0.0"]
     manifest = {
         "scheme": scales["scheme"],
-        "ckpt": os.path.abspath(args.ckpt),
+        # Repo-relative, not absolute: an absolute path names one machine's
+        # layout and is wrong everywhere else. The sha256 is the identifier
+        # that actually matters; this is just where to look for it.
+        "ckpt": os.path.relpath(
+            os.path.abspath(args.ckpt),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ).replace(os.sep, "/"),
         "ckpt_sha256": ckpt_sha,
         "classes": classes,
         "img_size": ckpt.get("img_size", 224),

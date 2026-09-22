@@ -20,6 +20,12 @@ data/*
 *.hdf5
 *.onnx
 *.tflite
+#  ...except the one checkpoint everything is derived from, which goes in via
+#  Git LFS. It was untracked, it was retrained on 2026-07-22 without the export
+#  being regenerated, and the two silently disagreed for five weeks (DD-019).
+#  The manifests carry its sha256 so a mismatch is caught, but catching it is
+#  no use if nobody can obtain the file the hash names.
+!software/runs/mobilenetv2_grape.pth
 # Large exported weight blobs — track with Git LFS if you must version them:
 # software/export/*.bin
 
@@ -103,3 +109,24 @@ build/synth/*backup.log
 #  here is a source of truth. Delete it and re-run whenever:
 #      vivado -mode batch -source scripts/make_project.tcl
 build/vivado/
+
+# ── Golden vector sets ───────────────────────────────
+#  Each set is 28 MB of hex: one file per layer for one image. They are
+#  DERIVED - `export.py --image <path>` regenerates any of them exactly, given
+#  the checkpoint (which is in LFS above, for precisely this reason).
+#
+#  So exactly one set is tracked: the one hardware/tb points at. The others are
+#  local artifacts. To reproduce the per-class verification table in
+#  docs/lab_notebook.md:
+#
+#      cd software/train && python export.py --data ../../data/grape \
+#          --ckpt ../runs/mobilenetv2_grape.pth --scales quant_scales.json \
+#          --image <image> --check 0
+#      python scripts/gen_program.py --emit --golden-dir software/golden/<set>
+#      bash scripts/run_sim.sh accel accel_top ...
+software/golden/*/
+!software/golden/healthy_hl6025/
+#  image_1 is 2026-06 and cannot be regenerated: its source image is gone from
+#  data/ and its checkpoint was overwritten. Its blobs are already in history,
+#  so excluding it here would save nothing; kept, marked stale in its manifest.
+!software/golden/image_1/

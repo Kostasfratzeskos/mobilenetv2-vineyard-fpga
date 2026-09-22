@@ -569,6 +569,48 @@ wrote quant_scales.json  (53 layers)
   with +3.706 ns of slack. It reads the period off the design now. Same failure mode as
   the two testbench constants above, third instance this session: a value typed in one
   place that another place was free to change.
+- One image per class, end to end. The question "will another image give correct
+  results" has two halves and they have different answers, so both were measured.
+
+  Bit-exactness against the software model - the accelerator's actual contract:
+
+      image           class         argmax  logits                        result
+      blackrot_0376   Black Rot     0       12405  -2762  -5686  -3679    ALL PASS
+      esca_4399       ESCA          1       -8592  23216 -10575  -3925    ALL PASS
+      healthy_6067    Healthy       2       -5175  -6069  14216  -4695    ALL PASS
+      blight_1461     Leaf Blight   3       -1751  -7243  -4688  13659    ALL PASS
+
+  6,895,780 elements each. All four argmax indices occur, so logit_out's 4-way
+  comparator was exercised with every possible winner rather than always the same one.
+
+  Accuracy, which is a different question and not the hardware's to answer -
+  export.py --check 32, integer pipeline against float and against fake-quant:
+
+      agree with FLOAT     model: 32/32
+      agree with FAKE-QUANT model: 32/32
+
+  So on this val sample quantization costs nothing in predicted class. Worth being
+  precise about what that means: the accelerator reproduces the int8 model exactly,
+  including any mistake it makes. "Correct prediction" is a property of the model,
+  measured here, not of the RTL.
+- Independent confirmation of the DD-019 bound, from the same --check run:
+  max |accumulator| over 32 images = 1,209,578 (22 bits), against the provable bound of
+  5,094,750 (24 bits) and ACC_W=26's +-33,554,432. Two things follow. Real data reaches
+  only 24% of the bound, which is why a measurement looked safe for so long. And
+  1,209,578 > 1,048,576, so ACC_W=21 would have overflowed across this sample too - the
+  failure was never specific to one image.
+- Audited the other fixed widths for the same failure mode - a width chosen from
+  observation rather than from a limit. SHIFT_W=6 holds 0..63 against a model max of 48;
+  M0_W=32 holds the fixed-point multipliers by construction (max 2,147,461,603, which is
+  99.999% of the range because that is how a normalized fixed-point multiplier is built,
+  not because it is close to breaking); BIAS_W=32 against max |bias| 1,184,089. All three
+  are properties of the MODEL, not of the image, so no input can move them.
+- Repo hygiene, both consequences of DD-019: the checkpoint is in Git LFS now (its LFS
+  OID is its sha256, so it is literally the string the manifests carry), and exactly one
+  golden set is tracked - the one hardware/tb points at. The rest are gitignored with
+  the regeneration command in the comment, since export.py reproduces any of them byte
+  for byte from the checkpoint. Verified: four re-exports in a row left all 215 weight
+  files identical.
 - Blocked on: nothing
 - Next: the MAC-tree pipelining of DD-018, for which the async resets need to become
   synchronous first (DPIR-2, 10,940 warnings) or Vivado cannot fold the new registers
