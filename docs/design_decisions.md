@@ -417,9 +417,37 @@ argmax over the 4 int16 logits is the predicted class.
   loudly rather than silently, but still fails); testing more images (cannot establish a
   bound, only raise confidence - and would have missed this, since the overflow was in
   the bias and independent of the image).
-- Cost: +5 bits on every accumulator path. The pool still stores int8, so this is the
-  feeder-to-out_stage buses (32 lanes), `out_stage`'s capture register and the 5-way
-  feeder mux - about 160 extra flip-flops out of 230,400. Re-synthesis pending.
+- Cost, MEASURED. Two synthesis runs at the SAME 4.000 ns constraint, so ACC_W is the
+  only variable - the first attempt compared 21 @ 4 ns against 26 @ 25 ns and the relaxed
+  constraint hid about 1,400 LUTs and 12.5 BRAM tiles of the difference:
+
+  | | ACC_W=21 | ACC_W=26 | |
+  |:--|--:|--:|--:|
+  | CLB LUTs | 32,387 | 35,531 | +3,144 (+9.7%) |
+  | CLB Registers | 5,705 | 6,187 | +482 (+8.4%) |
+  | CARRY8 | 785 | 937 | +152 (+19.4%) |
+  | Block RAM | 176 | 176 | 0 |
+  | URAM | 52 | 52 | 0 |
+  | **DSPs** | **944** | **944** | **0** |
+  | WNS | -17.357 ns | -17.279 ns | +0.078 |
+
+  The DSP count is the number this decision was made on and it did not move: 26 bits fits
+  the DSP48E2's 27-bit operand port, so the requantize multiply is still 2 DSP per lane.
+  Timing is marginally BETTER, which is expected - the critical path is DD-018's 27-deep
+  DSP cascade, which the accumulator width does not touch; the extra bits land in the
+  final adder and the feeder mux, nowhere near the bottleneck.
+
+  The predicted cost was "about 160 extra flip-flops", counting only `out_stage`'s
+  capture register. The real figure is 3x that, because `pw_out`'s pipeline register, the
+  feeders' delay lines and `logit_out` all carry accumulators too. The LUT and CARRY8
+  growth is the widened 5-way feeder mux and the wider adders in bias_add / requantize.
+  At 9.7% of a 14% utilisation it is not a constraint.
+
+  At the design's actual operating point (25.000 ns, the clock lowered to 40 MHz) the
+  design MEETS timing: WNS +3.706 ns, 0 failing endpoints of 92,611, 34,159 LUTs and
+  163.5 BRAM. That is the run left in `build/synth/`, so its utilisation report shows
+  34,159 rather than the 35,531 in the table above - the table is the controlled 4 ns
+  comparison, this is the operating point.
 - Verification: all 31 testbenches pass at ACC_W=26 against a golden set regenerated from
   the current checkpoint, including the 6,895,780-element end-to-end check.
 - Revisit if: never by measurement. The export-time check is the mechanism now; if it

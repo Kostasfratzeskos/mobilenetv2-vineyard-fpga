@@ -54,12 +54,19 @@ set paths [get_timing_paths -max_paths 1 -nworst 1 -setup]
 if {[llength $paths] > 0} {
     set p   [lindex $paths 0]
     set wns [get_property SLACK $p]
-    puts [format "  WNS (setup)      : %s ns   (target period 4.000 ns = 250 MHz)" $wns]
-    set fmax [expr {1000.0 / (4.000 - $wns)}]
+    # The period comes from the constraint file, not from a literal here. It was
+    # 4.000 once, the xdc moved to 25.000, and this line kept dividing by 4 -
+    # which turned a healthy +3.706 ns of slack into "Fmax 3401 MHz, meets
+    # 250 MHz". A summary that cannot be wrong is worth more than one that is
+    # short.
+    set per  [get_property PERIOD [lindex [get_clocks] 0]]
+    set fmax [expr {1000.0 / ($per - $wns)}]
+    puts [format "  WNS (setup)      : %s ns   (constraint %.3f ns = %.1f MHz)" \
+              $wns $per [expr {1000.0 / $per}]]
     if {$wns < 0} {
-        puts [format "  => Fmax          : %.1f MHz   - DOES NOT MEET 250 MHz" $fmax]
+        puts [format "  => Fmax          : %.1f MHz   - DOES NOT MEET the constraint" $fmax]
     } else {
-        puts [format "  => Fmax          : %.1f MHz   - meets 250 MHz" $fmax]
+        puts [format "  => Fmax          : %.1f MHz   - meets the constraint" $fmax]
     }
     puts "  worst path from  : [get_property STARTPOINT_PIN $p]"
     puts "               to  : [get_property ENDPOINT_PIN   $p]"

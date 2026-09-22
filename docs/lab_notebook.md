@@ -552,7 +552,24 @@ wrote quant_scales.json  (53 layers)
 - Result: ALL 31 testbenches pass on the current checkpoint, including the 6,895,780
   element end-to-end check. `[ok] logits -4950 -6177 15185 -5486 bit-exact`,
   `[ok] predicted class 2 = Healthy`.
+- Synthesised, same day. ACC_W=26 costs +3,144 LUTs (+9.7%), +482 registers (+8.4%),
+  +152 CARRY8, and ZERO DSPs, BRAM or URAM - measured against ACC_W=21 at the SAME 4 ns
+  constraint. The first comparison I ran was 21 @ 4 ns against 26 @ 25 ns, which is two
+  variables, and the relaxed constraint hid ~1,400 LUTs and 12.5 BRAM tiles of the real
+  difference. Worth remembering: a relaxed timing constraint is not a neutral background,
+  the tool spends the slack on area.
+  My prediction was "about 160 flops" - low by 3x, because I counted out_stage's capture
+  register and forgot pw_out's pipeline register, the feeders' delay lines and logit_out.
+  Timing is marginally BETTER at 26 (WNS -17.279 vs -17.357 at 4 ns): the critical path
+  is DD-018's DSP cascade, which the accumulator width does not touch.
+  At the real operating point of 25 ns the design MEETS timing - WNS +3.706 ns, 0 failing
+  endpoints of 92,611, Fmax 47.0 MHz.
+- Found while doing it: scripts/synth.tcl had 4.000 hardcoded in its Fmax line while the
+  xdc had moved to 25.000, so it reported "Fmax 3401.4 MHz - meets 250 MHz" for a design
+  with +3.706 ns of slack. It reads the period off the design now. Same failure mode as
+  the two testbench constants above, third instance this session: a value typed in one
+  place that another place was free to change.
 - Blocked on: nothing
-- Next: re-synthesise at ACC_W=26 (area cost is ~160 flops, but the number should be
-  measured); then the MAC-tree pipelining of DD-018, for which the async resets need to
-  become synchronous first or Vivado cannot fold the new registers into the DSPs.
+- Next: the MAC-tree pipelining of DD-018, for which the async resets need to become
+  synchronous first (DPIR-2, 10,940 warnings) or Vivado cannot fold the new registers
+  into the DSPs.
