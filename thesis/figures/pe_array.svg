@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 700" width="1240" height="700"
+     font-family="Helvetica, Arial, sans-serif">
+  <title>pe_array: ο pointwise MAC array Tm x Tn</title>
+  <desc>Tm=32 lanes, καθένα με Tn=16 πολλαπλασιαστές, adder tree και έναν accumulator.
+        Τα activations γίνονται broadcast σε όλα τα lanes, τα βάρη είναι ανά lane.</desc>
+
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 z" fill="#1f2937"/>
+    </marker>
+    <marker id="ahb" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="aha" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <rect width="1240" height="700" fill="#ffffff"/>
+
+  <!-- ===================== sources and buses ===================== -->
+  <rect x="20" y="34" width="110" height="36" rx="4" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="75" y="57" text-anchor="middle" font-size="12" font-family="Consolas, monospace" fill="#1d4ed8">act_buffer</text>
+
+  <rect x="20" y="92" width="110" height="36" rx="4" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+  <text x="75" y="115" text-anchor="middle" font-size="12" font-family="Consolas, monospace" fill="#b45309">wgt_buffer</text>
+
+  <!-- activation bus: ONE broadcast line -->
+  <line x1="130" y1="52" x2="960" y2="52" stroke="#1d4ed8" stroke-width="2.5"/>
+  <text x="140" y="26" font-size="11.5" fill="#1d4ed8">a — Tn x 8 = 128 bit / κύκλο   (broadcast: το ΙΔΙΟ σε κάθε lane)</text>
+  <circle cx="210" cy="52" r="3.5" fill="#1d4ed8"/>
+  <circle cx="440" cy="52" r="3.5" fill="#1d4ed8"/>
+  <circle cx="830" cy="52" r="3.5" fill="#1d4ed8"/>
+  <line x1="210" y1="52" x2="210" y2="146" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+  <line x1="440" y1="52" x2="440" y2="146" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+  <line x1="830" y1="52" x2="830" y2="146" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <!-- weight bus: gapped where the activation drops cross (no connection) -->
+  <g stroke="#b45309" stroke-width="2" stroke-dasharray="6 3">
+    <line x1="130" y1="110" x2="204" y2="110"/>
+    <line x1="216" y1="110" x2="434" y2="110"/>
+    <line x1="446" y1="110" x2="824" y2="110"/>
+    <line x1="836" y1="110" x2="960" y2="110"/>
+  </g>
+  <text x="140" y="140" font-size="11.5" fill="#b45309">w — Tm x Tn x 8 = 4096 bit / κύκλο   (ξεχωριστή φέτα ανά lane)</text>
+  <circle cx="270" cy="110" r="3.5" fill="#b45309"/>
+  <circle cx="500" cy="110" r="3.5" fill="#b45309"/>
+  <circle cx="890" cy="110" r="3.5" fill="#b45309"/>
+  <line x1="270" y1="110" x2="270" y2="146" stroke="#b45309" stroke-width="2" marker-end="url(#aha)"/>
+  <line x1="500" y1="110" x2="500" y2="146" stroke="#b45309" stroke-width="2" marker-end="url(#aha)"/>
+  <line x1="890" y1="110" x2="890" y2="146" stroke="#b45309" stroke-width="2" marker-end="url(#aha)"/>
+
+  <!-- ===================== lane 0 ===================== -->
+  <g transform="translate(150,150)">
+    <rect x="0" y="0" width="180" height="320" rx="6" fill="#fbfbfd" stroke="#374151" stroke-width="1.5"/>
+    <text x="90" y="25" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">lane 0</text>
+    <text x="90" y="43" text-anchor="middle" font-size="10" font-family="Consolas, monospace" fill="#6b7280">oc = 0  ·  w[0..15]</text>
+
+    <rect x="18" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="31" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <rect x="52" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="65" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <text x="103" y="84" text-anchor="middle" font-size="15" fill="#9ca3af">· · ·</text>
+    <rect x="136" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="149" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+
+    <g stroke="#374151" stroke-width="1.2">
+      <line x1="31" y1="90" x2="31" y2="126"/>
+      <line x1="65" y1="90" x2="65" y2="126"/>
+      <line x1="149" y1="90" x2="149" y2="126"/>
+    </g>
+
+    <path d="M14,126 L166,126 L128,164 L52,164 Z" fill="#f3f4f6" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="150" text-anchor="middle" font-size="11" fill="#1f2937">adder tree</text>
+
+    <line x1="90" y1="164" x2="90" y2="184" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+    <circle cx="90" cy="200" r="14" fill="#ffffff" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="205" text-anchor="middle" font-size="15" fill="#1f2937">+</text>
+    <line x1="90" y1="214" x2="90" y2="232" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+
+    <rect x="52" y="236" width="76" height="36" rx="3" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+    <path d="M52,252 L61,259 L52,266 Z" fill="#1d4ed8"/>
+    <text x="95" y="260" text-anchor="middle" font-size="13" font-family="Consolas, monospace" fill="#1e3a8a">acc</text>
+
+    <path d="M128,254 L152,254 L152,200 L108,200" fill="none" stroke="#1d4ed8" stroke-width="1.4" marker-end="url(#ahb)"/>
+
+    <line x1="90" y1="272" x2="90" y2="320" stroke="#374151" stroke-width="1.4"/>
+  </g>
+
+  <!-- ===================== lane 1 ===================== -->
+  <g transform="translate(380,150)">
+    <rect x="0" y="0" width="180" height="320" rx="6" fill="#fbfbfd" stroke="#374151" stroke-width="1.5"/>
+    <text x="90" y="25" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">lane 1</text>
+    <text x="90" y="43" text-anchor="middle" font-size="10" font-family="Consolas, monospace" fill="#6b7280">oc = 1  ·  w[16..31]</text>
+
+    <rect x="18" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="31" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <rect x="52" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="65" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <text x="103" y="84" text-anchor="middle" font-size="15" fill="#9ca3af">· · ·</text>
+    <rect x="136" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="149" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+
+    <g stroke="#374151" stroke-width="1.2">
+      <line x1="31" y1="90" x2="31" y2="126"/>
+      <line x1="65" y1="90" x2="65" y2="126"/>
+      <line x1="149" y1="90" x2="149" y2="126"/>
+    </g>
+
+    <path d="M14,126 L166,126 L128,164 L52,164 Z" fill="#f3f4f6" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="150" text-anchor="middle" font-size="11" fill="#1f2937">adder tree</text>
+
+    <line x1="90" y1="164" x2="90" y2="184" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+    <circle cx="90" cy="200" r="14" fill="#ffffff" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="205" text-anchor="middle" font-size="15" fill="#1f2937">+</text>
+    <line x1="90" y1="214" x2="90" y2="232" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+
+    <rect x="52" y="236" width="76" height="36" rx="3" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+    <path d="M52,252 L61,259 L52,266 Z" fill="#1d4ed8"/>
+    <text x="95" y="260" text-anchor="middle" font-size="13" font-family="Consolas, monospace" fill="#1e3a8a">acc</text>
+
+    <path d="M128,254 L152,254 L152,200 L108,200" fill="none" stroke="#1d4ed8" stroke-width="1.4" marker-end="url(#ahb)"/>
+
+    <line x1="90" y1="272" x2="90" y2="320" stroke="#374151" stroke-width="1.4"/>
+  </g>
+
+  <!-- ===================== ellipsis ===================== -->
+  <text x="665" y="300" text-anchor="middle" font-size="34" fill="#9ca3af">· · ·</text>
+  <text x="665" y="336" text-anchor="middle" font-size="11.5" fill="#6b7280">lanes 2 … 30</text>
+
+  <!-- ===================== lane 31 ===================== -->
+  <g transform="translate(770,150)">
+    <rect x="0" y="0" width="180" height="320" rx="6" fill="#fbfbfd" stroke="#374151" stroke-width="1.5"/>
+    <text x="90" y="25" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">lane 31</text>
+    <text x="90" y="43" text-anchor="middle" font-size="10" font-family="Consolas, monospace" fill="#6b7280">oc = 31  ·  w[496..511]</text>
+
+    <rect x="18" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="31" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <rect x="52" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="65" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+    <text x="103" y="84" text-anchor="middle" font-size="15" fill="#9ca3af">· · ·</text>
+    <rect x="136" y="64" width="26" height="26" rx="3" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+    <text x="149" y="82" text-anchor="middle" font-size="14" fill="#1f2937">x</text>
+
+    <g stroke="#374151" stroke-width="1.2">
+      <line x1="31" y1="90" x2="31" y2="126"/>
+      <line x1="65" y1="90" x2="65" y2="126"/>
+      <line x1="149" y1="90" x2="149" y2="126"/>
+    </g>
+
+    <path d="M14,126 L166,126 L128,164 L52,164 Z" fill="#f3f4f6" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="150" text-anchor="middle" font-size="11" fill="#1f2937">adder tree</text>
+
+    <line x1="90" y1="164" x2="90" y2="184" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+    <circle cx="90" cy="200" r="14" fill="#ffffff" stroke="#374151" stroke-width="1.4"/>
+    <text x="90" y="205" text-anchor="middle" font-size="15" fill="#1f2937">+</text>
+    <line x1="90" y1="214" x2="90" y2="232" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+
+    <rect x="52" y="236" width="76" height="36" rx="3" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+    <path d="M52,252 L61,259 L52,266 Z" fill="#1d4ed8"/>
+    <text x="95" y="260" text-anchor="middle" font-size="13" font-family="Consolas, monospace" fill="#1e3a8a">acc</text>
+
+    <path d="M128,254 L152,254 L152,200 L108,200" fill="none" stroke="#1d4ed8" stroke-width="1.4" marker-end="url(#ahb)"/>
+
+    <line x1="90" y1="272" x2="90" y2="320" stroke="#374151" stroke-width="1.4"/>
+  </g>
+
+  <!-- ===================== accumulators -> out_stage ===================== -->
+  <line x1="240" y1="470" x2="240" y2="526" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+  <line x1="470" y1="470" x2="470" y2="526" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+  <line x1="860" y1="470" x2="860" y2="526" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+  <text x="248" y="497" font-size="10" font-family="Consolas, monospace" fill="#6b7280">acc[0] · 21 bit</text>
+  <text x="478" y="497" font-size="10" font-family="Consolas, monospace" fill="#6b7280">acc[1]</text>
+  <text x="868" y="497" font-size="10" font-family="Consolas, monospace" fill="#6b7280">acc[31]</text>
+
+  <rect x="150" y="530" width="800" height="56" rx="6" fill="#ecfdf5" stroke="#047857" stroke-width="1.6"/>
+  <text x="550" y="556" text-anchor="middle" font-size="13.5" font-weight="600" fill="#065f46">out_stage  —  bias_add  →  requantize</text>
+  <text x="550" y="576" text-anchor="middle" font-size="11" fill="#047857">32 lanes x (bias, m0, shift)  ·  στρογγυλοποίηση και clamp σε int8</text>
+
+  <line x1="550" y1="586" x2="550" y2="636" stroke="#374151" stroke-width="1.4" marker-end="url(#ah)"/>
+  <text x="562" y="618" font-size="11.5" fill="#1f2937">32 x int8  →  act_buffer</text>
+
+  <!-- ===================== side panel ===================== -->
+  <rect x="980" y="120" width="250" height="420" rx="6" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+
+  <text x="996" y="150" font-size="12.5" font-weight="600" fill="#1f2937">P = Tm · Tn = 32 x 16</text>
+  <text x="996" y="170" font-size="12.5" font-weight="600" fill="#1d4ed8">= 512 MAC / κύκλο</text>
+  <line x1="996" y1="186" x2="1214" y2="186" stroke="#e5e7eb" stroke-width="1"/>
+
+  <text x="996" y="210" font-size="11" fill="#374151">Ένα dot product μήκους IC</text>
+  <text x="996" y="227" font-size="11" fill="#374151">χρειάζεται ceil(IC / Tn) κύκλους:</text>
+
+  <g font-size="10" font-family="Consolas, monospace" fill="#1f2937">
+    <text x="996" y="252">partial = Σ a[j]·w[j], j=0..15</text>
+    <text x="996" y="276">first   acc &lt;- 0   + partial</text>
+    <text x="996" y="292">        acc &lt;- acc + partial</text>
+    <text x="996" y="308">last    acc &lt;- acc + partial</text>
+    <text x="996" y="324">done    acc τελικό → out_stage</text>
+  </g>
+  <line x1="996" y1="342" x2="1214" y2="342" stroke="#e5e7eb" stroke-width="1"/>
+
+  <text x="996" y="364" font-size="11" font-weight="600" fill="#1f2937">Bandwidth ανά κύκλο</text>
+  <g font-size="10" font-family="Consolas, monospace">
+    <text x="996" y="383" fill="#1d4ed8">activations    128 bit</text>
+    <text x="996" y="399" fill="#b45309">weights       4096 bit</text>
+  </g>
+  <line x1="996" y1="416" x2="1214" y2="416" stroke="#e5e7eb" stroke-width="1"/>
+
+  <text x="996" y="438" font-size="11" font-weight="600" fill="#1f2937">DD-013 — Tm=32 x Tn=16</text>
+  <text x="996" y="456" font-size="10.5" fill="#4b5563">92,1% utilization στα 35</text>
+  <text x="996" y="471" font-size="10.5" fill="#4b5563">pointwise layers του δικτύου.</text>
+  <text x="996" y="496" font-size="10.5" fill="#4b5563">Tails: ο feeder οδηγεί μηδενικά</text>
+  <text x="996" y="511" font-size="10.5" fill="#4b5563">βάρη στα αχρησιμοποίητα lanes</text>
+  <text x="996" y="526" font-size="10.5" fill="#4b5563">και taps — bit-exact.</text>
+
+  <text x="20" y="676" font-size="9.5" font-family="Consolas, monospace" fill="#9ca3af">hardware/rtl/kernels/pe_array.v  ·  mac_lane.v</text>
+</svg>
