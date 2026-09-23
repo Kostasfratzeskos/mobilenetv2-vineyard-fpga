@@ -267,6 +267,9 @@ module accel_top #(
         .op_base_in(op_base_in), .op_base_out(op_base_out),
         .op_base_saved(op_base_saved),
         .op_busy(op_busy),
+        // T-3: pw_out's tag comparator is a real witness and its verdict used
+        // to stop at a top-level pin. Now it terminates the run.
+        .op_error(tag_error),
         .pc(pc), .running(running), .done(done), .fault(fault)
     );
 

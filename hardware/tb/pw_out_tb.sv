@@ -85,7 +85,12 @@ module pw_out_tb;
 
     pw_out #(.TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
              .SHIFT_W(SHIFT_W), .DATA_W(DATA_W), .PIX_W(PIX_W), .OCT_W(OCT_W),
-             .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W), .AA_W(AA_W)) u_dut (
+             .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W), .AA_W(AA_W),
+             // This testbench's job includes firing the tag tripwire on
+             // purpose (see the header), so the drift must report rather than
+             // stop the simulation. accel_top leaves this at 1, where a drift
+             // has no correct continuation. T-3/T-4.
+             .TAG_DRIFT_IS_FATAL(0)) u_dut (
         .clock(clock), .rst_n(rst_n),
         .start(start), .n_oc(n_oc), .base_out(base_out),
         .os_acc(os_acc), .os_acc_valid(os_acc_valid),

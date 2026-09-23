@@ -75,6 +75,7 @@ module top_seq_tb;
         .op_base_in(op_base_in), .op_base_out(op_base_out),
         .op_base_saved(op_base_saved),
         .op_busy(op_busy),
+        .op_error(1'b0),          // T-3: no feeder self-check trips here
         .pc(pc), .running(running), .done(done), .fault(fault)
     );
 
@@ -218,7 +219,7 @@ module top_seq_tb;
     //  would prove nothing extra about the logic.
     localparam NEG_WDOG = 6;
 
-    logic             g_start, g_ld_done, g_busy, g_pg_en;
+    logic             g_start, g_ld_done, g_busy, g_pg_en, g_op_error;
     logic [PGA_W-1:0] g_pg_addr;
     logic [PW_W-1:0]  g_pg_data;
     logic [NI_W-1:0]  g_n_instr;
@@ -231,7 +232,7 @@ module top_seq_tb;
         .pg_en(g_pg_en), .pg_addr(g_pg_addr), .pg_data(g_pg_data),
         .ld_req(g_ld_req), .ld_done(g_ld_done),
         .op_start(g_op_start),
-        .op_busy(g_busy),
+        .op_busy(g_busy), .op_error(g_op_error),
         .running(g_running), .done(g_done), .fault(g_fault)
     );
 
@@ -341,6 +342,33 @@ module top_seq_tb;
             // this test waited (1<<NEG_WDOG)+8 and missed the trip.
             g_expect_fault("T-2 op_busy never rises (watchdog)", (1<<NEG_WDOG) + 40);
 
+            // T-3: a feeder reports a misplaced result while the op is
+            // running. The run must be ABANDONED, not completed - completing it
+            // is what produced a confident wrong classification before.
+            g_reset();
+            g_write_op0(4'h2);                  // OP_PW, a real opcode
+            g_n_instr = 8'd1;
+            g_busy    = 1'b0;
+            @(negedge clock);
+            g_start = 1'b1;
+            @(negedge clock);
+            g_start = 1'b0;
+            repeat (14) @(negedge clock);       // through S_FETCH/S_LOAD/S_GO
+            g_busy = 1'b1;                      // the feeder takes the job
+            repeat (4) @(negedge clock);
+            g_op_error = 1'b1;                  // ... and then condemns it
+            repeat (4) @(negedge clock);
+            g_op_error = 1'b0;
+            if (g_fault !== 1'b1) begin
+                fails++;
+                $display("  [ERR] T-3 op_error: fault did not fire");
+            end else if (g_running !== 1'b0) begin
+                fails++;
+                $display("  [ERR] T-3 op_error: fault fired but running is still high");
+            end else
+                $display("  [ok ] T-3 op_error mid-run: the run is abandoned, not completed");
+            g_busy = 1'b0;
+
             // Recovery in ONE pulse. S_ERR admits `start` on the same terms as
             // S_IDLE, so a caller does not have to know that it faulted: the
             // same start that would have launched a run launches one.
@@ -369,7 +397,7 @@ module top_seq_tb;
 
         start = 0; n_instr = 0; pg_en = 0; pg_addr = 0; pg_data = 0;
         g_start = 0; g_n_instr = 0; g_pg_en = 0; g_pg_addr = 0; g_pg_data = 0;
-        g_ld_done = 0; g_busy = 0;
+        g_ld_done = 0; g_busy = 0; g_op_error = 0;
         ld_done = 0; op_busy = 0;
         ld_seen = 0; saw_busy = 0; arm = 0; stub = 0;
         cnt_stem = 0; cnt_pw = 0; cnt_dw = 0; cnt_res = 0; cnt_gap = 0; cnt_lin = 0;

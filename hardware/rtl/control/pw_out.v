@@ -67,7 +67,17 @@ module pw_out #(
     parameter PDEPTH  = 64,     // parameter buffer depth in oc_tiles
     parameter PA_W    = 6,      // clog2(PDEPTH)
     parameter BANK_W  = 5,      // clog2(TM)
-    parameter AA_W    = 16      // activation buffer address width
+    parameter AA_W    = 16,     // activation buffer address width
+
+    // Simulation only, and it does not affect synthesis at all: the check it
+    // guards lives inside `ifndef SYNTHESIS`. 1 means a tag drift stops the
+    // simulation where the evidence is, which is what every instance in the
+    // design wants. The ONE legitimate reason to pass 0 is a testbench whose
+    // PURPOSE is to fire this tripwire and then check that it fired -
+    // pw_out_tb does exactly that, because a self-check that cannot fire is
+    // indistinguishable from one that does not work. Do not pass 0 anywhere
+    // else; accel_top does not.
+    parameter TAG_DRIFT_IS_FATAL = 1
 )(
     input  wire                     clock,
     input  wire                     rst_n,
@@ -131,6 +141,21 @@ module pw_out #(
     reg [PIX_W-1:0] exp_pix;
     reg [OCT_W-1:0] exp_oct;
 
+    // T-4: `!=`, not `!==`. This comparison used to be written with the
+    // case-inequality operator, and Vivado's own log in this repo said what
+    // that cost:
+    //
+    //     WARNING: [Synth 8-589] replacing case/wildcard equality operator
+    //     !== with logical equality operator != [pw_out.v:144]
+    //
+    // So in simulation an X on the tag SET tag_error, and in hardware the same
+    // X yields X through `!=` and the flag stays clear. The circuit that was
+    // verified was not the circuit that ships - in the one module whose header
+    // argues for the value of this check. `!=` is now what both tools see, and
+    // the four-state detection that `!==` was providing has moved into the
+    // simulation-only block below, where it actually works.
+    wire tag_mismatch = (acc_pix != exp_pix) || (acc_oct != exp_oct);
+
     always @(posedge clock or negedge rst_n) begin
         if (!rst_n) begin
             exp_pix   <= {PIX_W{1'b0}};
@@ -141,7 +166,7 @@ module pw_out #(
             exp_oct   <= {OCT_W{1'b0}};
             tag_error <= 1'b0;
         end else if (acc_valid) begin
-            if (acc_pix !== exp_pix || acc_oct !== exp_oct)
+            if (tag_mismatch)
                 tag_error <= 1'b1;
             if (exp_oct == n_oc - 1'b1) begin
                 exp_oct <= {OCT_W{1'b0}};
@@ -151,6 +176,45 @@ module pw_out #(
             end
         end
     end
+
+    // ---- T-3 / T-4: the verdict, where it is worth something ------------
+    //
+    //  T-3's complaint is that this module is the ONE place in the design with
+    //  a correct witness, and its verdict was discarded: tag_error went to a
+    //  top-level pin and nowhere else. On a drift the corrupted write still
+    //  happened, the remaining layers consumed the bad tensor, and the run
+    //  finished with a confident wrong classification. The counterpart is C-2,
+    //  where no witness exists at all.
+    //
+    //  Two halves of the fix. In hardware, accel_top now routes tag_error into
+    //  top_seq as a terminating condition, so a drift abandons the run instead
+    //  of completing it. In simulation, stop where the evidence is: the tags
+    //  are on the bus, exp_* holds what they should have been, and one more
+    //  cycle of simulating overwrites both.
+    //
+    //  This one DOES use "ERROR:" and $finish, unlike top_seq's [FAULT]
+    //  messages, and the difference is the point: a tag drift is a condition
+    //  with no correct way to carry on.
+`ifndef SYNTHESIS
+    // What `!==` used to catch, kept where four-state comparison is real. A
+    // reduction XOR of a vector holding any X is X.
+    wire tag_unknown = ((^acc_pix) === 1'bx) || ((^acc_oct) === 1'bx);
+
+    always @(posedge clock) begin
+        if (rst_n && !start && acc_valid && (tag_mismatch || tag_unknown)) begin
+            if (TAG_DRIFT_IS_FATAL) begin
+                $display("ERROR: %m T-3 tag drift at time %0t: result carries (pix=%0d, oct=%0d), the emission order says (pix=%0d, oct=%0d)%s",
+                         $time, acc_pix, acc_oct, exp_pix, exp_oct,
+                         tag_unknown ? " [tag contains X]" : "");
+                $finish;
+            end else begin
+                $display("  [tripwire] %m T-3 tag drift at time %0t: (pix=%0d, oct=%0d) vs expected (pix=%0d, oct=%0d)%s",
+                         $time, acc_pix, acc_oct, exp_pix, exp_oct,
+                         tag_unknown ? " [tag contains X]" : "");
+            end
+        end
+    end
+`endif
 
 endmodule
 

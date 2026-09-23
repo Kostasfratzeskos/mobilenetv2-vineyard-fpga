@@ -130,6 +130,14 @@ module top_seq #(
     // ---- from whichever feeder is running --------------------------------
     input  wire                op_busy,
 
+    // A feeder's own self-check says its result is in the wrong place (T-3).
+    // Today that is pw_out's (pix, oct) tag comparator, which is the only
+    // witness of its kind in the design; its verdict used to reach a top-level
+    // pin and nothing else, so a drift completed the run and produced a
+    // confident wrong answer. Terminating is the only combination with
+    // "detect" that is worth anything.
+    input  wire                op_error,
+
     output reg  [NI_W-1:0]     pc,          // instruction index, for debug
     output reg                 running,
     output reg                 done,        // pulses when the program ends
@@ -313,15 +321,16 @@ module top_seq #(
             // to fall. A single "wait until not busy" would fall straight
             // through, because a feeder cannot assert busy until the cycle
             // after it sees op_start.
-            S_WAIT: if (wdog_trip) begin
+            S_WAIT: if (wdog_trip || op_error) begin
                 // T-2 cause (b): the feeder's own zero-shape guard refused the
                 // op, so the defensive behaviour is what causes the hang.
+                // T-3: or a feeder's self-check reported a misplaced result.
                 fault   <= 1'b1;
                 running <= 1'b0;
                 st      <= S_ERR;
             end else if (op_busy) st <= S_RUN;
 
-            S_RUN: if (wdog_trip) begin
+            S_RUN: if (wdog_trip || op_error) begin
                 fault   <= 1'b1;
                 running <= 1'b0;
                 st      <= S_ERR;
@@ -392,6 +401,12 @@ module top_seq #(
             if (wdog_trip)
                 $display("  [FAULT] %m T-2 watchdog expired in state %0d at pc=%0d (opcode %0d) at time %0t",
                          st, pc, op_code, $time);
+            // pw_out's own ERROR:/$finish fires first and stops the run, so this
+            // is for the case where that check is compiled out or the error
+            // comes from a feeder that does not have one yet.
+            if (op_error && ((st == S_WAIT) || (st == S_RUN)))
+                $display("  [FAULT] %m T-3 a feeder reported a misplaced result at pc=%0d (opcode %0d) at time %0t",
+                         pc, op_code, $time);
         end
     end
 `endif
