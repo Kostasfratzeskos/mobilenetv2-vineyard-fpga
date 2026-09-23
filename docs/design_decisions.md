@@ -452,3 +452,133 @@ argmax over the 4 int16 logits is the predicted class.
   the current checkpoint, including the 6,895,780-element end-to-end check.
 - Revisit if: never by measurement. The export-time check is the mechanism now; if it
   fires, widen ACC_W (staying <= 27) or fix the quantization.
+
+### DD-020 - Reset style: asynchronous everywhere, or synchronous so the DSPs can absorb registers
+- Status: **PROPOSED** - do not implement until accepted
+- Date: 2026-09-23
+- Context: the RTL review's T-5 asks for a reset synchroniser on correctness grounds. `rst_n`
+  is a raw top-level input driving `posedge clock or negedge rst_n` in every module.
+  Asynchronous ASSERTION is fine; asynchronous DEASSERTION is not - recovery/removal is
+  undefined, so an unknown subset of flip-flops leaves reset one cycle late. Measured
+  post-route, that subset is **3,998 FDCE + 1 FDPE = 3,999** of the design's 6,180
+  registers. For `pc`, `fw`, `st` and every `run`/`cx`/`cy`/`drain` that is a
+  nondeterministic initial state. Vivado reports the path clean (+24.027 ns recovery slack
+  at 25 ns) only because the XDC gives `rst_n` an input delay, which models a synchronous
+  reset the design does not have.
+
+  That much is T-5 and is not in question. What forces a DECISION is what Phase 0 found
+  underneath it: the reset style also decides whether **L-1 can work at all**.
+
+- The measurement that turns this from a bug fix into an architecture choice. Vivado's own
+  methodology check, **10,940 times** in the post-route report:
+
+      DPIR-2 Warning  Asynchronous driver check
+      DSP u_dw/u_arr/ch[0].u_dw/acc0 input pin .../A[0] is connected to registers with an
+      asynchronous reset. This is preventing the possibility of merging these registers in
+      to the DSP Block since the DSP block registers only possess synchronous reset
+      capability. It is suggested to recode or change these registers to remove the reset
+      or use a synchronous reset to get the best optimization for performance, power and
+      area.
+
+  L-1's fix is "register the products (DSP MREG), then a balanced adder tree with one
+  register per level". MREG, and the A/B input and P output registers, are **inside** the
+  DSP48E2 and have synchronous reset only. While every flop in the design is async-reset,
+  Vivado cannot put a pipeline register inside a DSP - it would place fabric flip-flops in
+  FRONT of a cascade that is still unregistered internally, which costs area and buys
+  nothing. DD-018 already identified "a 27-deep DSP cascade with nothing registered in it"
+  as the critical path; this is the reason the tool cannot fix it for us.
+
+  Second consequence, available BEFORE L-1: the registers DPIR-2 names are the ones that
+  already exist and already drive DSP inputs - `u_stem/win_q` (216 bits) and
+  `u_dw/u_lb/wr` (1,152 bits). If they were synchronous-reset, Vivado could absorb them
+  into the DSPs' A/B input registers, which moves the start point of the measured critical
+  path inside the DSP. That is a timing gain from a reset change alone, with no pipeline
+  restructuring and no latency change.
+
+  Where the async registers are, from the hierarchical FF report - the majority are
+  datapath, not control:
+
+  | register | bits | drives |
+  |:--|--:|:--|
+  | `u_dw/u_lb/wr` (line_buffer window) | 1,152 | depthwise DSP A inputs |
+  | `u_os/acc_q` | 832 | requantize DSP A inputs |
+  | `u_gap` avgpool accumulators | 416 | adders (no DSP) |
+  | `u_res` target delay line | 384 | fabric adders |
+  | `u_os/u_rq` requantize outputs | 256 | fabric |
+  | `u_stem/asm` | 256 | pool write |
+  | `u_stem/win_q` | 216 | stem DSP A inputs |
+  | control (FSMs, counters, tags, drains) | ~2,600 | - |
+
+- Options.
+
+  **A. T-5 exactly as the review prescribes.** Two-flop synchroniser (ASYNC_REG) at the top,
+  async assert / sync deassert, distributed to all submodules; `set_false_path` on the raw
+  input. Every module keeps `posedge clock or negedge rst_n`.
+  - Fixes: recovery/removal, the 3,999 undefined endpoints, the nondeterministic FSM start.
+  - Does NOT fix: DPIR-2. `negedge rst_n` is still in every sensitivity list, so all 10,940
+    warnings stay and no register can enter a DSP. **L-1 would then add fabric flops in
+    front of unregistered cascades.**
+  - Cost: ~2 flip-flops, one XDC line, a rewire in `accel_top`. Diff touches 1 RTL file.
+
+  **B. Synchronous reset throughout, from a two-flop synchroniser.** The synchroniser itself
+  is the only thing with `negedge rst_n`; every other always block becomes
+  `always @(posedge clock)` with `if (!rst_sync)`.
+  - Fixes: recovery/removal AND DPIR-2, so L-1's registers can land inside the DSPs and the
+    existing `win_q`/`acc_q` can be absorbed now.
+  - Also fixes, for free: the three `[Synth 8-7137] ... has both Set and reset with same
+    priority. This may cause simulation mismatches` warnings on `top_seq`'s `w[0:7]`,
+    `out_stage`'s `acc_q` and `dw_feeder`'s `grp_wr_prev`. Those exist only because a
+    register sits in an async-reset block with no assignment in the reset branch; in a
+    synchronous block the construct is ordinary.
+  - Cost: the sensitivity list of every clocked block in 24 RTL files. Mechanical, but wide,
+    and it is exactly the kind of wide mechanical edit that hides a typo. The
+    6,895,780-element end-to-end check is the thing that has to still pass, and it will
+    catch a missed reset the moment that register's power-up value matters.
+  - Loses: reset assertion now needs a running clock. Out of context that is free (the clock
+    always runs); once the PS exists, `rst_n` comes from a PL reset block whose output is
+    already clock-synchronous, so this is the normal arrangement rather than a compromise.
+
+  **C. Hybrid - synchronous on the datapath, asynchronous on the control.** Convert only the
+  registers that feed DSPs and the arrays around them; leave FSMs async.
+  - Cost: smallest diff that unblocks L-1, ~8 files.
+  - Loses: two reset conventions in one design, with the boundary defined by nothing a reader
+    can see. Given that this project's recurring failure mode is a precondition stated in a
+    comment and enforced nowhere (ACC_W=21, L-4's tail contract, A-3's lockstep), adding a
+    convention boundary that is invisible is the wrong trade even though it is less typing.
+
+  **D. No reset at all on the pure datapath registers.** What UG949 actually recommends for
+  maximum performance: datapath registers are qualified by `valid`, so their power-up value
+  never reaches an output.
+  - Best for DSP folding and removes the reset net's fanout from ~3,999 endpoints.
+  - Loses the property this project's verification leans on hardest: deterministic power-up
+    and no X in simulation. Every memory here is zero-initialised on purpose for exactly
+    that reason (`act_buffer`, `wgt_buffer`, `param_buffer`, `img_buffer`). Trading it for
+    performance would make an X-propagation bug look like a golden-vector mismatch, which is
+    the failure mode that already cost an afternoon in `dw_feeder` (`mem[X]` reading X).
+
+- Recommendation: **B**, and do it as its own commit with no other change in it, so the
+  end-to-end check isolates it. A is not sufficient - it would have to be redone as B before
+  L-1, and doing the wide edit twice is worse than doing it once. D can be applied later to
+  individual datapath registers if L-1 still misses timing, but it should not be the default.
+
+- Sequencing. This changes the plan the review gives. The review has T-5 in Phase 1 as a
+  safety item and L-1 in Phase 2 as a timing item, with no link between them. If B is
+  accepted, Phase 1 should implement B rather than A, because Phase 2 depends on it and
+  Phase 1 is the phase that is explicitly allowed to change no latency - which B does not.
+
+- Validation, before the wide edit is trusted: convert ONE leaf and its array
+  (`dwconv3x3` + `dw_array`, 144 DSPs) to synchronous reset, re-synthesise, and check two
+  numbers - DPIR-2 drops by the depthwise share, and the depthwise DSPs start reporting
+  used A/B registers. If DPIR-2 does not drop, or the tool still refuses to absorb, then B
+  buys only the T-5 correctness fix and the decision reduces to A, which changes the L-1
+  plan completely. Measure before committing to the wide edit.
+
+- Alternatives considered: leaving `rst_n` as is and relying on the XDC's input delay to
+  keep the report clean - that is what happens today, and it is the reason the problem is
+  invisible; constraining the reset properly with `set_max_delay` instead of synchronising
+  it - makes the timing report honest without making the circuit correct.
+
+- Revisit if: the validation experiment above shows the tool will not absorb registers into
+  the DSPs even with synchronous resets, or if a PS-side reset arrives that is already
+  synchronous to this clock (in which case the synchroniser becomes a formality and only the
+  sensitivity lists matter).

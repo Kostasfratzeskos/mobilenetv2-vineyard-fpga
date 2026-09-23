@@ -655,7 +655,27 @@ wrote quant_scales.json  (53 layers)
   | BRAM / URAM / DSP | 176 / 52 / 944 |
 
   These reproduce DD-019's ACC_W=26 column exactly, which is the check that the two runs
-  are the same tree. Per DSP_ALU hop: 19.413/27 = **0.719 ns** at synthesis, 19.171/27 =
+  are the same tree (and that this baseline is the pre-Phase-1 tree: Vivado read the
+  sources before the Phase 1 edits existed).
+
+  And post-route at 4.000 ns, which is the number the acceptance test asks for:
+
+  | | 4.000 ns post-route |
+  |:--|--:|
+  | WNS | **-18.821 ns** -> real **Fmax 43.8 MHz** |
+  | TNS | -71,607.492 ns over 16,290 failing endpoints of 94,788 |
+  | worst path | `u_stem/win_q_reg[7]_replica_1` -> `u_os/acc_q_reg[740]`, 22.801 ns (logic 19.371 / 85.0%, route 3.430 / 15.0%), 63 levels, DSP_ALU=27 |
+  | LUT / FF / CARRY8 | 34,834 / 6,863 / 937 |
+  | BRAM / URAM / DSP | 176 / 52 / 944 |
+
+  Two things in there are worth keeping. The flip-flop count grew 6,187 -> 6,863 between
+  synthesis and routing, and the worst path's source is `win_q_reg[7]_replica_1`: the tool
+  REPLICATED registers chasing 4 ns, spending 676 flops on a path it could not fix. And the
+  route delay went DOWN, 5.144 ns at the 25 ns constraint to 3.430 ns at 4 ns, because the
+  tighter constraint made the placer pack the cascade tighter. So the honest Fmax is
+  **43.8 MHz**, not the 41.1 MHz the 25 ns run reports - constraining at 40 MHz was costing
+  about 2.7 MHz of pessimism on top of everything else. Neither number is within 5x of the
+  target, and 19.4 ns of the 22.8 is logic that only L-1 can remove. Per DSP_ALU hop: 19.413/27 = **0.719 ns** at synthesis, 19.171/27 =
   0.710 ns of logic post-route, 0.901 ns including route. The review quotes 0.682 / 0.847,
   which is the same measurement divided by 28 hops rather than 27.
 - Worth recording because it bounds what L-1 can be expected to prove: **all ten worst
