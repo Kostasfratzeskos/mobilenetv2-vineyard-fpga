@@ -22,6 +22,14 @@ module mac_lane_tb;
     localparam MAXTILES = 80;
     localparam MAXL     = MAXTILES*TN;   // 1280
 
+    // L-1 pipelined mac_lane: one registered product stage, clog2(TN) tree
+    // levels, one accumulate stage. Derived here the same way the DUT derives
+    // it, and then MEASURED below rather than assumed - the whole point of the
+    // latency block is that this number is a contract six other constants in
+    // the design are defined against (docs/latency_map.md).
+    localparam LEVELS  = $clog2(TN);          // 4 at TN=16
+    localparam MAC_LAT = 1 + LEVELS + 1;      // 6
+
     logic clock, rst_n;
 
     // conv1x1 (oracle) I/O
@@ -92,13 +100,27 @@ module mac_lane_tb;
         longint expected;
         logic signed [ACC_W-1:0] lane_acc;
         logic                    lane_done;
+        integer                  lat;
         begin
             L = tiles*TN;
             expected = 0;
             for (i = 0; i < L; i++) expected += longint'(av[i]) * longint'(wv[i]);
 
-            // capture the lane result immediately (drive_conv would clear l_done)
+            // The lane is PIPELINED now, so wait for `done` instead of reading
+            // the accumulator the instant the last tile goes in - and count the
+            // cycles while waiting, so a latency change shows up here as a
+            // number rather than downstream as a bit-exactness failure.
+            //  lat counts in docs/latency_map.md's convention: how many cycles
+            //  after the one carrying `valid` the result is OBSERVABLE. A
+            //  registered output is therefore 1, which is what this lane was
+            //  before it was pipelined. drive_lane already returns one cycle
+            //  past the last tile, so the count starts at 1.
             drive_lane(tiles);
+            lat = 1;
+            while (l_done !== 1'b1 && lat < 64) begin
+                @(posedge clock); @(negedge clock);
+                lat++;
+            end
             lane_acc  = l_acc;
             lane_done = l_done;
             drive_conv(L);
@@ -106,6 +128,10 @@ module mac_lane_tb;
             total++;
             if (lane_done !== 1'b1) begin
                 fails++; $display("  [ERR] %-14s tiles=%0d : lane done not asserted", tag, tiles);
+            end else if (lat !== MAC_LAT) begin
+                fails++;
+                $display("  [ERR] %-14s tiles=%0d : done came %0d cycles after the last tile, MAC_LAT says %0d",
+                         tag, tiles, lat, MAC_LAT);
             end else if (lane_acc !== ACC_W'(expected)) begin
                 fails++; $display("  [ERR] %-14s tiles=%0d : lane acc=%0d expected=%0d", tag, tiles, lane_acc, expected);
             end else if (lane_acc !== c_acc) begin

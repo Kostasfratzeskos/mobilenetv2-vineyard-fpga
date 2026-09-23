@@ -48,6 +48,18 @@ module pw_feeder_tb;
     localparam WA_W   = 10;
     localparam AA_W   = 16;
     localparam WDEPTH = 1024;
+
+    // L-1: mac_lane is pipelined, so `done` arrives MAC_LAT cycles after the
+    // tile instead of 1. Derived here the same way the RTL derives it, and
+    // everything below that used to be a literal is now written against it.
+    localparam LEVELS  = $clog2(TN);
+    localparam MAC_LAT = 1 + LEVELS + 1;          // 6 at TN=16
+
+    // layer_done pulses one cycle after the last tile is CONSUMED, and that
+    // tile's result appears MAC_LAT cycles after it entered pe_array - which is
+    // the same cycle layer_done is high. So results keep arriving for exactly
+    // MAC_LAT cycles after layer_done, and the sequencer's gap has to cover it.
+    localparam DRAIN_EXP = MAC_LAT;               // 6
     localparam ADEPTH = 2048;
 
     localparam MAXP = 16;      // pixels used by the testbench
@@ -327,10 +339,18 @@ module pw_feeder_tb;
         $display("drain latency: results kept arriving up to %0d cycles after layer_done", drain_max);
         $display("  -> the sequencer must leave at least that gap before the next start");
         total++;
-        if (drain_max > 4) begin
+        //  An EQUALITY, not a ceiling. The old check was `> 4` against a
+        //  1-cycle pipeline, which would have passed silently for any latency
+        //  from 0 to 4 - so it could not have caught this change, in either
+        //  direction. pw_feeder's drain counter is sized as MAC_LAT + OS_LAT,
+        //  so if this number is not MAC_LAT the counter is wrong too.
+        if (drain_max !== DRAIN_EXP) begin
             fails++;
-            $display("  [ERR] drain latency %0d exceeds the documented 2-cycle pipeline", drain_max);
-        end
+            $display("  [ERR] drain latency is %0d cycles after layer_done, MAC_LAT=%0d says it should be %0d",
+                     drain_max, MAC_LAT, DRAIN_EXP);
+        end else
+            $display("  [ok ] drain latency is exactly MAC_LAT = %0d, as pw_feeder's drain counter assumes",
+                     DRAIN_EXP);
         $display("");
         if (fails == 0) $display("ALL PASS  (%0d layers)", total);
         else            $display("FAILED    (%0d / %0d layers)", fails, total);

@@ -32,6 +32,11 @@ module pe_array_tb;
     localparam MAXTILES = 40;
     localparam MAXL     = MAXTILES*TN;      // 640
 
+    // L-1: one registered product stage + clog2(TN) tree levels + accumulate.
+    // Derived the same way pe_array and mac_lane derive it, then MEASURED.
+    localparam LEVELS  = $clog2(TN);
+    localparam MAC_LAT = 1 + LEVELS + 1;
+
     logic clock, rst_n;
 
     // ---- pe_array (DUT) ----------------------------------------------------
@@ -109,7 +114,7 @@ module pe_array_tb;
     // (0 = none, TM = all). The reference oracle always covers every lane.
     task automatic run_case(input integer tiles, input string tag,
                             input integer xlanes);
-        integer i, m, L, step, fails0;
+        integer i, m, L, step, fails0, lat;
         begin
             fails0 = fails;
             L = tiles*TN;
@@ -119,7 +124,20 @@ module pe_array_tb;
                     expected[m] += longint'(av[i]) * longint'(wv[m][i]);
             end
 
+            // The array is PIPELINED now (L-1): mac_lane registers the
+            // products, runs a clog2(TN)-level adder tree and then
+            // accumulates, so `done` and `acc` arrive MAC_LAT cycles after the
+            // last tile rather than in the next cycle. Wait for `done` and
+            // count while waiting, in docs/latency_map.md's convention: how
+            // many cycles after the one carrying `valid` the result is
+            // OBSERVABLE, so a registered output is 1. drive_array already
+            // returns one cycle past the last tile.
             drive_array(tiles);
+            lat = 1;
+            while (p_done !== 1'b1 && lat < 64) begin
+                @(posedge clock); @(negedge clock);
+                lat++;
+            end
             arr_done = p_done;
             for (m = 0; m < TM; m++) arr_acc[m] = p_acc[m*ACC_W +: ACC_W];
 
@@ -127,6 +145,10 @@ module pe_array_tb;
             if (arr_done !== 1'b1) begin
                 fails++;
                 $display("  [ERR] %-16s tiles=%0d : done not asserted", tag, tiles);
+            end else if (lat !== MAC_LAT) begin
+                fails++;
+                $display("  [ERR] %-16s tiles=%0d : done came %0d cycles after the last tile, MAC_LAT says %0d",
+                         tag, tiles, lat, MAC_LAT);
             end
 
             // oracle 1: independent reference, every lane

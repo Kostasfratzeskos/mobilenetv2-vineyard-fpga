@@ -117,6 +117,15 @@ module accel_top #(
     parameter GAP_CYC = 4,
     parameter WDOG_W  = 20,     // top_seq's hang watchdog; see its header
 
+    // Latency of the ONE shared requantize stage: acc_valid to q_valid. Stage A
+    // registers the accumulators while the parameter memory answers (1), then
+    // rq_bank's requantize registers the result (1). Every feeder's drain
+    // counter is sized from this, and out_stage is instantiated HERE rather
+    // than inside the feeders, so it has to be passed down. Changing
+    // out_stage's depth without changing this is the bookkeeping failure
+    // docs/latency_map.md exists to prevent.
+    parameter OS_LAT  = 2,
+
     // ---- classifier ------------------------------------------------------
     parameter NLOG    = 4,
     parameter IDX_W   = 2,
@@ -444,7 +453,10 @@ module accel_top #(
     pw_feeder #(
         .DATA_W(DATA_W), .TM(TM), .TN(TN), .ACC_W(ACC_W), .SEL_W(SEL_W),
         .BANK_W(BANK_W), .PIX_W(PIX_W), .OCT_W(OCT_W), .ICT_W(ICT_W),
-        .WA_W(PW_WA_W), .AA_W(AA_W), .WDEPTH(PW_WDEPTH)
+        .WA_W(PW_WA_W), .AA_W(AA_W), .WDEPTH(PW_WDEPTH),
+        // out_stage lives here, not in the feeder, so its latency has to be
+        // handed over explicitly - the feeder's drain is sized from it.
+        .OS_LAT(OS_LAT)
     ) u_pwf (
         .clock(clock), .rst_n(rst_n_i),
         .start(pwf_start), .stall(1'b0),

@@ -21,16 +21,23 @@ Phase 1 changed no latency.
 
 | Name | Where | Value | What it is |
 |:--|:--|--:|:--|
-| `MAC_LAT` | `mac_lane` | **1** | `valid` → `acc` final and `done` high. Products and the adder-tree sum are combinational; only the accumulator is registered. |
-| `OS_LAT` | `out_stage` | **2** | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1); `rq_bank`'s `requantize` registers the result (1). |
+| `MAC_LAT` | `mac_lane` | **6** (was 1) | `valid` → `acc` final and `done` high. Now `1 + clog2(TN) + 1`: one registered product stage, `clog2(TN)=4` adder-tree levels, one accumulate stage (**L-1**, Phase 2a). |
+| `OS_LAT` | `out_stage` | **2** | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1); `rq_bank`'s `requantize` registers the result (1). **L-3 grows this to 5 in Phase 2d.** |
 
-Neither is a named constant in the RTL today. Both are implied by the structure and then
-re-encoded by hand in every row below. **Phase 2 must turn both into `localparam`s and pass
-them as parameters** — that is the constraint "do not add new hand-computed magic numbers".
+Both are `localparam`s now, derived rather than written down: `MAC_LAT` from `TN` in
+`mac_lane` (and restated by the same arithmetic in `pw_feeder`, which is the only module
+that needs it and cannot see into the array), `OS_LAT` as a **parameter** of `accel_top`
+passed down to each feeder, because `out_stage` is instantiated at the top and a feeder
+cannot see its depth either.
 
-`dwconv3x3`, `conv3x3_std`, `dw_array` and `stem_array` have a latency of **0** and no
-clock port at all. A-2 is the observation that a zero cannot be written down in a port list,
-so making it non-zero has no compile-time witness.
+Restating `MAC_LAT` is only safe because it is **measured**: `pw_feeder` times the real
+distance from `v_d && l_d` to `acc_valid` in simulation and fails if it is not `MAC_LAT`,
+and `mac_lane_tb`, `pe_array_tb` and `pw_feeder_tb` each assert the same number as an
+equality rather than a ceiling. That is what stops the formula and the structure drifting.
+
+`dwconv3x3`, `conv3x3_std`, `dw_array` and `stem_array` still have a latency of **0** and no
+clock port at all — Phase 2b and 2c change that. A-2 is the observation that a zero cannot be
+written down in a port list, so making it non-zero has no compile-time witness.
 
 ---
 
@@ -40,18 +47,29 @@ so making it non-zero has no compile-time witness.
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `acc` register, `done <= valid & last` | `mac_lane.v:58-66` | 1 stage | — (this IS `MAC_LAT`) |
-| `assign done = lane_done[0]` | `pe_array.v:79` | lane 0 | all lanes in lockstep (A-3). Breaks when A-1 staggers the broadcast. |
+| `prod[]` product register | `mac_lane.v` | 1 stage | one per tap, `PROD_W = 2*DATA_W` wide (**L-9**) |
+| `node[]` adder tree | `mac_lane.v` | `clog2(TN)` = 4 stages | balanced, one register per level, `TREE_W = PROD_W + LEVELS` (**L-1**) |
+| `acc` accumulate | `mac_lane.v` | 1 stage | the only stage `valid` gates |
+| `v_sr`/`f_sr`/`l_sr` control shift register | `mac_lane.v` | `CTRL_LAT = 1 + LEVELS` = 5 | **free-running**, because the tree is (**L-2**) |
+| `armed` sticky bit | `mac_lane.v` | — | **L-10**: a `last` with no preceding `first` no longer announces a stale sum |
+| `assign done = lane_done[0]` | `pe_array.v` | lane 0 | all lanes in lockstep (**A-3**), now *checked* in simulation against all TM bits — which also gives the other TM−1 bits a reader (**A-6**) |
 
 ### `pw_feeder`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `v_d`/`f_d`/`l_d` control delay | `pw_feeder.v:203-208` | 1 stage | buffer read latency (1), **not** `MAC_LAT` |
-| Tag pipeline `pix_d1`/`oct_d1` → `acc_pix`/`acc_oct` | `pw_feeder.v:219-224` | **2 stages** | 1 (buffer read) + `MAC_LAT` |
-| `drain <= 3'd7` (3-bit counter) | `pw_feeder.v:158-164` | 7 | ≥ 1 + `MAC_LAT` + `OS_LAT` = 3 today. 4 cycles of slack. |
+| `v_d`/`f_d`/`l_d` control delay | `pw_feeder.v` | 1 stage | buffer read latency (1), **not** `MAC_LAT` |
+| Tag pipeline `pix_sr[]` → `acc_pix`/`acc_oct` | `pw_feeder.v` | `TAG_LAT = 1 + MAC_LAT` = **7** (was 2) | stage 1 gated on `ag_valid` (the buffers it shadows are gated); stages 2..7 **free-running**, because `mac_lane`'s tree is |
+| `drain` | `pw_feeder.v` | `DRAIN_CYC = MAC_LAT + OS_LAT` = **8** (was a literal 7) | derived: the distance from the `layer_done` cycle to the last write. `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. |
+| `OS_LAT` parameter | `pw_feeder.v` | 2 | passed from `accel_top`; the drain is sized from it |
 
-`ag_valid` → `acc_valid` is **2**; → `aw_en` in `pw_out` is **4**.
+`ag_valid` → `acc_valid` is **7** (was 2); → `aw_en` in `pw_out` is **9** (was 4).
+
+> The old header said "each tag stage advances on ITS OWN valid, never on the bare clock, or
+> a stall would slide the tags past the data". That was right for a combinational array and is
+> now **backwards** for the stages inside a pipelined one: `mac_lane`'s tree is not
+> clock-enabled, so a held buffer output propagates through it every cycle and a
+> valid-gated tag would fall behind. Only the buffer-read stage stays gated.
 
 ### `pw_out`
 
@@ -175,7 +193,7 @@ Copied from the review's cross-cutting table and made concrete against the rows 
 
 | Trigger | Rows that change in the SAME commit |
 |:--|:--|
-| **L-1/L-2** `mac_lane` gains `+LAT` | `pw_feeder` tag pipeline 2 → 2+LAT; `pw_feeder` drain 7 → ≥3+LAT; `pe_array` `done` sourcing (A-3); `gap_feeder` `sl_d2` if `avgpool` changes |
+| ~~**L-1/L-2** `mac_lane` gains `+LAT`~~ **DONE, Phase 2a** | ~~`pw_feeder` tag pipeline~~ 2 → **7**; ~~`pw_feeder` drain~~ 7 → **`MAC_LAT+OS_LAT`**; ~~`pe_array` `done` sourcing~~ (A-3 checked, unchanged until A-1); `avgpool` untouched, so `gap_feeder` `sl_d2` unchanged |
 | **L-1/L-2** `dwconv3x3` gains clock + LAT | `dw_array` port list (A-2); `dw_feeder` `os_acc_valid = win_valid` → delayed by LAT; `grp_d2..d4` → +LAT stages; `dw_feeder` drain |
 | **L-1/L-2** `conv3x3_std` gains clock + LAT | `stem_array` port list; `stem_feeder` `win_q` latch and sweep timing; `wa_oct` weight lead; `oct_d1/d2` → +LAT; `stem_feeder` drain |
 | **L-3** `requantize` +3 (`OS_LAT` 2 → 5) | `rq_bank` `q_valid` depth; L-7 `act`/`relu6_qmax` pipelined inside `requantize`; `pw_feeder` drain; `dw_feeder` `grp_d3/d4` and drain; `stem_feeder` `oct_d1/d2` and drain; `res_feeder` delay line 3 → 3+3 and drain; `gap_feeder` `sl_d3/d4` and drain; `GAP_CYC`; `logit_out` `lv` |
@@ -221,7 +239,28 @@ Two of these are directly load-bearing for Phase 2:
   drops before its last result lands, these checks stop covering that result — so `busy`
   and the real pipeline depth must stay consistent, which is what the drain rows are for.
 
-## 5. Baseline facts this table was measured against
+## 5. A testbench idiom that Phase 2a broke, and will break again
+
+`wait (!busy)` appeared in all six datapath testbenches, and it is **delta-cycle sensitive**.
+`addr_gen`'s `run` drops and `layer_done` rises on the SAME clock edge, and `busy` is a
+continuous OR of the two, so inside the non-blocking update region `busy` can momentarily
+read 0. A real consumer samples `busy` at a clock edge and never sees it — `top_seq`'s
+`S_RUN: if (!op_busy)` is inside `always @(posedge clock)`, so the RTL is fine.
+
+It went unnoticed while the pipeline drained in 1–2 cycles, because the fixed
+`repeat (8) @(negedge clock)` after it covered the difference. `MAC_LAT = 6` made the drain
+8 cycles and `pw_datapath_tb` started losing **the last write of the layer** — 12,543 of
+12,544 pixels, every one of them correct, which is exactly the shape of failure this phase
+was warned to expect. All six now sample it the way hardware does:
+
+```systemverilog
+do @(negedge clock); while (busy);
+```
+
+Phase 2b and 2c grow the depthwise and stem latencies, so the same trap was waiting there
+twice more.
+
+## 6. Baseline facts this table was measured against
 
 - `TM=32`, `TN=16`, `TC=16`, `TS=8`, `ACC_W=26`, `SEL_W=1`, `GAP_CYC=4`.
 - Drains: `pw_feeder` 7 (3-bit), `dw_feeder` 7 (3-bit), `stem_feeder` 15 (4-bit),

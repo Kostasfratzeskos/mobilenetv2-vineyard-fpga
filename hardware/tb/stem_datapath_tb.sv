@@ -357,7 +357,15 @@ module stem_datapath_tb;
         $display("running (%0d input cycles + %0d windows x %0d sweep):",
                  (IH+1)*(IW+1), OH*OW, N_OCT);
 
-        wait (!busy);
+        // SAMPLE `busy` on a clock edge, do not `wait` on it. addr_gen's `run`
+        // drops and `layer_done` rises on the SAME edge, and `busy` is a
+        // continuous OR of the two, so inside the non-blocking update region it
+        // can momentarily read 0 - a zero-width delta glitch. Real consumers
+        // sample it at a clock edge and never see that; `wait (!busy)` does.
+        // It went unnoticed while the pipeline drained in 1-2 cycles and the
+        // fixed `repeat` below covered the difference. L-1 made the drain 8
+        // cycles and it started losing the last write of the layer.
+        do @(negedge clock); while (busy);
         repeat (16) @(negedge clock);
         mon_on = 0;
 

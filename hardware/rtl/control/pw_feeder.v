@@ -95,7 +95,14 @@ module pw_feeder #(
     parameter ICT_W  = 8,
     parameter WA_W   = 10,        // weight buffer address width
     parameter AA_W   = 16,        // activation buffer address width
-    parameter WDEPTH = 1024
+    parameter WDEPTH = 1024,
+
+    // Latency of the shared out_stage, which lives in accel_top: acc_valid to
+    // q_valid. A PARAMETER rather than a literal because this module's drain
+    // counter is defined against it and out_stage is not instantiated here, so
+    // there is nothing else that would make the two move together. See
+    // docs/latency_map.md.
+    parameter OS_LAT = 2
 )(
     input  wire                   clock,
     input  wire                   rst_n,
@@ -130,6 +137,24 @@ module pw_feeder #(
     output wire                   layer_done
 );
 
+    // ---- the latencies this module is defined against -------------------
+    //  MAC_LAT is mac_lane's, restated here from the same inputs rather than
+    //  copied as a number: one registered product stage, clog2(TN) adder-tree
+    //  levels, one accumulate stage. mac_lane.v is where it is defined; this is
+    //  the same arithmetic, not a second opinion. The simulation check at the
+    //  bottom of this file MEASURES the real latency and fails if the two ever
+    //  disagree, which is the only thing that makes restating it safe.
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
+
+    localparam MAC_LAT = 1 + clog2(TN) + 1;             // 6 at TN=16
+
     // ================= stage 0 : sequence and addresses =================
     wire [PIX_W-1:0] pix;
     wire [OCT_W-1:0] oct;
@@ -148,22 +173,41 @@ module pw_feeder #(
 
     // ---- busy has to outlive addr_gen ----------------------------------
     // addr_gen's own `busy` drops the moment it CONSUMES the last tile, but
-    // that tile's result is still in pe_array, and two more cycles behind that
-    // in the shared out_stage. Exposing addr_gen's busy directly made `busy`
-    // mean "I have stopped reading", when every caller reads it as "my writes
-    // have landed" - and at the top level that cost the last two pixels of
-    // every pointwise layer, which accel_tb caught. The other four feeders
+    // that tile's result is still in pe_array, and OS_LAT more cycles behind
+    // that in the shared out_stage. Exposing addr_gen's busy directly made
+    // `busy` mean "I have stopped reading", when every caller reads it as "my
+    // writes have landed" - and at the top level that cost the last two pixels
+    // of every pointwise layer, which accel_tb caught. The other four feeders
     // already carried this counter; this one was the odd case out because its
     // address generator happened to expose a busy of its own.
-    reg [2:0] drain;
+    //
+    // ---- the drain is DERIVED now (L-1) --------------------------------
+    //  It used to be the literal 3'd7, chosen with slack when mac_lane
+    //  answered in one cycle. mac_lane is pipelined now, so the number has to
+    //  come from the structure or it is a bit-exactness failure waiting for a
+    //  retrain. Counting from the cycle `layer_done` is high:
+    //
+    //      +1              ... the last tile reaches pe_array (v_d)
+    //      +MAC_LAT        ... pe_array's acc_valid for it
+    //      +OS_LAT         ... out_stage's q_valid, i.e. the write
+    //
+    //  layer_done is itself one cycle after the tile was consumed, so the
+    //  distance from the layer_done cycle to the last write is exactly
+    //  MAC_LAT + OS_LAT. `busy` is high during the layer_done cycle and for
+    //  `drain` cycles after it, so DRAIN_CYC = MAC_LAT + OS_LAT covers it with
+    //  nothing to spare and nothing wasted.
+    localparam DRAIN_CYC = MAC_LAT + OS_LAT;            // 8
+    localparam DRAIN_W   = clog2(DRAIN_CYC + 1);        // 4
+
+    reg [DRAIN_W-1:0] drain;
     always @(posedge clock) begin
-        if (!rst_n)             drain <= 3'd0;
-        else if (start)         drain <= 3'd0;
-        else if (layer_done)    drain <= 3'd7;
-        else if (drain != 3'd0) drain <= drain - 3'd1;
+        if (!rst_n)                   drain <= {DRAIN_W{1'b0}};
+        else if (start)               drain <= {DRAIN_W{1'b0}};
+        else if (layer_done)          drain <= DRAIN_CYC[DRAIN_W-1:0];
+        else if (drain != {DRAIN_W{1'b0}}) drain <= drain - 1'b1;
     end
 
-    assign busy = ag_busy || layer_done || (drain != 3'd0);
+    assign busy = ag_busy || layer_done || (drain != {DRAIN_W{1'b0}});
 
     // end of one dot product, and end of all the dot products of this pixel
     wire tile_last = ag_valid & ag_last;
@@ -216,11 +260,65 @@ module pw_feeder #(
     );
 
     // ---- tag pipeline --------------------------------------------------
-    reg [PIX_W-1:0] pix_d1;
-    reg [OCT_W-1:0] oct_d1;
+    //
+    //  TAG_LAT = 1 + MAC_LAT, because the tag has to travel from the cycle
+    //  addr_gen emitted it to the cycle pe_array's `done` presents the result:
+    //  one cycle for the buffer read, then mac_lane's whole pipeline. It was
+    //  two stages when mac_lane answered in one cycle.
+    //
+    //  ---- why only the FIRST stage is gated ---------------------------
+    //
+    //  The old header said "each tag stage advances on ITS OWN valid, never on
+    //  the bare clock, or a stall would slide the tags past the data". That was
+    //  right for a combinational array and is now exactly backwards for the
+    //  stages inside it.
+    //
+    //  Stage 1 is the buffer-read stage, and act_buffer and wgt_buffer only
+    //  update their outputs when their read enable is high - so their data is
+    //  HELD during a stall, and the tag beside it must be held too. It keeps
+    //  its `ag_valid` gate.
+    //
+    //  Stages 2..TAG_LAT shadow mac_lane's product register and adder tree,
+    //  which FREE-RUN (they are not clock-enabled - see mac_lane's header). A
+    //  held buffer output simply propagates through them, so the data advances
+    //  every cycle whether or not `valid` is high, and a tag gated on valid
+    //  would fall behind it. They free-run for the same reason the tree does,
+    //  and mac_lane's own valid shift register free-runs beside them.
+    //  acc_pix / acc_oct ARE the last stage, so the shift register in front of
+    //  them holds TAG_LAT-1. Counting it out, for a tag emitted in cycle C:
+    //      pix_sr[0]           valid in C+1   (the buffer-read stage)
+    //      pix_sr[k]           valid in C+1+k
+    //      pix_sr[TAG_LAT-2]   valid in C+TAG_LAT-1
+    //      acc_pix             valid in C+TAG_LAT  = C+7, with acc_valid
+    localparam TAG_LAT = 1 + MAC_LAT;                 // 7
+
+    reg [PIX_W-1:0] pix_sr [0:TAG_LAT-2];
+    reg [OCT_W-1:0] oct_sr [0:TAG_LAT-2];
+
+    integer ts;
     always @(posedge clock) begin
-        if (ag_valid) begin pix_d1  <= pix;    oct_d1  <= oct;    end
-        if (v_d)      begin acc_pix <= pix_d1; acc_oct <= oct_d1; end
+        if (!rst_n) begin
+            for (ts = 0; ts <= TAG_LAT-2; ts = ts + 1) begin
+                pix_sr[ts] <= {PIX_W{1'b0}};
+                oct_sr[ts] <= {OCT_W{1'b0}};
+            end
+            acc_pix <= {PIX_W{1'b0}};
+            acc_oct <= {OCT_W{1'b0}};
+        end else begin
+            // stage 1: gated, because the buffers it shadows are gated
+            if (ag_valid) begin
+                pix_sr[0] <= pix;
+                oct_sr[0] <= oct;
+            end
+            // stages 2..TAG_LAT-1: free-running, because mac_lane is
+            for (ts = 1; ts <= TAG_LAT-2; ts = ts + 1) begin
+                pix_sr[ts] <= pix_sr[ts-1];
+                oct_sr[ts] <= oct_sr[ts-1];
+            end
+            // the last stage, aligned with pe_array's acc_valid
+            acc_pix <= pix_sr[TAG_LAT-2];
+            acc_oct <= oct_sr[TAG_LAT-2];
+        end
     end
 
     // ---- C-6: the weight rectangle must fit the weight buffer ------------
@@ -239,6 +337,50 @@ module pw_feeder #(
     //  covers a mis-parameterised instance. This one covers the runtime shape,
     //  which neither of those sees.
 `ifndef SYNTHESIS
+    // ---- MAC_LAT is restated here, so MEASURE it (L-1, L-2) -------------
+    //  This module computes MAC_LAT from TN with the same arithmetic mac_lane
+    //  uses, and its tag depth and drain counter are both defined against the
+    //  result. If mac_lane's pipeline ever changes and this does not, the
+    //  symptom is a shifted output tensor that still looks like activations.
+    //  So: time the real thing. Time from the LAST tile of a dot product
+    //  entering pe_array (`v_d && l_d`) to `acc_valid` coming back, because
+    //  `done` only fires on a last tile - timing from the FIRST tile instead
+    //  measures MAC_LAT plus the dot product's own length, which is what the
+    //  first version of this check did and why it reported 7 for a two-tile
+    //  shape.
+    //  One measurement per layer, then stop: `lat_arm` left permanently set
+    //  re-checked on every later acc_valid against a counter that had kept
+    //  running, which reported 7 for a latency that was 6.
+    reg [7:0] lat_cnt;
+    reg       lat_arm, lat_seen;
+    always @(posedge clock) begin
+        if (!rst_n || start) begin
+            lat_arm  <= 1'b0;
+            lat_seen <= 1'b0;
+            lat_cnt  <= 8'd0;
+        end else if (!lat_seen) begin
+            if (!lat_arm) begin
+                // the LAST tile of a dot product: `done` only fires on one
+                if (v_d && l_d) begin
+                    lat_arm <= 1'b1;
+                    lat_cnt <= 8'd1;
+                end
+            end else if (acc_valid) begin
+                lat_seen <= 1'b1;
+            end else begin
+                lat_cnt <= lat_cnt + 8'd1;
+            end
+        end
+    end
+
+    always @(posedge clock) begin
+        if (rst_n && lat_arm && !lat_seen && acc_valid && (lat_cnt != MAC_LAT[7:0])) begin
+            $display("ERROR: %m L-1 pe_array answered %0d cycles after the tile entered it, but this module's MAC_LAT says %0d at time %0t. The tag pipeline (%0d deep) and the drain (%0d) are both sized from MAC_LAT, so they are now wrong too.",
+                     lat_cnt, MAC_LAT, $time, TAG_LAT, DRAIN_CYC);
+            $finish;
+        end
+    end
+
     // n_oc and n_ic are OCT_W/ICT_W wide; multiply in a wide integer so the
     // product itself cannot be the thing that overflows.
     always @(posedge clock) begin
