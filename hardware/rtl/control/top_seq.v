@@ -52,6 +52,28 @@
 //  cycles afterwards - it costs 64*4 cycles over the whole network, which is
 //  nothing next to reloading the weight buffer between layers anyway.
 //
+//  ---- the two ways this module used to fail silently (T-1, T-2) ---------
+//
+//  T-1, the instruction ceiling. `fetch_addr` is {pc, fw}: three bits of word
+//  index and the rest instruction index, so it is PGA_W that decides how many
+//  instructions can exist - 2**(PGA_W-3) = 64 - while PROG_DEPTH decides how
+//  many words the memory holds. This network has EXACTLY 64 instructions, and
+//  `n_instr` is eight bits and accepted 255. Instruction 64 fetched instruction
+//  0's words and executed it, so one added layer or debug op would have
+//  corrupted execution rather than failed to build. Now: an elaboration check
+//  ties PGA_W to PROG_DEPTH, a runtime check refuses an out-of-range n_instr,
+//  and gen_program.py asserts the same ceiling at build time.
+//
+//  T-2, the hang. S_WAIT had no escape if `op_busy` never rose and S_LOAD none
+//  if `ld_done` never arrived. Three reachable causes: an `op_code` that is one
+//  of the ten of sixteen encodings no feeder decodes; a feeder's own zero-shape
+//  guard correctly refusing the op, so the defensive behaviour causes the hang;
+//  or a DMA that never answers. All three parked with running=1 and `done` never
+//  pulsing, recoverable only by reset. `default: st <= S_IDLE` guarded an
+//  illegal STATE, which is unreachable, not an illegal OPCODE, which is not.
+//  Now: an opcode-validity check at S_GO, one watchdog shared across
+//  S_LOAD/S_WAIT/S_RUN, an S_ERR state, and a sticky `fault` output.
+//
 //  Run:  bash scripts/run_sim.sh top_seq
 //============================================================================
 module top_seq #(
@@ -59,7 +81,14 @@ module top_seq #(
     parameter PGA_W     = 9,      // program memory address width (512 words)
     parameter PROG_DEPTH= 512,
     parameter NI_W      = 8,      // instruction-count width
-    parameter GAP_CYC   = 4       // idle cycles after each op
+    parameter GAP_CYC   = 4,      // idle cycles after each op
+    // Watchdog width. DERIVED, not chosen: the longest legitimate op is the
+    // stem, 225*225 input positions plus 4 sweep cycles x 12,544 windows =
+    // 100,801 cycles, and the worst weight fill is features.18.0 at
+    // 32 banks x 800 entries = 25,600. 2**20 = 1,048,576 is 10.4x the longest
+    // op, so it cannot fire on a healthy run; it still bounds a hang to 4.2 ms
+    // at 250 MHz instead of forever. Recompute it if a layer ever gets longer.
+    parameter WDOG_W    = 20
 )(
     input  wire                clock,
     input  wire                rst_n,
@@ -103,8 +132,25 @@ module top_seq #(
 
     output reg  [NI_W-1:0]     pc,          // instruction index, for debug
     output reg                 running,
-    output reg                 done         // pulses when the program ends
+    output reg                 done,        // pulses when the program ends
+    output reg                 fault        // sticky: the run was abandoned
 );
+
+    // ---- T-1: PGA_W and PROG_DEPTH must agree --------------------------
+    // Verilog-2001 has no $fatal at elaboration, so the check is a generate
+    // that instantiates a module which does not exist. Elaboration then fails
+    // and the tool prints the module name, which IS the error message.
+    generate
+        if (PROG_DEPTH != (1 << PGA_W)) begin : chk_prog_depth
+            ERROR_PROG_DEPTH_MUST_EQUAL_TWO_POW_PGA_W u_err();
+        end
+    endgenerate
+
+    // Eight words per instruction, so the instruction index occupies the top
+    // PGA_W-3 bits of the program address. MAX_INSTR is the real ceiling that
+    // T-1 is about - not a comment about one, a localparam the RTL uses.
+    localparam PGI_W     = PGA_W - 3;          // instruction-index bits (6)
+    localparam MAX_INSTR = 1 << PGI_W;         // 64
 
     // ---- program memory --------------------------------------------------
     reg [PW_W-1:0] prog [0:PROG_DEPTH-1];
@@ -124,7 +170,9 @@ module top_seq #(
     // Combinational read: 512 x 32 bit is 16 Kbit, small enough for distributed
     // RAM, and a registered read would put the fetch a cycle out of step with
     // the word counter for no benefit at 8 cycles per instruction.
-    wire [PGA_W-1:0] fetch_addr = {pc[PGA_W-4:0], fw};
+    // Written as pc[PGI_W-1:0] rather than pc[PGA_W-4:0] so that the slice and
+    // the ceiling the runtime check enforces are the same expression (T-1).
+    wire [PGA_W-1:0] fetch_addr = {pc[PGI_W-1:0], fw};
     wire [PW_W-1:0]  fetch_word = prog[fetch_addr];
 
     assign op_code       = w[0][3:0];
@@ -153,7 +201,8 @@ module top_seq #(
                S_GO    = 3'd3,
                S_WAIT  = 3'd4,   // wait for the feeder to TAKE the job
                S_RUN   = 3'd5,   // then wait for it to finish
-               S_GAP   = 3'd6;
+               S_GAP   = 3'd6,
+               S_ERR   = 3'd7;   // abandoned: fault is sticky, running is low
 
     reg [2:0] st;
     reg [3:0] gap;
@@ -161,22 +210,63 @@ module top_seq #(
     // nothing to fetch when the op carries neither weights nor parameters
     wire no_load = (ld_bytes == 20'd0) && (ld_pchan == 16'd0);
 
+    // ---- T-2: the opcode must be one a feeder actually decodes ----------
+    // Six of the sixteen encodings reach a feeder. The other ten would let
+    // op_start pulse into nothing, and op_busy would never rise.
+    wire op_valid = (op_code >= 4'd1) && (op_code <= 4'd6);
+
+    // ---- T-2: one watchdog across S_LOAD, S_WAIT and S_RUN --------------
+    // S_GO sits between S_LOAD and S_WAIT and is not armed, so the load gets
+    // its own budget and S_WAIT+S_RUN share one - which is the right split,
+    // because "the DMA should have answered" and "the op should have finished"
+    // are the two independent deadlines.
+    localparam [WDOG_W-1:0] WDOG_LIM = {WDOG_W{1'b1}};
+
+    reg [WDOG_W-1:0] wdog;
+    wire wdog_arm  = (st == S_LOAD) || (st == S_WAIT) || (st == S_RUN);
+    wire wdog_trip = wdog_arm && (wdog == WDOG_LIM);
+
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n)          wdog <= {WDOG_W{1'b0}};
+        else if (!wdog_arm)  wdog <= {WDOG_W{1'b0}};
+        else if (!wdog_trip) wdog <= wdog + 1'b1;
+    end
+
     always @(posedge clock or negedge rst_n) begin
         if (!rst_n) begin
             st <= S_IDLE; pc <= {NI_W{1'b0}}; fw <= 3'd0;
             ld_req <= 1'b0; op_start <= 1'b0; running <= 1'b0; done <= 1'b0;
-            gap <= 4'd0;
+            gap <= 4'd0; fault <= 1'b0;
         end else begin
             op_start <= 1'b0;
             done     <= 1'b0;
 
             case (st)
-            S_IDLE: begin
-                if (start && (n_instr != {NI_W{1'b0}})) begin
-                    pc      <= {NI_W{1'b0}};
-                    fw      <= 3'd0;
-                    running <= 1'b1;
-                    st      <= S_FETCH;
+            // S_ERR admits `start` on exactly the same terms as S_IDLE, rather
+            // than routing through it. Routing through cost a second `start`
+            // pulse to recover - the first left S_ERR with `fault` still set -
+            // and a two-pulse recovery protocol is the kind of thing that is
+            // correct in the RTL and wrong in every caller. One pulse in, one
+            // admission check, either running or faulted again.
+            S_IDLE, S_ERR: begin
+                // `start` clears a previous fault, so a run is always launched
+                // from a known state rather than inheriting one.
+                if (start) begin
+                    if ((n_instr == {NI_W{1'b0}}) || (n_instr > MAX_INSTR)) begin
+                        // T-1: n_instr is eight bits and the program memory
+                        // holds MAX_INSTR instructions. Refusing is the whole
+                        // point - executing instruction 64 would have fetched
+                        // instruction 0's words and looked like a working run.
+                        fault   <= 1'b1;
+                        running <= 1'b0;
+                        st      <= S_ERR;
+                    end else begin
+                        pc      <= {NI_W{1'b0}};
+                        fw      <= 3'd0;
+                        running <= 1'b1;
+                        fault   <= 1'b0;
+                        st      <= S_FETCH;
+                    end
                 end
             end
 
@@ -188,7 +278,13 @@ module top_seq #(
             end
 
             S_LOAD: begin
-                if (no_load) begin
+                if (wdog_trip) begin
+                    // the DMA never answered
+                    ld_req  <= 1'b0;
+                    fault   <= 1'b1;
+                    running <= 1'b0;
+                    st      <= S_ERR;
+                end else if (no_load) begin
                     st <= S_GO;
                 end else if (!ld_req) begin
                     ld_req <= 1'b1;
@@ -199,17 +295,37 @@ module top_seq #(
             end
 
             S_GO: begin
-                op_start <= 1'b1;
-                st       <= S_WAIT;
+                if (!op_valid) begin
+                    // T-2 cause (a): no feeder decodes this opcode, so op_busy
+                    // would never rise and S_WAIT would park forever. Caught
+                    // here rather than by the watchdog, because the opcode is
+                    // knowable now and a 1M-cycle wait tells you nothing.
+                    fault   <= 1'b1;
+                    running <= 1'b0;
+                    st      <= S_ERR;
+                end else begin
+                    op_start <= 1'b1;
+                    st       <= S_WAIT;
+                end
             end
 
             // Two states rather than one: wait for `busy` to RISE, then for it
             // to fall. A single "wait until not busy" would fall straight
             // through, because a feeder cannot assert busy until the cycle
             // after it sees op_start.
-            S_WAIT: if (op_busy) st <= S_RUN;
+            S_WAIT: if (wdog_trip) begin
+                // T-2 cause (b): the feeder's own zero-shape guard refused the
+                // op, so the defensive behaviour is what causes the hang.
+                fault   <= 1'b1;
+                running <= 1'b0;
+                st      <= S_ERR;
+            end else if (op_busy) st <= S_RUN;
 
-            S_RUN: if (!op_busy) begin
+            S_RUN: if (wdog_trip) begin
+                fault   <= 1'b1;
+                running <= 1'b0;
+                st      <= S_ERR;
+            end else if (!op_busy) begin
                 gap <= GAP_CYC[3:0];
                 st  <= S_GAP;
             end
@@ -228,10 +344,57 @@ module top_seq #(
                 end
             end
 
-            default: st <= S_IDLE;
+            // S_ERR is handled with S_IDLE above: abandoned, `fault` asserted
+            // and `done` never pulsing, so a caller waiting on `done` learns by
+            // reading one bit that it is waiting for nothing.
+
+            // All eight encodings of `st` are now named, so this is
+            // unreachable. It goes to S_ERR rather than S_IDLE because a state
+            // register that reached an impossible value should be loud.
+            default: begin
+                fault   <= 1'b1;
+                running <= 1'b0;
+                st      <= S_ERR;
+            end
             endcase
         end
     end
+
+    // ---- why the run was abandoned, in simulation only ------------------
+    //
+    //  The RTL carries one `fault` bit, which is what the hardware needs. The
+    //  REASON is worth more than a bit while debugging and costs nothing here.
+    //
+    //  These print `[FAULT]`, not `ERROR:`, and they do not call $finish -
+    //  deliberately, and the distinction is worth stating because the rest of
+    //  this review's simulation checks do the opposite:
+    //
+    //    * a condition the HARDWARE is designed to handle (these three) reports
+    //      and lets the simulation continue. `fault` is the verdict, and a
+    //      testbench asserts on it - accel_tb does, and top_seq_tb drives every
+    //      one of these cases on purpose to watch the guard fire. A message that
+    //      tripped scripts/run_sim.sh's failure grep would make a passing
+    //      negative test unrunnable.
+    //    * a condition that must NEVER happen (L-12's bias overflow, C-2's
+    //      address witness, C-4's memory collision, T-3's tag drift) prints
+    //      `ERROR:` and calls $finish, because there is no correct way to carry
+    //      on and the run should stop where the evidence is.
+`ifndef SYNTHESIS
+    always @(posedge clock) begin
+        if (rst_n) begin
+            if (((st == S_IDLE) || (st == S_ERR)) && start &&
+                ((n_instr == {NI_W{1'b0}}) || (n_instr > MAX_INSTR)))
+                $display("  [FAULT] %m T-1 n_instr=%0d out of range 1..%0d at time %0t",
+                         n_instr, MAX_INSTR, $time);
+            if ((st == S_GO) && !op_valid)
+                $display("  [FAULT] %m T-2 pc=%0d opcode %0d decodes to no feeder at time %0t",
+                         pc, op_code, $time);
+            if (wdog_trip)
+                $display("  [FAULT] %m T-2 watchdog expired in state %0d at pc=%0d (opcode %0d) at time %0t",
+                         st, pc, op_code, $time);
+        end
+    end
+`endif
 
 endmodule
 

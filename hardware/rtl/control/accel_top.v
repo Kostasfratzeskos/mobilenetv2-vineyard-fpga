@@ -115,6 +115,7 @@ module accel_top #(
     parameter PROG_DEPTH = 512,
     parameter NI_W    = 8,
     parameter GAP_CYC = 4,
+    parameter WDOG_W  = 20,     // top_seq's hang watchdog; see its header
 
     // ---- classifier ------------------------------------------------------
     parameter NLOG    = 4,
@@ -186,8 +187,47 @@ module accel_top #(
     output wire [NI_W-1:0]           pc,
     output wire                      running,
     output wire                      done,
-    output wire                      tag_error
+    output wire                      tag_error,
+    output wire                      fault        // sticky: the run was abandoned
 );
+
+    // ================= the reset, synchronised (T-5) =====================
+    //
+    //  rst_n arrives here as a raw top-level input and used to drive
+    //  `posedge clock or negedge rst_n` in every submodule - 3,998 FDCE plus
+    //  1 FDPE, measured post-route. Asynchronous ASSERTION is correct and is
+    //  kept. Asynchronous DEASSERTION is not: recovery and removal are
+    //  unconstrained, so an unknown subset of those 3,999 flip-flops leaves
+    //  reset one cycle after the rest. For `pc`, `fw`, `st` and every
+    //  run/cx/cy/drain that is a nondeterministic initial state, which is the
+    //  kind of bug that reproduces once a month on hardware and never in
+    //  simulation.
+    //
+    //  Vivado reported the path clean only because the XDC gives rst_n an input
+    //  delay, i.e. it was modelling a synchronous reset the design did not have.
+    //  The matching `set_false_path -from [get_ports rst_n]` is in the XDC now,
+    //  so the tool is told the truth instead: this one path is not timed,
+    //  because the two flops below are what make it safe.
+    //
+    //  Async assert, sync deassert. ASYNC_REG keeps the pair in one slice so the
+    //  metastability window of the first flop is not spread across the die.
+    //
+    //  NOTE: this fixes deassertion, not DPIR-2. Every submodule still has
+    //  `negedge rst_n` in its sensitivity list, so Vivado still cannot merge
+    //  any register into a DSP block - which is what L-1 needs. See DD-020.
+    (* ASYNC_REG = "TRUE" *) reg rst_sync_0, rst_sync_1;
+
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n) begin
+            rst_sync_0 <= 1'b0;
+            rst_sync_1 <= 1'b0;
+        end else begin
+            rst_sync_0 <= 1'b1;
+            rst_sync_1 <= rst_sync_0;
+        end
+    end
+
+    wire rst_n_i = rst_sync_1;      // what every submodule sees
 
     // ================= opcodes ==========================================
     localparam [3:0] OP_STEM   = 4'd1,
@@ -211,9 +251,9 @@ module accel_top #(
 
     top_seq #(
         .PW_W(PW_W), .PGA_W(PGA_W), .PROG_DEPTH(PROG_DEPTH),
-        .NI_W(NI_W), .GAP_CYC(GAP_CYC)
+        .NI_W(NI_W), .GAP_CYC(GAP_CYC), .WDOG_W(WDOG_W)
     ) u_seq (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(start), .n_instr(n_instr),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
         .ld_req(ld_req), .ld_off(ld_off), .ld_bytes(ld_bytes),
@@ -227,7 +267,7 @@ module accel_top #(
         .op_base_in(op_base_in), .op_base_out(op_base_out),
         .op_base_saved(op_base_saved),
         .op_busy(op_busy),
-        .pc(pc), .running(running), .done(done)
+        .pc(pc), .running(running), .done(done), .fault(fault)
     );
 
     // ================= which feeder is this op's =========================
@@ -291,7 +331,7 @@ module accel_top #(
         .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
         .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)
     ) u_os (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .flush(op_start),
         .act(op_act), .relu6_qmax(op_qmax),
         .pl_en(pl_en), .pl_bank(pl_bank), .pl_addr(pl_addr),
@@ -347,7 +387,7 @@ module accel_top #(
         .WA_W(ST_WA_W), .PA_W(PA_W), .BANK_W(ST_BANK_W), .PBANK_W(BANK_W),
         .WDEPTH(ST_WDEPTH), .PDEPTH(PDEPTH)
     ) u_stem (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(st_start), .img_w(st_img_w), .img_h(st_img_h),
         .n_oct(st_n_oct), .base_out(op_base_out),
         .wl_en(st_wl_en), .wl_bank(st_wl_bank),
@@ -375,7 +415,7 @@ module accel_top #(
         .BANK_W(BANK_W), .PIX_W(PIX_W), .OCT_W(OCT_W), .ICT_W(ICT_W),
         .WA_W(PW_WA_W), .AA_W(AA_W), .WDEPTH(PW_WDEPTH)
     ) u_pwf (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(pwf_start), .stall(1'b0),
         .n_pix(op_n_pix), .n_oc(op_n_oc), .n_ic(op_n_ic),
         .n_ent(n_ent_w), .base_in(op_base_in),
@@ -397,7 +437,7 @@ module accel_top #(
         .SHIFT_W(SHIFT_W), .DATA_W(DATA_W), .PIX_W(PIX_W), .OCT_W(OCT_W),
         .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W), .AA_W(AA_W)
     ) u_pwo (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(pwf_start), .n_oc(op_n_oc), .base_out(op_base_out),
         .os_acc(pw_os_acc), .os_acc_valid(pw_os_val),
         .os_param_addr(pw_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
@@ -412,7 +452,7 @@ module accel_top #(
         .TM(TM), .NLOG(NLOG), .IDX_W(IDX_W), .ACC_W(ACC_W),
         .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W), .LOG_W(LOG_W)
     ) u_log (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(op_start & sel_lin),
         .pl_en(lg_pl_en), .pl_idx(lg_pl_idx), .pl_bias(lg_pl_bias),
         .pl_m0(lg_pl_m0), .pl_shift(lg_pl_shift),
@@ -437,7 +477,7 @@ module accel_top #(
         .PA_W(PA_W), .BANK_W(DW_BANK_W), .POOL_BANK_W(BANK_W),
         .WDEPTH(DW_WDEPTH), .PDEPTH(PDEPTH)
     ) u_dw (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(dw_start), .img_w(op_img_w), .img_h(op_img_h),
         .stride2(op_stride2), .n_grp(op_n_grp[GRPW-1:0]), .n_ent(n_ent_w),
         .base_in(op_base_in), .base_out(op_base_out),
@@ -466,7 +506,7 @@ module accel_top #(
         .PA_W(PA_W), .BANK_W(BANK_W), .PDEPTH(PDEPTH), .AA_W(AA_W),
         .PIX_W(PIX_W), .SLW(SLW)
     ) u_res (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(rs_start), .n_pix(op_n_pix), .n_sl(op_n_ic), .n_ent(n_ent_w),
         .base_in(op_base_in), .base_saved(op_base_saved),
         .base_out(op_base_out),
@@ -493,7 +533,7 @@ module accel_top #(
         .PA_W(PA_W), .BANK_W(BANK_W), .PDEPTH(PDEPTH), .AA_W(AA_W),
         .PIX_W(PIX_W), .SLW(SLW)
     ) u_gap (
-        .clock(clock), .rst_n(rst_n),
+        .clock(clock), .rst_n(rst_n_i),
         .start(gp_start), .n_pix(op_n_pix), .n_sl(op_n_ic), .n_ent(n_ent_w),
         .base_in(op_base_in), .base_out(op_base_out),
         .os_acc(gp_os_acc), .os_acc_valid(gp_os_val),

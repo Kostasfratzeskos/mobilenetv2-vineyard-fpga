@@ -51,6 +51,23 @@ TC = 16          # depthwise channels in parallel
 POOL_TM = 32     # channels per activation-pool entry
 ENTRY_BYTES = POOL_TM
 
+# --- the sequencer's instruction ceiling, checked at BUILD time (T-1) --------
+#  Mirrors top_seq's PGA_W / PROG_DEPTH. This is a real ceiling that the
+#  hardware crosses SILENTLY: fetch_addr is {pc, fw}, three bits of word index
+#  and PGA_W-3 of instruction index, so instruction MAX_INSTR fetches
+#  instruction 0's words and executes it. There is no wraparound symptom - the
+#  run completes and the answer is wrong.
+#
+#  This network has exactly 64 instructions, which is exactly the ceiling, so
+#  one added layer or one debug op crosses it. The RTL now refuses an
+#  out-of-range n_instr at S_IDLE and ties PGA_W to PROG_DEPTH at elaboration,
+#  but this is the check that matters: it fires when the program is COMPILED,
+#  before anyone has spent a simulation or a synthesis run on it.
+PGA_W        = 9                                 # top_seq program address width
+PROG_DEPTH   = 1 << PGA_W                        # 512 words
+WORDS_PER_OP = 8
+MAX_INSTR    = PROG_DEPTH // WORDS_PER_OP        # 64
+
 # --- opcodes (mirror the sequencer's localparams) ----------------------------
 OP_STEM   = 0x1
 OP_PW     = 0x2
@@ -556,6 +573,20 @@ def main():
     peak = allocate(ops, tensors)
     errs = verify(ops, tensors)
 
+    # ---- T-1: the program must fit the sequencer's instruction ceiling ----
+    #  Before any listing, because a program that cannot be fetched is not worth
+    #  reporting an allocation for.
+    if len(ops) > MAX_INSTR:
+        sys.exit(
+            f"PROGRAM TOO LONG - {len(ops)} instructions, the sequencer can "
+            f"fetch {MAX_INSTR}.\n"
+            f"  top_seq's fetch_addr is {{pc, fw}} with PGA_W={PGA_W}, so "
+            f"instruction {MAX_INSTR} would fetch instruction 0's words and\n"
+            f"  execute it. The run would COMPLETE and the answer would be "
+            f"wrong.\n"
+            f"  Fix: raise PGA_W and PROG_DEPTH together in accel_top.v and "
+            f"top_seq.v, and here.")
+
     # ---- listing ----------------------------------------------------------
     lines = []
     lines.append(f"{'#':>3} {'op':<8} {'name':<24} {'out':>14} "
@@ -581,6 +612,10 @@ def main():
           f"{sum(1 for o in ops if o['opcode']==OP_LINEAR)} LINEAR)")
     print(f"save ops folded away: {sum(1 for o in manifest['ops'] if o['kind']=='save')}"
           "  (lifetime only, no data movement, no instruction)")
+    # Print the ceiling even when it is met, so it is a number someone sees
+    # rather than a check that is only ever silent (T-1).
+    print(f"sequencer ceiling   : {len(ops)}/{MAX_INSTR} instructions "
+          f"({MAX_INSTR - len(ops)} spare, PGA_W={PGA_W})")
     print(f"weight blob         : {wgt_total:,} B ({wgt_total/1e6:.2f} MB)")
     print(f"program memory      : {len(ops)*32:,} B")
     print()

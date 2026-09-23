@@ -58,7 +58,7 @@ module top_seq_tb;
     wire [15:0]       op_base_in, op_base_out, op_base_saved;
     logic             op_busy;
     wire [NI_W-1:0]   pc;
-    wire              running, done;
+    wire              running, done, fault;
 
     top_seq #(.PW_W(PW_W), .PGA_W(PGA_W), .PROG_DEPTH(PROG),
               .NI_W(NI_W), .GAP_CYC(GAP)) u_dut (
@@ -75,7 +75,7 @@ module top_seq_tb;
         .op_base_in(op_base_in), .op_base_out(op_base_out),
         .op_base_saved(op_base_saved),
         .op_busy(op_busy),
-        .pc(pc), .running(running), .done(done)
+        .pc(pc), .running(running), .done(done), .fault(fault)
     );
 
     initial clock = 1'b0;
@@ -203,12 +203,173 @@ module top_seq_tb;
         end
     end
 
+    // ================= T-1 / T-2: the guards must be seen to FIRE ========
+    //
+    //  The healthy run above proves the three new guards stay silent. That is
+    //  half of it: a guard nobody has watched trip is indistinguishable from a
+    //  guard that does not work, which is the whole complaint the review makes
+    //  about every precondition in this design. So a SECOND sequencer is
+    //  instantiated with a deliberately tiny watchdog and driven into each
+    //  failure mode in turn.
+    //
+    //  WDOG_W=6 means the watchdog trips after 63 cycles instead of 1,048,575.
+    //  Testing the mechanism rather than the number is the point - the number
+    //  is derived arithmetic (see top_seq's header) and 1M cycles of stimulus
+    //  would prove nothing extra about the logic.
+    localparam NEG_WDOG = 6;
+
+    logic             g_start, g_ld_done, g_busy, g_pg_en;
+    logic [PGA_W-1:0] g_pg_addr;
+    logic [PW_W-1:0]  g_pg_data;
+    logic [NI_W-1:0]  g_n_instr;
+    wire              g_running, g_done, g_fault, g_ld_req, g_op_start;
+
+    top_seq #(.PW_W(PW_W), .PGA_W(PGA_W), .PROG_DEPTH(PROG),
+              .NI_W(NI_W), .GAP_CYC(GAP), .WDOG_W(NEG_WDOG)) u_guard (
+        .clock(clock), .rst_n(rst_n),
+        .start(g_start), .n_instr(g_n_instr),
+        .pg_en(g_pg_en), .pg_addr(g_pg_addr), .pg_data(g_pg_data),
+        .ld_req(g_ld_req), .ld_done(g_ld_done),
+        .op_start(g_op_start),
+        .op_busy(g_busy),
+        .running(g_running), .done(g_done), .fault(g_fault)
+    );
+
+    // one instruction word 0: opcode in [3:0], everything else zero so that
+    // no_load is true and the op goes straight from S_LOAD to S_GO.
+    task automatic g_write_op0(input [3:0] opcode);
+        integer w;
+        begin
+            for (w = 0; w < 8; w++) begin
+                @(negedge clock);
+                g_pg_addr = w[PGA_W-1:0];
+                g_pg_data = (w == 0) ? {28'h0, opcode} : 32'h0;
+                g_pg_en   = 1'b1;
+                @(posedge clock);
+            end
+            @(negedge clock);
+            g_pg_en = 1'b0;
+        end
+    endtask
+
+    // Put the guard sequencer back in a known state between cases.
+    //
+    //  The obvious way - clear `fault` with an admissible `start` - does not
+    //  work, and finding out why was the useful part: an admissible start puts
+    //  the FSM into S_FETCH, and `start` is only honoured in S_IDLE and S_ERR,
+    //  so the NEXT case's start was ignored and its guard never got the chance
+    //  to fire. The first version of this test reported a pass for that case on
+    //  the previous case's flag. A reset is unambiguous, and the main DUT has
+    //  already finished and been checked by the time these run.
+    task automatic g_reset;
+        begin
+            rst_n = 1'b0;
+            repeat (2) @(negedge clock);
+            rst_n = 1'b1;
+            @(negedge clock);
+            if (g_fault !== 1'b0) begin
+                fails++;
+                $display("  [ERR] setup: fault is set straight out of reset");
+            end
+        end
+    endtask
+
+    // Drive `start` for one cycle, wait `cyc` cycles, then report whether the
+    // sequencer faulted. Every case expects fault=1 AND running=0: raising the
+    // flag while still claiming to run would be no better than hanging.
+    task automatic g_expect_fault(input string what, input integer cyc);
+        integer w;
+        begin
+            g_reset();
+            @(negedge clock);
+            g_start = 1'b1;
+            @(negedge clock);
+            g_start = 1'b0;
+            for (w = 0; w < cyc; w++) @(negedge clock);
+            if (g_fault !== 1'b1) begin
+                fails++;
+                $display("  [ERR] %s: fault did not fire", what);
+            end else if (g_running !== 1'b0) begin
+                fails++;
+                $display("  [ERR] %s: fault fired but running is still high", what);
+            end else if (g_done === 1'b1) begin
+                fails++;
+                $display("  [ERR] %s: fault fired but done pulsed too", what);
+            end else
+                $display("  [ok ] %s: fault raised, running low, done never pulsed", what);
+        end
+    endtask
+
+    task automatic run_guard_tests;
+        begin
+            $display("");
+            $display("T-1 / T-2 negative tests (WDOG_W=%0d, trips after %0d cycles):",
+                     NEG_WDOG, (1<<NEG_WDOG)-1);
+
+            // Program a VALID opcode first, so the two T-1 cases can only
+            // fault on n_instr. Left at the reset value of 0 they would also
+            // trip the opcode check, and a case that two guards catch does not
+            // tell you which one works.
+            g_write_op0(4'h2);                  // OP_PW
+            g_busy = 1'b0;
+
+            // T-1: n_instr below and above the ceiling. 64 is legal, 65 is not,
+            // and 0 is the case that used to make `start` a silent no-op.
+            g_n_instr = 8'd0;
+            g_expect_fault("T-1 n_instr = 0", 4);
+            g_n_instr = 8'd65;
+            g_expect_fault("T-1 n_instr = 65 > 64 ceiling", 4);
+
+            // T-2 (a): an opcode no feeder decodes. Caught at S_GO, so it must
+            // fault in a handful of cycles and NOT wait for the watchdog.
+            g_write_op0(4'h0);
+            g_n_instr = 8'd1;
+            g_busy    = 1'b0;
+            g_expect_fault("T-2 opcode 0 decodes to no feeder", 16);
+            g_write_op0(4'hF);
+            g_expect_fault("T-2 opcode 15 decodes to no feeder", 16);
+
+            // T-2 (b): a valid opcode whose feeder never raises busy - the C-8
+            // zero-shape refusal. This one must wait for the watchdog, so it is
+            // also the check that the watchdog runs at all.
+            g_write_op0(4'h2);                  // OP_PW, a real opcode
+            g_n_instr = 8'd1;
+            g_busy    = 1'b0;                   // the feeder never takes the job
+            // The prologue before S_WAIT is S_FETCH (8 words, 2 cycles each)
+            // + S_LOAD + S_GO, and the trip then needs (1<<NEG_WDOG)-1 cycles
+            // inside S_WAIT, so the wait must cover both. The first version of
+            // this test waited (1<<NEG_WDOG)+8 and missed the trip.
+            g_expect_fault("T-2 op_busy never rises (watchdog)", (1<<NEG_WDOG) + 40);
+
+            // Recovery in ONE pulse. S_ERR admits `start` on the same terms as
+            // S_IDLE, so a caller does not have to know that it faulted: the
+            // same start that would have launched a run launches one.
+            g_write_op0(4'h2);
+            g_n_instr = 8'd1;
+            @(negedge clock);
+            g_start = 1'b1;
+            @(negedge clock);
+            g_start = 1'b0;
+            @(negedge clock);
+            if (g_fault !== 1'b0) begin
+                fails++;
+                $display("  [ERR] recovery: one `start` did not clear fault");
+            end else if (g_running !== 1'b1) begin
+                fails++;
+                $display("  [ERR] recovery: fault cleared but the run did not start");
+            end else
+                $display("  [ok ] recovery: one `start` clears fault and restarts the run");
+        end
+    endtask
+
     integer k, guard;
     initial begin
         $readmemh("../../software/export/program.hex", prog);
         for (k = 0; k < PROG; k++) if (prog[k] === 32'hx) prog[k] = 32'h0;
 
         start = 0; n_instr = 0; pg_en = 0; pg_addr = 0; pg_data = 0;
+        g_start = 0; g_n_instr = 0; g_pg_en = 0; g_pg_addr = 0; g_pg_data = 0;
+        g_ld_done = 0; g_busy = 0;
         ld_done = 0; op_busy = 0;
         ld_seen = 0; saw_busy = 0; arm = 0; stub = 0;
         cnt_stem = 0; cnt_pw = 0; cnt_dw = 0; cnt_res = 0; cnt_gap = 0; cnt_lin = 0;
@@ -265,10 +426,16 @@ module top_seq_tb;
         if (cnt_gap  !== 1)  begin fails++; $display("  [ERR] GAP count");  end
         if (cnt_lin  !== 1)  begin fails++; $display("  [ERR] LINEAR count"); end
         if (running !== 1'b0) begin fails++; $display("  [ERR] still running after done"); end
+        if (fault !== 1'b0) begin
+            fails++;
+            $display("  [ERR] fault fired on a healthy run");
+        end
         if (saw_busy == 0) begin
             fails++;
             $display("  [ERR] the last op never went busy");
         end
+
+        run_guard_tests();
 
         $display("");
         if (fails == 0)

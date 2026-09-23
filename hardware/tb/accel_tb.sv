@@ -154,6 +154,7 @@ module accel_tb;
     wire                       argmax_valid;
     wire [NI_W-1:0]            pc;
     wire                       running, done, tag_error;
+    wire                       fault;        // T-2: the run was abandoned
 
     accel_top #(
         .DATA_W(DATA_W), .TM(TM), .TN(TN), .TC(TC), .TS(TS), .TSLOG(3),
@@ -183,7 +184,8 @@ module accel_tb;
         .lg_pl_m0(lg_pl_m0), .lg_pl_shift(lg_pl_shift),
         .logits(logits), .logits_valid(logits_valid),
         .argmax(argmax), .argmax_valid(argmax_valid),
-        .pc(pc), .running(running), .done(done), .tag_error(tag_error)
+        .pc(pc), .running(running), .done(done), .tag_error(tag_error),
+        .fault(fault)
     );
 
     initial clock = 1'b0;
@@ -606,6 +608,16 @@ module accel_tb;
             $display("  [ERR] pw_out's tag self-check tripped");
         end else
             $display("  [ok ] no tag error: the pointwise pipelines stayed in step");
+
+        // T-2 gave top_seq a watchdog, an opcode-validity check and an S_ERR
+        // state. All three are meant to be silent on a healthy run, and a check
+        // that is only ever silent is a check nobody notices has stopped
+        // working - so the healthy run asserts on it too.
+        if (fault) begin
+            fails++;
+            $display("  [ERR] top_seq raised `fault`: the run was abandoned (watchdog, bad opcode or n_instr)");
+        end else
+            $display("  [ok ] no fault: no hang, no undecodable opcode, n_instr in range");
 
         if (started !== N_OPS) begin
             fails++;
