@@ -138,7 +138,7 @@ module stem_feeder #(
     wire             win_valid;
     wire             adv = run && ((!sweeping && !win_valid) || last_sweep);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             cy <= {XW{1'b0}}; cx <= {XW{1'b0}}; img_off <= {IA_W{1'b0}};
             run <= 1'b0; layer_done <= 1'b0;
@@ -170,7 +170,7 @@ module stem_feeder #(
     reg            v_d1, real_d1;
     reg [XW-1:0]   y_d1, x_d1;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     begin v_d1 <= 1'b0; real_d1 <= 1'b0;
                               y_d1 <= {XW{1'b0}}; x_d1 <= {XW{1'b0}}; end
         else if (start) begin v_d1 <= 1'b0; real_d1 <= 1'b0; end
@@ -201,13 +201,35 @@ module stem_feeder #(
     // in-flight pixel that arrives after the stall begins.
     reg [K*K*CIN*DATA_W-1:0] win_q;
 
-    always @(posedge clock or negedge rst_n) begin
+    // ---- win_q has a SYNCHRONOUS reset, on purpose (DD-020) --------------
+    //
+    //  Split out of the state machine below, which keeps its asynchronous reset.
+    //  This one register drives all 216 A inputs of the stem's conv3x3_std DSPs,
+    //  and it was 6,480 of the design's 10,940 DPIR-2 violations - 59% - all
+    //  saying the same thing:
+    //
+    //      DSP ... input pin ... is connected to registers with an asynchronous
+    //      reset. This is preventing the possibility of merging these registers
+    //      in to the DSP Block since the DSP block registers only possess
+    //      synchronous reset capability.
+    //
+    //  `rst_n` arriving here is already the two-flop synchronised reset that
+    //  accel_top produces (T-5), so using it synchronously is not a weakening -
+    //  it is the same reset, sampled the way the DSP can accept.
+    //
+    //  This is the measured half of DD-020, and it sits on the design's critical
+    //  path: win_q -> acc_q is the worst path in every run so far.
+    always @(posedge clock) begin
+        if (!rst_n)                       win_q <= {K*K*CIN*DATA_W{1'b0}};
+        else if (win_valid && !sweeping)  win_q <= win;
+    end
+
+    always @(posedge clock) begin
         if (!rst_n) begin
-            sweeping <= 1'b0; oct <= {OCTW{1'b0}}; win_q <= {K*K*CIN*DATA_W{1'b0}};
+            sweeping <= 1'b0; oct <= {OCTW{1'b0}};
         end else if (start) begin
             sweeping <= 1'b0; oct <= {OCTW{1'b0}};
         end else if (win_valid && !sweeping) begin
-            win_q    <= win;
             sweeping <= 1'b1;
             oct      <= {OCTW{1'b0}};
         end else if (sweeping) begin
@@ -261,7 +283,7 @@ module stem_feeder #(
 
     // ================= assemble four quarters into one entry ============
     reg [OCTW-1:0] oct_d1, oct_d2;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin oct_d1 <= {OCTW{1'b0}}; oct_d2 <= {OCTW{1'b0}}; end
         else        begin oct_d1 <= oct;          oct_d2 <= oct_d1;       end
     end
@@ -270,7 +292,7 @@ module stem_feeder #(
     // cycle so the last fold has landed before the entry is stored.
     reg [POOL_TM*DATA_W-1:0] asm;
     integer B;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) asm <= {POOL_TM*DATA_W{1'b0}};
         else if (q_valid)
             for (B = 0; B < TS; B = B + 1)
@@ -283,7 +305,7 @@ module stem_feeder #(
     reg            wr_go;
     reg [AA_W-1:0] out_cnt;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             wr_go <= 1'b0; out_cnt <= {AA_W{1'b0}};
         end else if (start) begin
@@ -325,7 +347,7 @@ module stem_feeder #(
     //  Inside `ifndef SYNTHESIS`, so the datapath is untouched.
 `ifndef SYNTHESIS
     reg [XW-1:0] ox_h, oy_h, ox_e, oy_e;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             ox_h <= {XW{1'b0}}; oy_h <= {XW{1'b0}};
             ox_e <= {XW{1'b0}}; oy_e <= {XW{1'b0}};
@@ -368,7 +390,7 @@ module stem_feeder #(
 
     // ================= busy, including the drain ========================
     reg [3:0] drain;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)             drain <= 4'd0;
         else if (start)         drain <= 4'd0;
         else if (layer_done)    drain <= 4'd15;

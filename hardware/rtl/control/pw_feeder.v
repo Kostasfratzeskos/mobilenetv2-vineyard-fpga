@@ -156,7 +156,7 @@ module pw_feeder #(
     // already carried this counter; this one was the odd case out because its
     // address generator happened to expose a busy of its own.
     reg [2:0] drain;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)             drain <= 3'd0;
         else if (start)         drain <= 3'd0;
         else if (layer_done)    drain <= 3'd7;
@@ -172,7 +172,7 @@ module pw_feeder #(
     reg [WA_W-1:0] w_addr;      // walks 0 .. n_oc*n_ic-1, restarts per pixel
     reg [AA_W-1:0] pix_base;    // base_in + pix*n_ent, kept by accumulation
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             w_addr   <= {WA_W{1'b0}};
             pix_base <= {AA_W{1'b0}};
@@ -201,7 +201,7 @@ module pw_feeder #(
 
     // ================= stage 1 : control delayed to meet the data =======
     reg v_d, f_d, l_d;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     begin v_d <= 1'b0; f_d <= 1'b0; l_d <= 1'b0; end
         else if (start) begin v_d <= 1'b0; f_d <= 1'b0; l_d <= 1'b0; end
         else            begin v_d <= ag_valid; f_d <= ag_first; l_d <= ag_last; end

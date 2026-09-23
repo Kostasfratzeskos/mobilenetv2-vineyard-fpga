@@ -88,7 +88,7 @@ module out_stage #(
     reg [TM*ACC_W-1:0] acc_q;
     reg                vA;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)      vA <= 1'b0;
         else if (flush)  vA <= 1'b0;
         else begin

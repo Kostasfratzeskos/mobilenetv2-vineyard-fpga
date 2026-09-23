@@ -55,12 +55,12 @@ module mac_lane #(
     // ---- accumulate across tiles (conv1x1 handshake) ------------------
     wire signed [ACC_W-1:0] base = first ? {ACC_W{1'b0}} : acc;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     acc <= {ACC_W{1'b0}};
         else if (valid) acc <= base + partial;
     end
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) done <= 1'b0;
         else        done <= valid & last;
     end

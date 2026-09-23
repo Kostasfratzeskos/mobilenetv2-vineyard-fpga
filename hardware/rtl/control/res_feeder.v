@@ -121,7 +121,7 @@ module res_feeder #(
     wire last_pix = last_sl && (pix == n_pix - 1'b1);
     wire slice_hi = ph;                       // second phase of this slice
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             pix <= {PIX_W{1'b0}}; sl <= {SLW{1'b0}};
             pix_off <= {AA_W{1'b0}}; ph <= 1'b0;
@@ -169,7 +169,7 @@ module res_feeder #(
     reg [AA_W-1:0]      wa0, wa1, wa2;
     reg [SEL_W-1:0]     ws0, ws1, ws2;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             tgt0 <= {TN*DATA_W{1'b0}}; tgt1 <= {TN*DATA_W{1'b0}}; tgt2 <= {TN*DATA_W{1'b0}};
             wa0  <= {AA_W{1'b0}};  wa1 <= {AA_W{1'b0}};  wa2 <= {AA_W{1'b0}};
@@ -197,7 +197,7 @@ module res_feeder #(
     reg             sav_valid;
     reg [SLW-1:0]   sav_sl;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     begin sav_valid <= 1'b0; sav_sl <= {SLW{1'b0}}; end
         else if (start) begin sav_valid <= 1'b0; end
         else begin
@@ -261,7 +261,7 @@ module res_feeder #(
 
     // ================= busy, including the drain ========================
     reg [2:0] drain;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)             drain <= 3'd0;
         else if (start)         drain <= 3'd0;
         else if (layer_done)    drain <= 3'd6;

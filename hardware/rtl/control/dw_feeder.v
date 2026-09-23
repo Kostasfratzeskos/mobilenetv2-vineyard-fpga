@@ -155,7 +155,7 @@ module dw_feeder #(
     // the virtual edge line_buffer needs
     wire is_real  = (cy < img_h) && (cx < img_w);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             grp <= {GRPW{1'b0}}; cy <= {XW{1'b0}}; cx <= {XW{1'b0}};
             run <= 1'b0; layer_done <= 1'b0;
@@ -184,7 +184,7 @@ module dw_feeder #(
     // ---- input address: one add, no multiplier --------------------------
     reg [AA_W-1:0] pix_off;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)          pix_off <= {AA_W{1'b0}};
         else if (start)      pix_off <= {AA_W{1'b0}};
         else if (step) begin
@@ -202,7 +202,7 @@ module dw_feeder #(
     reg [XW-1:0]   y_d1, x_d1;
     reg            v_d1, real_d1;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             v_d1 <= 1'b0; real_d1 <= 1'b0;
             grp_d1 <= {GRPW{1'b0}}; y_d1 <= {XW{1'b0}}; x_d1 <= {XW{1'b0}};
@@ -247,7 +247,7 @@ module dw_feeder #(
 
     // ================= stage C+2 : the array and requantize =============
     reg [GRPW-1:0] grp_d2;
-    always @(posedge clock or negedge rst_n)
+    always @(posedge clock)
         if (!rst_n) grp_d2 <= {GRPW{1'b0}};
         else        grp_d2 <= grp_d1;
 
@@ -282,7 +282,7 @@ module dw_feeder #(
     // lands one cycle later than a private rq_bank would have produced it, and
     // the group index needs one more stage to stay with it.
     reg [GRPW-1:0] grp_d3, grp_d4;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             grp_d3 <= {GRPW{1'b0}};
             grp_d4 <= {GRPW{1'b0}};
@@ -299,7 +299,7 @@ module dw_feeder #(
     wire new_grp_wr = !wrote_any || (grp_d4 != grp_wr_prev);
     wire [AA_W-1:0] cur_off = new_grp_wr ? {AA_W{1'b0}} : opix_off;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             opix_off <= {AA_W{1'b0}}; wrote_any <= 1'b0;
         end else if (start) begin
@@ -349,7 +349,7 @@ module dw_feeder #(
     //  its first run: it reported the counter at pixel 1 against a witness at
     //  pixel 0, which is a lagging witness, not a wrong address.
     reg [XW-1:0] ox_q, oy_q, ox_w, oy_w;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             ox_q <= {XW{1'b0}}; oy_q <= {XW{1'b0}};
             ox_w <= {XW{1'b0}}; oy_w <= {XW{1'b0}};
@@ -397,7 +397,7 @@ module dw_feeder #(
     // `busy` has to outlive them or the caller would start the next layer on
     // top of results still in flight - the same constraint pw_feeder documents.
     reg [2:0] drain;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)              drain <= 3'd0;
         else if (start)          drain <= 3'd0;
         else if (layer_done)     drain <= 3'd7;

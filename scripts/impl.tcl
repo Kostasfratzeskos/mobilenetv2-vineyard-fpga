@@ -84,6 +84,31 @@ report_utilization                       -file "$out/synth_utilization.rpt"
 report_timing_summary -max_paths 10      -file "$out/synth_timing_summary.rpt"
 write_checkpoint -force                        "$out/post_synth.dcp"
 
+# ---- stop here if only synthesis was asked for ------------------------------
+#  SYNTH_ONLY=1 exists for experiments that a synthesis run already answers, so
+#  they cost 12 minutes instead of 50. The one it was added for: whether Vivado
+#  will absorb a register into a DSP48E2 once that register stops carrying an
+#  asynchronous reset (DD-020). That is decided at SYNTHESIS - the register
+#  either disappears into the DSP or it does not - and the methodology check
+#  that names the failure, DPIR-2, only reports after placement, so watching
+#  DPIR-2 is the slow way to see it. What to compare instead: the flip-flop
+#  count of the module that owns the register, and the source of the worst path.
+if {[info exists ::env(SYNTH_ONLY)] && $::env(SYNTH_ONLY) == 1} {
+    report_utilization -hierarchical -file "$out/synth_utilization_hier.rpt"
+    puts ""
+    puts "================== SYNTHESIS ONLY ($tag) =================="
+    set clk [lindex [get_clocks] 0]
+    set per [get_property PERIOD $clk]
+    set p   [lindex [get_timing_paths -max_paths 1 -nworst 1 -setup] 0]
+    puts [format "  constraint       : %.3f ns" $per]
+    puts "  WNS (setup)      : [get_property SLACK $p]"
+    puts "  worst path from  : [get_property STARTPOINT_PIN $p]"
+    puts "               to  : [get_property ENDPOINT_PIN   $p]"
+    puts "  reports in $out/  (post-route ones NOT produced)"
+    puts "=========================================================="
+    return
+}
+
 # ---- implementation --------------------------------------------------------
 # phys_opt_design is included because the GUI project flow that produced the
 # baseline ran it too, so leaving it out here would compare two different flows.

@@ -234,13 +234,13 @@ module top_seq #(
     wire wdog_arm  = (st == S_LOAD) || (st == S_WAIT) || (st == S_RUN);
     wire wdog_trip = wdog_arm && (wdog == WDOG_LIM);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)          wdog <= {WDOG_W{1'b0}};
         else if (!wdog_arm)  wdog <= {WDOG_W{1'b0}};
         else if (!wdog_trip) wdog <= wdog + 1'b1;
     end
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             st <= S_IDLE; pc <= {NI_W{1'b0}}; fw <= 3'd0;
             ld_req <= 1'b0; op_start <= 1'b0; running <= 1'b0; done <= 1'b0;

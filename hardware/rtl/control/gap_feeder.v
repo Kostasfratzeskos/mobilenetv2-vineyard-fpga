@@ -107,7 +107,7 @@ module gap_feeder #(
     wire last_p  = (pp == n_pix - 1'b1);
     wire last_sl = last_p && (sl == n_sl - 1'b1);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             sl <= {SLW{1'b0}}; pp <= {PIX_W{1'b0}}; p_off <= {AA_W{1'b0}};
             run <= 1'b0; layer_done <= 1'b0;
@@ -147,7 +147,7 @@ module gap_feeder #(
     reg           v_d1, first_d1, last_d1;
     reg [SLW-1:0] sl_d1;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             v_d1 <= 1'b0; first_d1 <= 1'b0; last_d1 <= 1'b0;
             sl_d1 <= {SLW{1'b0}};
@@ -186,7 +186,7 @@ module gap_feeder #(
 
     // ================= stage 2 : the shared requantize ==================
     reg [SLW-1:0] sl_d2;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) sl_d2 <= {SLW{1'b0}};
         else        sl_d2 <= sl_d1;
     end
@@ -209,7 +209,7 @@ module gap_feeder #(
     // The output is 1x1xC, so there is no pixel index: slice s lands in entry
     // s>>1, half s&1.
     reg [SLW-1:0] sl_d3, sl_d4;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             sl_d3 <= {SLW{1'b0}}; sl_d4 <= {SLW{1'b0}};
         end else begin
@@ -229,7 +229,7 @@ module gap_feeder #(
 
     // ================= busy, including the drain ========================
     reg [2:0] drain;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)             drain <= 3'd0;
         else if (start)         drain <= 3'd0;
         else if (layer_done)    drain <= 3'd7;

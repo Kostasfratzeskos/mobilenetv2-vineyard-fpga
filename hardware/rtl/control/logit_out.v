@@ -99,7 +99,7 @@ module logit_out #(
     reg [SHIFT_W-1:0]        p_shift [0:NLOG-1];
 
     integer i;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             for (i = 0; i < NLOG; i = i + 1) begin
                 p_bias[i]  <= {BIAS_W{1'b0}};
@@ -142,7 +142,7 @@ module logit_out #(
     endgenerate
 
     reg lv;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     lv <= 1'b0;
         else if (start) lv <= 1'b0;
         else            lv <= acc_valid;
@@ -165,7 +165,7 @@ module logit_out #(
             end
     end
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             argmax <= {IDX_W{1'b0}};  argmax_valid <= 1'b0;
         end else if (start) begin

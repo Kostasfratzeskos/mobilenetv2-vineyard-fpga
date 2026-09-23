@@ -454,7 +454,7 @@ argmax over the 4 int16 logits is the predicted class.
   fires, widen ACC_W (staying <= 27) or fix the quantization.
 
 ### DD-020 - Reset style: asynchronous everywhere, or synchronous so the DSPs can absorb registers
-- Status: **PROPOSED** - do not implement until accepted
+- Status: **Accepted** - option B, validated by the experiment below before the wide edit
 - Date: 2026-09-23
 - Context: the RTL review's T-5 asks for a reset synchroniser on correctness grounds. `rst_n`
   is a raw top-level input driving `posedge clock or negedge rst_n` in every module.
@@ -499,8 +499,14 @@ argmax over the 4 int16 logits is the predicted class.
             deleted 0 existing cell and moved 0 existing cell
 
   944 DSPs, 3,999 asynchronously-reset flip-flops feeding them, and **zero candidates**.
-  This is the message to watch when the validation experiment below is run: if converting
-  one leaf to synchronous reset is going to help, the candidate count stops being zero.
+
+  CORRECTION, after the fact: this message is NOT a usable signal, and it is worth saying so
+  because it looked like the obvious one. It reads identically after the fix - `phys_opt`
+  still reports "no candidate cells", because by then SYNTHESIS has already absorbed the
+  registers and there is nothing left for a physical-optimization pass to move. So it says
+  "nothing to do" both when the work is impossible and when the work is already done. The
+  signals that actually distinguish the two are the DPIR-2 count, the start point of the
+  worst timing path, and the flip-flop count.
 
   Second consequence, available BEFORE L-1: the registers DPIR-2 names are the ones that
   already exist and already drive DSP inputs - `u_stem/win_q` (216 bits) and
@@ -580,19 +586,93 @@ argmax over the 4 int16 logits is the predicted class.
   accepted, Phase 1 should implement B rather than A, because Phase 2 depends on it and
   Phase 1 is the phase that is explicitly allowed to change no latency - which B does not.
 
-- Validation, before the wide edit is trusted: convert ONE leaf and its array
-  (`dwconv3x3` + `dw_array`, 144 DSPs) to synchronous reset, re-synthesise, and check two
-  numbers - DPIR-2 drops by the depthwise share, and the depthwise DSPs start reporting
-  used A/B registers. If DPIR-2 does not drop, or the tool still refuses to absorb, then B
-  buys only the T-5 correctness fix and the decision reduces to A, which changes the L-1
-  plan completely. Measure before committing to the wide edit.
+- Validation, RUN, and it changed which leaf to convert. The proposal said "convert
+  `dwconv3x3` + `dw_array`", which is not possible: both are purely combinational and own
+  no registers at all. The registers DPIR-2 actually names are the ones DRIVING the DSP
+  inputs, and grouping the 10,940 violations by instance says exactly where they are:
+
+  | violations | instance | the register driving it |
+  |--:|:--|:--|
+  | 6,480 (59%) | `u_stem/u_arr` (216 DSPs) | `stem_feeder`'s `win_q`, 216 bits |
+  | 4,320 (39%) | `u_dw/u_arr` (144 DSPs) | `line_buffer`'s `wr[]`, 1,152 bits |
+  | 140 (1%) | `u_log/cls[*].u_r` | `logit_out`'s parameter registers |
+
+  `pe_array`'s 512 DSPs and `out_stage`'s 64 are ABSENT from the list, and the reason is
+  worth keeping: their inputs come from `act_buffer`, `wgt_buffer` and `param_buffer` `dout`
+  registers, which have no reset at all, plus `out_stage`'s `acc_q`, which has no assignment
+  in its reset branch. So the registers that were already mergeable are precisely the ones
+  with no reset - option D's argument, measured, without anyone having chosen it.
+
+  The experiment was therefore `stem_feeder`'s `win_q`: one register, the largest share, and
+  it sits on the design's measured critical path. Two synthesis runs at 4.000 ns, that one
+  register the only difference:
+
+  | | async `win_q` | sync `win_q` | |
+  |:--|:--|:--|:--|
+  | worst path FROM | `u_stem/win_q_reg[7]/C` | `u_stem/u_arr/lane[0].u_conv/acc26/`**`DSP_A_B_DATA_INST/CLK`** | inside the DSP |
+  | WNS | -17.279 ns | **-17.036 ns** | +0.243 |
+  | `u_stem` flip-flops | 847 | **638** | -209 of win_q's 216 |
+  | total flip-flops | 6,174 | 5,966 | -208 |
+  | total LUTs | 35,625 | 35,540 | -85 |
+  | DSPs | 944 | 944 | 0 |
+
+  The start point of the critical path moved from a fabric flip-flop INTO the DSP48E2's A/B
+  input register. That is the mechanism L-1 depends on, demonstrated on real silicon
+  geometry rather than argued from the datasheet. `stem_datapath_tb` passes unchanged.
+
+  Note what the experiment does NOT show: a large timing win. +0.243 ns on a path that is
+  22.8 ns long, because the register moved into the DSP's INPUT stage and the 27-deep
+  unregistered ALU cascade behind it is untouched. That is the expected result and it is the
+  point - the cascade is L-1's job, and L-1 can now put its registers where they belong.
+
+- The whole design, measured. 49 always blocks across 16 files, post-route at 4.000 ns:
+
+  | | baseline | Phase 1 | **option B** | |
+  |:--|--:|--:|--:|:--|
+  | **DPIR-2** | 10,940 | 10,940 | **0** | the goal |
+  | `[Synth 8-7137]` sim-mismatch | 10 | 10 | **0** | free |
+  | CLB LUTs | 34,834 | 34,957 | **32,919** | -2,038 (-5.8%) |
+  | CLB Registers | 6,863 | 6,702 | **4,959** | -1,743 (-26%) |
+  | CARRY8 | 937 | 940 | 952 | +12 |
+  | Block RAM / URAM | 176 / 52 | 176 / 52 | 178 / 52 | +2 BRAM |
+  | **DSPs** | 944 | 944 | **976** | **+32** |
+  | WNS | -18.821 | -18.463 | **-18.282** | +0.181 |
+  | TNS | -71,607 | -67,421 | -70,411 | worse, see below |
+  | real Fmax | 43.8 MHz | 44.5 MHz | **44.8 MHz** | |
+
+  The `[Synth 8-7137]` warnings going to zero was predicted and is worth collecting: all ten
+  existed only because a register sat in an asynchronous-reset block with no assignment in
+  the reset branch (`out_stage`'s `acc_q`, `dw_feeder`'s `grp_wr_prev`, `top_seq`'s `w[0:7]`).
+  In a synchronous block the construct is ordinary, so a class of
+  simulation-versus-synthesis mismatch is gone rather than documented.
+
+  Where the **+32 DSPs** went, located rather than assumed: `mac_lane` is 17 DSPs per lane
+  instead of 16, times TM=32 lanes. Sixteen of those are the taps; the seventeenth is the
+  accumulate stage, which previously had to share the last tap's DSP and now has its own P
+  register. That is a good trade twice over - 32 DSPs (1.9% of the device) for 1,743
+  flip-flops and 2,038 LUTs, and the accumulator gaining a DSP register stage is exactly the
+  direction L-1 is going.
+
+  TNS got worse while WNS got better, which is not a contradiction: the endpoint count grew
+  94,308 -> 97,060 because 32 more DSPs and the absorbed registers add timing endpoints, and
+  in a design that misses its constraint by 4.5x more endpoints means more failing endpoints.
+  The worst path improved and nothing new appeared on it - the ten worst paths are still the
+  stem cascade, and the synchronous reset net is on none of them.
 
 - Alternatives considered: leaving `rst_n` as is and relying on the XDC's input delay to
   keep the report clean - that is what happens today, and it is the reason the problem is
   invisible; constraining the reset properly with `set_max_delay` instead of synchronising
   it - makes the timing report honest without making the circuit correct.
 
-- Revisit if: the validation experiment above shows the tool will not absorb registers into
-  the DSPs even with synchronous resets, or if a PS-side reset arrives that is already
-  synchronous to this clock (in which case the synchroniser becomes a formality and only the
-  sensitivity lists matter).
+- Implemented as: 49 always blocks across 16 files converted from
+  `always @(posedge clock or negedge rst_n)` to `always @(posedge clock)`, keeping the same
+  `if (!rst_n)` body. The synchroniser in `accel_top` is the ONE block that keeps its
+  asynchronous reset, and the convention is documented there rather than in a design note,
+  because that is the file a reader is in when they need it. All 31 testbenches pass and
+  `accel_tb` is bit-exact at 6,895,780 elements, which is the check that a wide mechanical
+  edit did not drop a reset somewhere it mattered.
+
+- Revisit if: a PS-side reset arrives that is already synchronous to this clock (the
+  synchroniser then becomes a formality and only the sensitivity lists matter), or if L-1
+  still misses timing after pipelining - at which point option D applied to individual
+  datapath registers is the next lever, and the measurement above shows why it would work.

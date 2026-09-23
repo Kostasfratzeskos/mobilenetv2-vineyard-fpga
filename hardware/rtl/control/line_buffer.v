@@ -132,7 +132,7 @@ module line_buffer #(
     wire [GW-1:0] col_mid = (in_y >= 1) ? lb0_out : {GW{1'b0}};
 
     integer ky;
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             for (ky = 0; ky < K*K; ky = ky + 1) wr[ky] <= {GW{1'b0}};
         end else if (in_valid) begin
@@ -170,7 +170,7 @@ module line_buffer #(
     wire          in_range = (in_y >= 1) && (in_x >= 1);
     wire          aligned  = !stride2 || (!cy[0] && !cx[0]);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             win_valid <= 1'b0;
             out_x     <= {XW{1'b0}};

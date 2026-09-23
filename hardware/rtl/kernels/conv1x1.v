@@ -51,12 +51,12 @@ module conv1x1 #(
     // sign-extends `prod` up to ACC_W automatically.
     wire signed [ACC_W-1:0] base = first ? {ACC_W{1'b0}} : acc;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     acc <= {ACC_W{1'b0}};
         else if (valid) acc <= base + prod;
     end
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) done <= 1'b0;
         else        done <= valid & last;   // aligned with the final acc update
     end

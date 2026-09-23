@@ -39,12 +39,12 @@ module avgpool #(
     // sign-extends the int8 sample up to ACC_W automatically.
     wire signed [ACC_W-1:0] base = first ? {ACC_W{1'b0}} : acc;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)     acc <= {ACC_W{1'b0}};
         else if (valid) acc <= base + a;
     end
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) done <= 1'b0;
         else        done <= valid & last;
     end

@@ -212,9 +212,37 @@ module accel_top #(
     //  Async assert, sync deassert. ASYNC_REG keeps the pair in one slice so the
     //  metastability window of the first flop is not spread across the die.
     //
-    //  NOTE: this fixes deassertion, not DPIR-2. Every submodule still has
-    //  `negedge rst_n` in its sensitivity list, so Vivado still cannot merge
-    //  any register into a DSP block - which is what L-1 needs. See DD-020.
+    //  ---- THE RESET CONVENTION FOR THE WHOLE DESIGN (DD-020) -------------
+    //
+    //  This always block is the ONLY one in the accelerator with `negedge rst_n`
+    //  in its sensitivity list. Everything downstream of `rst_n_i` uses
+    //  `always @(posedge clock)` with `if (!rst_n)`, i.e. a SYNCHRONOUS reset.
+    //  That is not a weakening - the reset those modules receive has already been
+    //  synchronised here, so sampling it on the clock is the same reset.
+    //
+    //  Why it matters, measured rather than argued. A DSP48E2's internal A/B/M/P
+    //  registers have synchronous reset only, so while a register carried an
+    //  asynchronous reset Vivado could not move it inside a DSP. It said so
+    //  10,940 times (DPIR-2) and again from the other direction:
+    //
+    //      Phase 2 DSP Register Optimization
+    //      INFO: [Physopt 32-456] No candidate cells for DSP register
+    //            optimization found in the design.
+    //
+    //  Converting one register - stem_feeder's `win_q`, which feeds all 216 A
+    //  inputs of the stem array and was 59% of those violations - moved the
+    //  design's worst path START POINT from a fabric flop into the DSP:
+    //
+    //      before : u_stem/win_q_reg[7]/C                      WNS -17.279
+    //      after  : u_stem/u_arr/lane[0].u_conv/acc26/
+    //                   DSP_A_B_DATA_INST/CLK                  WNS -17.036
+    //
+    //  and removed 209 flip-flops. L-1's whole purpose is to put pipeline
+    //  registers into those DSPs; this is what makes that possible.
+    //
+    //  So: if you add a clocked block anywhere in this design, use
+    //  `always @(posedge clock)`. An asynchronous reset in the datapath is now a
+    //  bug, not a style choice.
     (* ASYNC_REG = "TRUE" *) reg rst_sync_0, rst_sync_1;
 
     always @(posedge clock or negedge rst_n) begin

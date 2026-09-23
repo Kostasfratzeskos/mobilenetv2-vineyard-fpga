@@ -833,3 +833,73 @@ wrote quant_scales.json  (53 layers)
   `report_methodology` is in `scripts/impl.tcl` now, and the DPIR-2 count prints on stdout.
   It had been measured by hand once, which is exactly how a number stops being measured.
 - Next: Phase 2a, which needs the reset decision first.
+
+### 2026-09-23 (later still) - DD-020 accepted: synchronous reset, and DPIR-2 goes to zero
+- Did: ran the DD-020 validation experiment, then implemented option B - 49 always blocks
+  across 16 files from `always @(posedge clock or negedge rst_n)` to `always @(posedge clock)`,
+  keeping the same `if (!rst_n)` body. The synchroniser in `accel_top` is the one block that
+  keeps its asynchronous reset, and the convention is documented there, in the file a reader
+  is in when they need it.
+- The experiment first, because it corrected its own premise. DD-020 said "convert
+  `dwconv3x3` + `dw_array`", which cannot be done: both are purely combinational and own no
+  registers. The registers DPIR-2 names are the ones DRIVING the DSP inputs. Grouping all
+  10,940 violations by instance:
+
+      6,480 (59%)  u_stem/u_arr  (216 DSPs)  <- stem_feeder's win_q, 216 bits
+      4,320 (39%)  u_dw/u_arr    (144 DSPs)  <- line_buffer's wr[], 1,152 bits
+        140  (1%)  u_log/cls[*].u_r          <- logit_out's parameter registers
+
+  `pe_array`'s 512 DSPs and `out_stage`'s 64 are ABSENT, and that is the interesting part:
+  their inputs come from `act_buffer`/`wgt_buffer`/`param_buffer` `dout` registers, which have
+  no reset at all, plus `out_stage`'s `acc_q`, which has no assignment in its reset branch. So
+  the registers that were already mergeable were precisely the ones with no reset. Nobody
+  chose that; it is option D happening by accident in the places it happened.
+- So the experiment was `win_q`: one register, the largest share, sitting on the measured
+  critical path. Two synthesis runs at 4.000 ns with that one register as the only difference:
+
+      before : worst path from u_stem/win_q_reg[7]/C                        WNS -17.279
+      after  : worst path from u_stem/u_arr/lane[0].u_conv/acc26/
+                                   DSP_A_B_DATA_INST/CLK                   WNS -17.036
+
+  The start point moved from a fabric flip-flop INTO the DSP48E2's A/B input register, and
+  209 of win_q's 216 flip-flops disappeared. That is the mechanism L-1 depends on, shown on
+  real geometry rather than quoted from the datasheet.
+- Then the whole design. Post-route at 4.000 ns:
+
+  | | baseline | Phase 1 | option B | |
+  |:--|--:|--:|--:|:--|
+  | **DPIR-2** | 10,940 | 10,940 | **0** | the goal |
+  | `[Synth 8-7137]` | 10 | 10 | **0** | free |
+  | CLB LUTs | 34,834 | 34,957 | **32,919** | -2,038 (-5.8%) |
+  | CLB Registers | 6,863 | 6,702 | **4,959** | -1,743 (-26%) |
+  | Block RAM / URAM | 176 / 52 | 176 / 52 | 178 / 52 | +2 BRAM |
+  | DSPs | 944 | 944 | **976** | +32 |
+  | WNS | -18.821 | -18.463 | **-18.282** | +0.181 |
+  | real Fmax | 43.8 | 44.5 | **44.8 MHz** | |
+
+- Tests: all 31 testbenches pass, `accel_tb` bit-exact at 6,895,780 elements. For a
+  16-file mechanical edit that is the only check worth anything, and it is why the whole
+  conversion went in as one commit with nothing else in it.
+- Found, and it is a correction to something I wrote in DD-020 before measuring:
+  `INFO: [Physopt 32-456] No candidate cells for DSP register optimization found` is NOT a
+  usable signal. It reads identically after the fix, because by then synthesis has already
+  absorbed the registers and there is nothing for a physical-optimization pass to move. It
+  says "nothing to do" both when the work is impossible and when it is already done. The
+  signals that distinguish the two are the DPIR-2 count, the start point of the worst path,
+  and the flip-flop count.
+- Located the +32 DSPs rather than waving at them: `mac_lane` is 17 DSPs per lane instead of
+  16, times TM=32. Sixteen are the taps; the seventeenth is the accumulate stage, which used
+  to share the last tap's DSP and now has its own P register. 32 DSPs (1.9% of the device)
+  for 1,743 flip-flops and 2,038 LUTs, and the accumulator gaining a DSP register stage is
+  the direction L-1 is going anyway.
+- TNS went the other way (-67,421 -> -70,411) while WNS improved, which is not a
+  contradiction: endpoints grew 94,308 -> 97,060 because 32 more DSPs and the absorbed
+  registers add timing endpoints, and in a design missing its constraint by 4.5x more
+  endpoints means more failing ones. The ten worst paths are still the stem cascade and the
+  synchronous reset net is on none of them, so nothing new became critical.
+- Still true, and still the point: 19.4 ns of the worst path's 22.2 ns is LOGIC across 27
+  unregistered DSP_ALU levels. Nothing here touched that. What changed is that L-1 can now
+  put its pipeline registers inside the DSPs instead of in front of them.
+- Blocked on: nothing. Phase 2a is unblocked.
+- Next: Phase 2a - mac_lane (L-1, L-2, L-9, L-10), pw_feeder's tag pipeline and drain, A-3
+  done sourcing, and A-4/A-5/A-6 for pe_array.

@@ -139,7 +139,7 @@ module requantize #(
     end
 
     // ---- registered output --------------------------------------------
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)   quantized <= {OUT_W{1'b0}};
         else if (en)  quantized <= sat;
     end

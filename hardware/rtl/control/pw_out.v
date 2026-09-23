@@ -132,7 +132,7 @@ module pw_out #(
     // ================= stage C : write ==================================
     assign aw_en = q_valid;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n)          aw_addr <= {AA_W{1'b0}};
         else if (start)      aw_addr <= base_out;
         else if (q_valid)    aw_addr <= aw_addr + 1'b1;
@@ -159,7 +159,7 @@ module pw_out #(
     // simulation-only block below, where it actually works.
     wire tag_mismatch = (acc_pix != exp_pix) || (acc_oct != exp_oct);
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             exp_pix   <= {PIX_W{1'b0}};
             exp_oct   <= {OCT_W{1'b0}};

@@ -116,7 +116,7 @@ module rq_bank #(
     endgenerate
 
     // marks the cycle on which `q` holds the finished word
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) q_valid <= 1'b0;
         else        q_valid <= en;
     end

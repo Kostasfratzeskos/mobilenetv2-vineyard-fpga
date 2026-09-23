@@ -87,7 +87,7 @@ module addr_gen #(
     assign last  = ict_wrap;
     assign busy  = run;
 
-    always @(posedge clock or negedge rst_n) begin
+    always @(posedge clock) begin
         if (!rst_n) begin
             pix <= {PIX_W{1'b0}};  oct <= {OCT_W{1'b0}};  ict <= {ICT_W{1'b0}};
             pix_n <= {PIX_W{1'b0}}; oc_n <= {OCT_W{1'b0}}; ic_n <= {ICT_W{1'b0}};

@@ -103,7 +103,7 @@ module param_buffer #(
             end
 
             always @(posedge clock) begin
-                if (wr_en && (wr_bank == b[BANK_W-1:0]))
+                if (wr_en && (wr_bank == b[BANK_W-1:0]))    // no reset: a memory
                     mem[wr_addr] <= {wr_shift, wr_m0, wr_bias};
                 if (rd_en)
                     dout <= mem[rd_addr];
