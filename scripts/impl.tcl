@@ -96,6 +96,15 @@ report_utilization               -file "$out/utilization.rpt"
 report_utilization -hierarchical -file "$out/utilization_hier.rpt"
 report_timing_summary -max_paths 10 -file "$out/timing_summary.rpt"
 report_timing -max_paths 25 -sort_by group -file "$out/timing_paths.rpt"
+
+# report_methodology is here because DPIR-2 is now a number this project tracks,
+# not a curiosity. It says how many registers Vivado cannot merge into a DSP
+# block because they carry an asynchronous reset - 10,940 at the Phase 0
+# baseline - and that count is the thing DD-020 is about and the thing L-1's
+# pipelining depends on. It was measured by hand once and that is exactly how a
+# number stops being measured, so it is in the flow.
+report_methodology -file "$out/methodology.rpt"
+
 write_checkpoint -force "$out/post_route.dcp"
 
 #---- a summary on stdout, so the shell does not have to parse reports --------
@@ -125,6 +134,11 @@ if {[llength $paths] > 0} {
               [get_property DATAPATH_NET_DELAY   $p]]
     puts "  logic levels     : [get_property LOGIC_LEVELS $p]"
 }
+
+# DPIR-2 on stdout too, so "can a register enter a DSP yet" is visible without
+# opening a 6 MB report. Zero is the goal; see DD-020.
+set dpir [llength [get_methodology_violations -filter {CHECK_NAME == DPIR-2}]]
+puts [format "  DPIR-2 (async driver blocking DSP register merge) : %d" $dpir]
 puts ""
 puts "  full reports in $out/"
 puts "=============================================================="

@@ -488,6 +488,20 @@ argmax over the 4 int16 logits is the predicted class.
   nothing. DD-018 already identified "a 27-deep DSP cascade with nothing registered in it"
   as the critical path; this is the reason the tool cannot fix it for us.
 
+  Confirmed from a second direction, which is stronger evidence than the warning count
+  because it is the pass that would actually do the work. `phys_opt_design` runs a
+  dedicated DSP register optimization phase, and in this design it finds nothing at all:
+
+      Phase 2 DSP Register Optimization
+      INFO: [Physopt 32-456] No candidate cells for DSP register optimization found
+            in the design.
+      INFO: [Physopt 32-775] End 2 Pass. Optimized 0 net or cell. Created 0 new cell,
+            deleted 0 existing cell and moved 0 existing cell
+
+  944 DSPs, 3,999 asynchronously-reset flip-flops feeding them, and **zero candidates**.
+  This is the message to watch when the validation experiment below is run: if converting
+  one leaf to synchronous reset is going to help, the candidate count stops being zero.
+
   Second consequence, available BEFORE L-1: the registers DPIR-2 names are the ones that
   already exist and already drive DSP inputs - `u_stem/win_q` (216 bits) and
   `u_dw/u_lb/wr` (1,152 bits). If they were synchronous-reset, Vivado could absorb them

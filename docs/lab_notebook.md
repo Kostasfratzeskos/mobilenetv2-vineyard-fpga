@@ -722,3 +722,114 @@ wrote quant_scales.json  (53 layers)
 - Next: the 4.000 ns baseline, then Phase 1 (T-1, T-2, T-5, T-3, T-4, then the assertion-only
   items). Phase 1 changes no datapath and no latency, which is the point - it makes Phase 2
   debuggable.
+
+### 2026-09-23 (later) - Phase 1 of the RTL review: silent failures become loud
+- Did: T-1, T-2, T-5, then T-3, T-4, then the assertion block - L-12, L-4/L-5, C-4, C-6,
+  C-2 - in three commits. No datapath change, no latency change, and `docs/latency_map.md`
+  section 1-3 has exactly the values it had before. That was the point: Phase 2 is where
+  bit-exactness is easiest to lose, and this is the phase that makes losing it diagnosable.
+- Tests: all 31 testbenches pass after every commit, `accel_tb` bit-exact at 6,895,780
+  elements each time.
+- Cost, measured at 4.000 ns against the Phase 0 baseline - the whole point being that the
+  answer is "nothing":
+
+  | | baseline | Phase 1 | |
+  |:--|--:|--:|:--|
+  | CLB LUTs, synth | 35,531 | 35,625 | +94 (+0.26%) |
+  | CLB Registers, synth | 6,187 | 6,174 | **-13** |
+  | WNS, synth | -17.279 ns | **-17.279 ns** | 0 |
+  | worst path, synth | `win_q_reg[7]` -> `acc_q_reg[184]`, 21.260 ns | identical | identical |
+  | CLB LUTs, post-route | 34,834 | 34,957 | +123 (+0.35%) |
+  | CLB Registers, post-route | 6,863 | 6,702 | **-161** |
+  | CARRY8 | 937 | 940 | +3 |
+  | BRAM / URAM / DSP | 176 / 52 / 944 | 176 / 52 / 944 | **0** |
+  | WNS, post-route | -18.821 ns | **-18.463 ns** | **+0.358 ns** |
+  | TNS, post-route | -71,607 ns | -67,421 ns | +4,186 |
+  | real Fmax | 43.8 MHz | **44.5 MHz** | +0.7 |
+  | worst path, post-route | 22.801 ns (logic 85%) | 22.444 ns (logic 86%) | same path |
+
+  +94 LUTs at synthesis buys a 20-bit watchdog, an S_ERR state, a sticky fault bit, an
+  opcode-validity comparator and a reset synchroniser. Everything else - the L-12 range
+  checks on 36 lanes, both C-2 address witnesses, the C-4 collision trap, the L-4/L-5 shift
+  guard - is inside `ifndef SYNTHESIS` and costs exactly zero, which the identical
+  DSP/BRAM/URAM columns confirm.
+
+  The interesting column is post-route, where Phase 1 came out AHEAD: 161 fewer flip-flops
+  and 0.358 ns better WNS. That is T-5 paying for itself twice. `rst_n` used to be a
+  top-level pin fanning out to 3,999 asynchronous clear pins; it is now one net from two
+  flops, so the tool needed fewer register replications to route it and had more room for
+  the paths that matter. A correctness fix that also buys 0.7 MHz is not the usual trade.
+
+- **T-4 is measurably fixed**: `WARNING: [Synth 8-589] replacing case/wildcard equality
+  operator !== with logical equality operator !=` is gone from the synthesis log. It
+  appeared twice before. The circuit that ships is now the circuit the testbench verifies.
+
+- The three guards that found real things, which is the only evidence that a guard works:
+
+  1. **C-2 rediscovered T-9 from the inside.** `accel_tb` reported the depthwise writeback
+     address disagreeing with `line_buffer`'s own coordinates ONE CYCLE BEFORE the first
+     depthwise op started. Tracing it: no `win_valid`, no `start` - the two `q_valid`
+     pulses were the STEM's last results arriving on the shared `os_q_valid`, which is
+     broadcast to all five feeders, advancing an idle `dw_feeder`'s `opix_off`. T-9 calls
+     that "functionally correct" and it is, but only because `start` resets `opix_off` and
+     `wrote_any` before the counter next matters. That is a SECOND coincidence stacked on
+     the write mux and the finding does not mention it. Both C-2 checks are now qualified
+     by the feeder's own `busy`.
+  2. **C-2 caught its own alignment twice**, which is worth recording because Phase 2 has
+     to redo exactly this arithmetic. In `dw_feeder` the witness needs OS_LAT registers
+     where `grp_*` needed OS_LAT+1, because capturing a `line_buffer` OUTPUT already costs
+     a cycle. In `stem_feeder` a plain hold was not enough: the stall releases on the LAST
+     sweep cycle, so the next window overwrites the held coordinates in the same cycle
+     `entry_done` fires for this one.
+  3. **top_seq's own negative tests** found that S_ERR needed to admit `start` on the same
+     terms as S_IDLE. Routing recovery through S_IDLE took TWO start pulses, because the
+     first left S_ERR with `fault` still set - correct in the RTL and wrong in every caller.
+
+- Two conventions established, both because a check that cannot be exercised is worthless:
+  - `CHECKS_ARE_FATAL` (on `requantize` and `pw_out`, simulation-only): 1 everywhere except
+    in the testbench whose PURPOSE is to fire that tripwire. `pw_out_tb`'s header already
+    said "a self-check that cannot fire is indistinguishable from one that does not work";
+    an unconditional `$finish` would have made that passing negative test unrunnable.
+  - `ERROR:` + `$finish` for conditions with no correct continuation (L-12, C-2, C-4, T-3,
+    L-4, L-5); `[FAULT]` with no `$finish` for the three the HARDWARE handles (T-1, T-2,
+    T-3's sequencer side), where `fault` is the verdict and a testbench asserts on it.
+    `scripts/run_sim.sh` greps for `^ERROR:`, so the first kind fails a run by its text as
+    well as by the missing ALL PASS - verified, the C-2 false positive above did exactly
+    that.
+
+- Verified the elaboration-guard technique properly before relying on it for T-1 and C-6,
+  since Verilog-2001 has no `$fatal` at elaboration: a `generate if` instantiating a module
+  that does not exist fails LOUDLY in both tools and names the condition - xsim gives
+  `ERROR: [VRFC 10-2063] Module <ERROR_DEPTH_EXCEEDS_ADDR_WIDTH> not found`, Vivado
+  synthesis gives `ERROR: [Synth 8-439] module ... not found`. It does NOT silently become
+  a black box, which was the thing worth checking.
+
+- `gen_program.py` now prints both ceilings on every run rather than only failing at them:
+
+      sequencer ceiling   : 64/64 instructions (0 spare, PGA_W=9)
+      weight buffer       : 800/1024 entries worst case (78%, features.18.0, WA_W=10)
+
+  The first of those is T-1's severity in one line - the network sits exactly on the limit.
+
+- Blocked on: **DD-020**, and it is now measured rather than predicted. T-5 as implemented
+  is async assert / sync deassert, which keeps `negedge rst_n` in every sensitivity list, so
+  it fixes deassertion and nothing else. Post-route `report_methodology` on the Phase 1
+  checkpoint:
+
+      DPIR-2  Warning  Asynchronous driver check   10940      <- unchanged from baseline
+      [Synth 8-7137]  set and reset with same priority   10   <- unchanged
+
+  And from the other direction, `phys_opt_design`'s own pass:
+
+      Phase 2 DSP Register Optimization
+      INFO: [Physopt 32-456] No candidate cells for DSP register optimization found
+            in the design.
+
+  944 DSPs, 3,999 async-reset flops feeding them, zero candidates. L-1's whole purpose is to
+  put pipeline registers inside those DSPs, and the tool is saying it cannot. DD-020 is
+  PROPOSED with four options and a one-leaf experiment to run before the wide edit; the
+  message to watch in that experiment is 32-456's candidate count leaving zero.
+
+  `report_methodology` is in `scripts/impl.tcl` now, and the DPIR-2 count prints on stdout.
+  It had been measured by hand once, which is exactly how a number stops being measured.
+- Next: Phase 2a, which needs the reset decision first.

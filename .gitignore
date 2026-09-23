@@ -119,6 +119,9 @@ build/impl_*/*backup.log
 build/impl_*/timing_paths.rpt
 build/impl_*/timing_summary.rpt
 build/impl_*/synth_timing_summary.rpt
+#  The methodology report is ~6 MB; the DPIR-2 count that matters is on stdout
+#  and quoted in docs/.
+build/impl_*/methodology.rpt
 #  The period-overridden XDC is a generated copy of the committed one.
 build/impl_*/accel_top_ooc_*.xdc
 

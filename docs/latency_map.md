@@ -12,6 +12,8 @@ change is a bookkeeping error in one of these rows, not an arithmetic error — 
 transformation is a reassociation or a latency change, never a change of value.
 
 Baseline measured 2026-09-23 on commit `716ea8e`, all 31 testbenches passing.
+Line references updated after Phase 1 (`6efb02a`); the VALUES are unchanged, because
+Phase 1 changed no latency.
 
 ---
 
@@ -55,8 +57,8 @@ so making it non-zero has no compile-time witness.
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `aw_addr` counter on `q_valid` | `pw_out.v:122-126` | — | pure counter; no depth encoded (that is T-6: the tag is checked but not used to form the address) |
-| `exp_pix`/`exp_oct` advance on `acc_valid` | `pw_out.v:134-153` | 0 | compares at `acc_valid`, i.e. before `OS_LAT` |
+| `aw_addr` counter on `q_valid` | `pw_out.v:135-139` | — | pure counter; no depth encoded (that is T-6: the tag is checked but not used to form the address) |
+| `exp_pix`/`exp_oct` advance on `acc_valid` | `pw_out.v:144-166` | 0 | compares at `acc_valid`, i.e. before `OS_LAT` |
 
 ### `dw_array` / `dw_feeder`
 
@@ -67,7 +69,7 @@ so making it non-zero has no compile-time witness.
 | `v_d1`/`real_d1`/`grp_d1` | `dw_feeder.v:201-217` | 1 stage | pool read latency |
 | `grp_d2` | `dw_feeder.v:249-252` | 1 more | `line_buffer` window latency (1) |
 | `grp_d3`, `grp_d4` | `dw_feeder.v:284-293` | 2 more | `OS_LAT` — `grp_d4` must be aligned with `q_valid` |
-| `drain <= 3'd7` | `dw_feeder.v:326-332` | 7 | ≥ 1 + 1 + `OS_LAT` = 3 today |
+| `drain <= 3'd7` | `dw_feeder.v:399-405` | 7 | ≥ 1 + 1 + `OS_LAT` = 3 today |
 
 `step` → `win_valid` is **2**; → `aw_en` is **4**. Total group-tag depth: **4** (`grp_d1..d4`).
 
@@ -77,12 +79,12 @@ so making it non-zero has no compile-time witness.
 |:--|:--|--:|:--|
 | `stem_array` has no clock/valid ports | `stem_array.v:56-66` | 0 | same shape as A-2, one level up |
 | `v_d1`/`real_d1`/`y_d1`/`x_d1` | `stem_feeder.v:170-183` | 1 stage | image read latency |
-| `win_q` latch on `win_valid && !sweeping` | `stem_feeder.v:204-217` | 1 stage | `line_buffer` latency; sweep starts the cycle AFTER `win_valid` |
+| `win_q` latch on `win_valid && !sweeping` | `stem_feeder.v:202-217` | 1 stage | `line_buffer` latency; sweep starts the cycle AFTER `win_valid` |
 | `wa_oct = win_valid && !sweeping ? 0 : oct+1` | `stem_feeder.v:221-222` | weights lead by 1 | `wgt_buffer` read latency (1) vs the sweep start |
 | `oct_d1`, `oct_d2` | `stem_feeder.v:263-267` | 2 stages | `OS_LAT` — `oct_d2` must align with `q_valid` |
-| `wr_go <= entry_done` | `stem_feeder.v:286-295` | 1 stage | lets the last `asm` fold land before the entry is stored |
-| `drain <= 4'd15` (4-bit counter) | `stem_feeder.v:303-309` | 15 | ≥ sweep (`n_oct`) + `OS_LAT` + 1 ≈ 7 today |
-| `busy` includes `sweeping` | `stem_feeder.v:319` | — | the sweep is the reason `run` alone is not enough |
+| `wr_go <= entry_done` | `stem_feeder.v:286-301` | 1 stage | lets the last `asm` fold land before the entry is stored |
+| `drain <= 4'd15` (4-bit counter) | `stem_feeder.v:370-376` | 15 | ≥ sweep (`n_oct`) + `OS_LAT` + 1 ≈ 7 today |
+| `busy` includes `sweeping` | `stem_feeder.v:386` | — | the sweep is the reason `run` alone is not enough |
 
 `adv` → `win_valid` is **2**; → first `os_acc_valid` is **3**; → `aw_en` is **9**.
 
@@ -124,11 +126,11 @@ Read issued → `aw_en` is **4** (`ph=0` issue, `ph=1` target, `sav_valid`, +`OS
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
 | `acc_q` / `vA` stage A | `out_stage.v:88-98` | 1 stage | `param_buffer` read latency (1) must match it |
-| `param_buffer` registered read | `param_buffer.v:76-81` | 1 stage | fixed by the memory style |
-| `rq_bank` `q_valid <= en` | `rq_bank.v:119-122` | 1 stage | `requantize`'s output register. **L-3 grows this to 4.** |
-| `requantize` output register | `requantize.v:96-99` | 1 stage | the whole multiply→round→shift→clamp chain is in front of it |
+| `param_buffer` registered read | `param_buffer.v:105-110` | 1 stage | fixed by the memory style |
+| `rq_bank` `q_valid <= en` | `rq_bank.v:118-122` | 1 stage | `requantize`'s output register. **L-3 grows this to 4.** |
+| `requantize` output register | `requantize.v:141-145` | 1 stage | the whole multiply→round→shift→clamp chain is in front of it |
 | `act` / `relu6_qmax` arrive combinationally | `out_stage.v:63-64`, `rq_bank.v:70-71` | 0 stages | **L-7** — per-channel params are delayed 1, these are not. Breaks the moment L-3 adds stages. |
-| `bias_add` combinational | `bias_add.v:33` | 0 stages | in `requantize`'s timing cone; L-12 folds it into L-3's new stage 1 |
+| `bias_add` combinational | `bias_add.v:42` | 0 stages | in `requantize`'s timing cone; L-12 folds it into L-3's new stage 1 |
 
 ### `logit_out`
 
@@ -143,9 +145,10 @@ Read issued → `aw_en` is **4** (`ph=0` issue, `ph=1` target, `sav_valid`, +`OS
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `GAP_CYC = 4` | `top_seq.v:62`, `accel_top.v:117` | 4 (⇒ 5 idle cycles) | **T-10**: asserted, not derived. Nominally covers the worst feeder drain; nothing ties it to one. |
-| `S_FETCH` word counter `fw` | `top_seq.v:184-188` | 8 cycles | instruction width, not a datapath latency |
-| `S_WAIT` → `S_RUN` on `op_busy` rising | `top_seq.v:210` | — | a feeder cannot raise `busy` until the cycle after `op_start` |
+| `GAP_CYC = 4` | `top_seq.v:84`, `accel_top.v:117` | 4 (⇒ 5 idle cycles) | **T-10**: asserted, not derived. Nominally covers the worst feeder drain; nothing ties it to one. |
+| `S_FETCH` word counter `fw` | `top_seq.v:298-302` | 8 cycles | instruction width, not a datapath latency |
+| `S_WAIT` → `S_RUN` on `op_busy` rising | `top_seq.v:324` | — | a feeder cannot raise `busy` until the cycle after `op_start` |
+| `WDOG_W = 20` (T-2, Phase 1) | `top_seq.v`, `accel_top.v` | 2²⁰ cycles | **derived**: 10.4× the longest legitimate op (the stem, 100,801 cycles) and 41× the worst weight fill (25,600). Recompute if a layer gets longer, not if a latency changes. |
 
 ### Memories — read latency 1, assumed everywhere
 
@@ -187,7 +190,38 @@ covers, which also settles T-10's `GAP_CYC`.
 
 ---
 
-## 4. Baseline facts this table was measured against
+## 4. What Phase 1 added, and why none of it is in the table above
+
+Phase 1 changed no latency. Every row in sections 1–3 has the same value it had
+at commit `716ea8e`. What it added is **witnesses for the rows**, which is the part
+that matters for Phase 2:
+
+| Check | Where | What it watches |
+|:--|:--|:--|
+| C-2 address witness | `dw_feeder`, `stem_feeder` | the writeback counter against `line_buffer`'s own `out_x`/`out_y`. **This is the check that will catch a wrong tag depth in Phase 2** — a feeder whose `grp_dN`/`oct_dN` depth is off by one writes to the wrong entry, and this says so by name instead of producing a shifted feature map. |
+| T-3 tag comparator | `pw_out` | the pointwise result's `(pix, oct)` against the emission order, now terminating the run |
+| L-12 bias range | `rq_bank`, `logit_out` | `acc + bias` at full width against ACC_W |
+| L-4/L-5 shift guard | `requantize` | `shift ≥ 1 OR m0 == 0`, and `shift ≤ ROUND_W-1` |
+| C-4 collision trap | `act_buffer` | same-address read/write, which simulates optimistically |
+| C-6 depth guards | `wgt_buffer` (elab), `pw_feeder` (runtime), `gen_program.py` (build) | the weight rectangle against the address width |
+| T-1/T-2 | `top_seq`, `gen_program.py` | the instruction ceiling and three hang causes |
+
+Two of these are directly load-bearing for Phase 2:
+
+- **C-2 is the tag-depth oracle.** Section 3's checklist says "a golden-vector failure
+  means a tag pipeline or a `*_valid` depth is wrong". Before Phase 1 that meant
+  bisecting by hand. Now `dw_feeder` and `stem_feeder` name the pixel where the counter
+  and the window disagree, which is exactly the symptom a wrong `grp_dN`/`oct_dN` depth
+  produces. `pw_feeder` already had this in the form of `pw_out`'s tag comparator; T-3
+  made its verdict terminating.
+- **Both C-2 checks are qualified by the feeder's own `busy`**, and that is a Phase 2
+  constraint in itself. `os_q_valid` is broadcast to all five feeders (T-9), so an idle
+  feeder's output pipeline advances on another op's results; it is harmless only because
+  `start` resets the counters. If Phase 2 changes a drain such that a feeder's `busy`
+  drops before its last result lands, these checks stop covering that result — so `busy`
+  and the real pipeline depth must stay consistent, which is what the drain rows are for.
+
+## 5. Baseline facts this table was measured against
 
 - `TM=32`, `TN=16`, `TC=16`, `TS=8`, `ACC_W=26`, `SEL_W=1`, `GAP_CYC=4`.
 - Drains: `pw_feeder` 7 (3-bit), `dw_feeder` 7 (3-bit), `stem_feeder` 15 (4-bit),
