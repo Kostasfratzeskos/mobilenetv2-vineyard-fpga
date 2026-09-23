@@ -68,6 +68,20 @@ PROG_DEPTH   = 1 << PGA_W                        # 512 words
 WORDS_PER_OP = 8
 MAX_INSTR    = PROG_DEPTH // WORDS_PER_OP        # 64
 
+# --- the pointwise weight buffer's depth, checked at BUILD time (C-6) --------
+#  Mirrors pw_feeder's WA_W / wgt_buffer's DEPTH. pw_feeder's w_addr walks
+#  0 .. n_oc*n_ic-1 in WA_W bits, so a layer needing more entries WRAPS and
+#  re-reads the start of its own weight rectangle - plausible numbers, wrong
+#  weights, no symptom.
+#
+#  No live overflow today: the worst layer is features.18.0 at 40*20 = 800 of
+#  1024 (78%). The margin is small for a reason worth knowing - the classifier
+#  needs only 1*80 = 80 entries because this model has FOUR classes. A stock
+#  1000-class head is ceil(1000/32) * ceil(1280/16) = 32*80 = 2560, which would
+#  read the wrong weights for two thirds of the layer.
+PW_WA_W   = 10                                   # pw_feeder weight address width
+PW_WDEPTH = 1 << PW_WA_W                         # 1024 entries
+
 # --- opcodes (mirror the sequencer's localparams) ----------------------------
 OP_STEM   = 0x1
 OP_PW     = 0x2
@@ -587,6 +601,21 @@ def main():
             f"  Fix: raise PGA_W and PROG_DEPTH together in accel_top.v and "
             f"top_seq.v, and here.")
 
+    # ---- C-6: every pointwise layer must fit the weight buffer ------------
+    too_big = [(o, o["n_oc"] * o["n_ic"]) for o in ops
+               if o["opcode"] in (OP_PW, OP_LINEAR)
+               and o["n_oc"] * o["n_ic"] > PW_WDEPTH]
+    if too_big:
+        msg = [f"WEIGHT BUFFER TOO SMALL - {len(too_big)} layer(s) need more than "
+               f"{PW_WDEPTH} entries:"]
+        for o, need in too_big:
+            msg.append(f"  {o['name']}: n_oc={o['n_oc']} x n_ic={o['n_ic']} = {need} "
+                       f"entries ({o['in_c']} -> {o['out_c']} channels)")
+        msg.append(f"  pw_feeder's w_addr is {PW_WA_W} bits, so it would WRAP and "
+                   f"re-read the start of the rectangle.")
+        msg.append(f"  Fix: raise PW_WDEPTH/PW_WA_W together in accel_top.v, and here.")
+        sys.exit("\n".join(msg))
+
     # ---- listing ----------------------------------------------------------
     lines = []
     lines.append(f"{'#':>3} {'op':<8} {'name':<24} {'out':>14} "
@@ -616,6 +645,12 @@ def main():
     # rather than a check that is only ever silent (T-1).
     print(f"sequencer ceiling   : {len(ops)}/{MAX_INSTR} instructions "
           f"({MAX_INSTR - len(ops)} spare, PGA_W={PGA_W})")
+    # Same reasoning: print the weight-buffer headroom even when it is met, so
+    # the 78% is a number someone sees rather than a check that is only silent.
+    wmax = max((o["n_oc"] * o["n_ic"], o["name"]) for o in ops
+               if o["opcode"] in (OP_PW, OP_LINEAR))
+    print(f"weight buffer       : {wmax[0]}/{PW_WDEPTH} entries worst case "
+          f"({100.0*wmax[0]/PW_WDEPTH:.0f}%, {wmax[1]}, WA_W={PW_WA_W})")
     print(f"weight blob         : {wgt_total:,} B ({wgt_total/1e6:.2f} MB)")
     print(f"program memory      : {len(ops)*32:,} B")
     print()

@@ -130,6 +130,35 @@ module act_buffer #(
     // slice the stored entry down to the TN channels the array wants
     assign rd_data = dout[sel_q*WORD_BITS +: WORD_BITS];
 
+    // ---- C-4: the read/write collision this model cannot represent -------
+    //
+    //  The write and the read above are non-blocking assignments in one always
+    //  block, so a read at the same address as a simultaneous write returns the
+    //  OLD contents. That is clean READ_FIRST behaviour, and it is a fiction:
+    //  UltraRAM returns UNDEFINED data when both ports hit the same address in
+    //  the same cycle. Simulation is therefore the optimistic side, which is the
+    //  worst way round - a base_in/base_out overlap passes the golden vectors
+    //  and fails on the board.
+    //
+    //  Nothing in hardware prevents it. Disjointness is purely a policy of
+    //  gen_program.py's allocator, which proves that no two simultaneously live
+    //  tensors overlap and that no op writes where it reads. That proof is good,
+    //  but it is a proof about the compiler, checked nowhere in the design that
+    //  consumes it - exactly the shape of every other finding in this review.
+    //
+    //  So: a trap. It costs nothing, it is the only place the violation is
+    //  visible, and if it ever fires the golden vectors would otherwise have
+    //  said everything was fine.
+`ifndef SYNTHESIS
+    always @(posedge clock) begin
+        if (wr_en && rd_en && (wr_addr == rd_addr)) begin
+            $display("ERROR: %m C-4 same-address read/write collision at entry %0d, time %0t. This simulates as READ_FIRST and is UNDEFINED on UltraRAM, so the golden vectors would pass and the board would not. The allocator's disjointness policy has been violated (base_in/base_out overlap).",
+                     wr_addr, $time);
+            $finish;
+        end
+    end
+`endif
+
 endmodule
 
 `default_nettype wire

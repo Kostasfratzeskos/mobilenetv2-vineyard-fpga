@@ -319,6 +319,79 @@ module dw_feeder #(
     // straight through - the replication convention is not needed here.
     assign aw_data = q;
 
+    // ---- C-2: the witness that was being thrown away ---------------------
+    //
+    //  line_buffer emits out_x / out_y in OUTPUT coordinates alongside every
+    //  window. They are declared above, connected, and never read. Meanwhile
+    //  the writeback address comes from `opix_off`, a free-running count of
+    //  q_valid pulses - so a single spurious or missing win_valid shifts the
+    //  ENTIRE output feature map by one pixel, and every value in it is still a
+    //  plausible activation. Two independent derivations of the same quantity
+    //  exist, the fragile one is used, and the witness is discarded.
+    //
+    //  The datapath is unchanged: everything below is inside `ifndef SYNTHESIS`,
+    //  so it does not synthesise and cannot alter a single address. What it does
+    //  is delay out_x/out_y to the write stage and check that the counter agrees
+    //  with them. Cheap, and it converts "the map is shifted by one pixel, good
+    //  luck" into a line naming the pixel where they diverged.
+    //
+    //  The output width is not a port here, but it is derivable: the feeder
+    //  walks img_w+1 input columns and line_buffer emits a window on every
+    //  second centre at stride 2.
+`ifndef SYNTHESIS
+    //  Alignment, which is the whole difficulty and worth writing down because
+    //  Phase 2 will have to redo it: out_x/out_y are line_buffer OUTPUTS, valid
+    //  in the same cycle as win_valid. grp_d2 is a delayed copy of a signal from
+    //  two cycles EARLIER, so it is valid in that same cycle too - but capturing
+    //  out_x into a register already costs one cycle. So the witness needs
+    //  OS_LAT registers to reach q_valid, where grp_* needed OS_LAT+1 stages
+    //  counting from grp. Getting this wrong is what the check itself caught on
+    //  its first run: it reported the counter at pixel 1 against a witness at
+    //  pixel 0, which is a lagging witness, not a wrong address.
+    reg [XW-1:0] ox_q, oy_q, ox_w, oy_w;
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n) begin
+            ox_q <= {XW{1'b0}}; oy_q <= {XW{1'b0}};
+            ox_w <= {XW{1'b0}}; oy_w <= {XW{1'b0}};
+        end else begin
+            if (win_valid) begin ox_q <= out_x; oy_q <= out_y; end
+            ox_w <= ox_q; oy_w <= oy_q;      // now aligned with q_valid
+        end
+    end
+
+    // output geometry, from the input shape and the stride
+    wire [XW-1:0] out_w_e = stride2 ? ((img_w + 1'b1) >> 1) : img_w;
+
+    // what the counter says, and what the witness says
+    wire [31:0] cnt_pix  = (n_ent == {AA_W{1'b0}}) ? 32'd0 : (cur_off / n_ent);
+    wire [31:0] wit_pix  = (oy_w * out_w_e) + ox_w;
+
+    //  The check is qualified by `busy`, and finding out why was worth more than
+    //  the check itself. Without it, accel_tb reported a mismatch on the FIRST
+    //  depthwise op, one cycle before that op had even started - because
+    //  `os_q_valid` is broadcast to all five feeders unconditionally (T-9), so
+    //  the STEM's last two results advanced this feeder's opix_off while it was
+    //  idle. T-9 calls that "functionally correct", and it is, but only because
+    //  `start` resets opix_off and wrote_any before the counter next matters.
+    //  That is a second coincidence on top of the write mux, and it is not in
+    //  the finding. `busy` is exactly "I am in my own op", which is the window
+    //  in which this feeder's addresses mean anything.
+    always @(posedge clock) begin
+        if (rst_n && busy && q_valid && (n_ent != {AA_W{1'b0}})) begin
+            if (cnt_pix != wit_pix) begin
+                $display("ERROR: %m C-2 writeback address disagrees with line_buffer's own coordinates at time %0t: the q_valid counter says output pixel %0d (cur_off=%0d, n_ent=%0d), the window says (y=%0d, x=%0d) = pixel %0d with out_w=%0d. The whole feature map is shifted from here on.",
+                         $time, cnt_pix, cur_off, n_ent, oy_w, ox_w, wit_pix, out_w_e);
+                $finish;
+            end
+            if (cur_off % n_ent != {AA_W{1'b0}}) begin
+                $display("ERROR: %m C-2 cur_off = %0d is not a whole multiple of n_ent = %0d at time %0t: the writeback offset has slipped off the pixel grid.",
+                         cur_off, n_ent, $time);
+                $finish;
+            end
+        end
+    end
+`endif
+
     // ================= busy, including the pipeline drain ===============
     // The counters finish three stages before the last result is written, so
     // `busy` has to outlive them or the caller would start the next layer on

@@ -25,6 +25,35 @@
 //  Loading: one bank per cycle, like wgt_buffer, because the PS writes these
 //  over the same narrow path as the weights. Unwritten entries read as zero.
 //
+//  ---- TAIL CONTRACT (L-4) ----------------------------------------------
+//
+//  wgt_buffer states its tail contract explicitly and this module did not, so
+//  requantize inherited an unwritten one. Stated now, because a downstream
+//  module depends on it:
+//
+//      A parameter entry covers TM consecutive output channels, so a layer
+//      whose channel count is not a multiple of TM leaves a TAIL of lanes with
+//      no real parameters. Those lanes MUST read (bias=0, m0=0, shift=0) - and
+//      they do, from two directions: the zero-initialisation below, and
+//      gen_program.py padding the parameter blob to ceil(pchan/TM)*TM with
+//      explicit zeros so the DMA writes zeros rather than leaving stale values
+//      from the previous layer.
+//
+//  Why requantize cares: `shift = 0` makes its rounding term 1 << -1, which in
+//  unsigned arithmetic wraps and produces 0 instead of 2**(shift-1). That is
+//  harmless HERE and only here, because m0 = 0 in the same lane makes the
+//  product zero, so the missing rounding term cannot change the result. The
+//  contract is therefore `shift >= 1 OR m0 == 0`, never `shift != 0` - an
+//  assertion on shift alone fires on every tail lane of every layer that has
+//  one. Three channel counts in this network leave a tail against TM=32: 16,
+//  24 and 144.
+//
+//  requantize checks the contract in simulation rather than assuming it, so a
+//  real channel that loses its shift in transit is reported instead of quietly
+//  losing its rounding. Do not relax the zero-init or the blob padding
+//  independently - they are the two halves of one guarantee, exactly like
+//  act_buffer's and wgt_buffer's tail contracts.
+//
 //  Verified through pw_out_tb rather than a testbench of its own: its only
 //  client is pw_out, and pw_out's parameter load path drives every write port
 //  and its results depend on every read field, so a separate testbench would

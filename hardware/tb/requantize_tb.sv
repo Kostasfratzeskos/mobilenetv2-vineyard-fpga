@@ -57,6 +57,27 @@ module requantize_tb;
         .quantized  (quantized)
     );
 
+    // ---- a second DUT for the L-4 / L-5 guards -------------------------
+    //  The instance above keeps the shipping configuration, where a contract
+    //  violation stops the simulation. This one reports instead, so the guards
+    //  can be driven into every corner - including the corners that must NOT
+    //  fire, which is the half that is easy to forget.
+    localparam G_ACC_W   = 21;
+    localparam G_ROUND_W = G_ACC_W + 32 + 1;      // 54
+    localparam G_SH_MAX  = G_ROUND_W - 1;         // 53
+
+    logic        [5:0]  g_shift;
+    logic signed [31:0] g_m0;
+    logic signed [20:0] g_acc;
+    logic signed [7:0]  g_q;
+
+    requantize #(.ACC_W(G_ACC_W), .M0_W(32), .SHIFT_W(6),
+                 .CHECKS_ARE_FATAL(0)) g_dut (
+        .clock(clock), .rst_n(rst_n), .en(1'b1), .act(ACT_NONE),
+        .in_data(g_acc), .M0(g_m0), .shift(g_shift), .relu6_qmax(8'sd0),
+        .quantized(g_q)
+    );
+
     // ---- clock: 10 ns period ------------------------------------------
     initial clock = 1'b0;
     always #5 clock = ~clock;
@@ -92,10 +113,34 @@ module requantize_tb;
         end
     endtask
 
+    // Drive the guard DUT for one cycle and check the OUTPUT VALUE. The
+    // tripwire lines are evidence in the log; what is ASSERTED here is that the
+    // guard changed no reachable result.
+    task automatic g_case(input logic signed [20:0] acc_in,
+                          input logic signed [31:0] m0_in,
+                          input logic [5:0] sh_in,
+                          input logic signed [7:0] expect_q,
+                          input string tag);
+        begin
+            @(negedge clock);
+            g_acc = acc_in; g_m0 = m0_in; g_shift = sh_in;
+            @(posedge clock);
+            @(negedge clock);
+            total++;
+            if (g_q === expect_q)
+                $display("  [ok ] %-36s -> %0d", tag, g_q);
+            else begin
+                fails++;
+                $display("  [ERR] %-36s -> got %0d, expect %0d", tag, g_q, expect_q);
+            end
+        end
+    endtask
+
     // ---- stimulus -----------------------------------------------------
     initial begin
         // init + reset
         en = 0; act = ACT_NONE; in_data = 0; M0 = 0; shift = 6'd1; relu6_qmax = 0;
+        g_acc = 0; g_m0 = 0; g_shift = 6'd1;
         rst_n = 0;
         repeat (2) @(negedge clock);
         rst_n = 1;
@@ -126,6 +171,43 @@ module requantize_tb;
         run_case(ACT_RELU6,   -5, M0_HALF, 31, 8'sd6, 8'sd0, "relu6 -2 -> 0");
         run_case(ACT_RELU6,  101, M0_HALF, 31, 8'sd6, 8'sd6, "relu6 51 -> cap 6");
         run_case(ACT_RELU6,    7, M0_HALF, 31, 8'sd6, 8'sd4, "relu6 4 in [0,6]");
+
+        // ---- L-4 / L-5: the shift guard -------------------------------
+        //
+        //  `half = 1 << (shift-1)` with an unsigned SHIFT_W-bit subtract, so
+        //  shift=0 wrapped to 63 and the rounding term vanished, and shift=59
+        //  (at ACC_W=26) put the rounding one ON THE SIGN BIT. At ACC_W=21 the
+        //  boundary is 53. The guard makes both cases produce 0 explicitly.
+        //
+        //  The important half of this is the cases that must NOT change: the
+        //  whole point of Phase 1 is that no reachable value moves.
+        $display("");
+        $display("L-4 / L-5, the shift guard (ACC_W=%0d, so SH_MAX=%0d):",
+                 G_ACC_W, G_SH_MAX);
+
+        // legitimate tail lane: shift=0 AND m0=0. Must be silent and give 0.
+        g_case(21'sd100, 32'sd0, 6'd0, 8'sd0, "tail lane shift=0 m0=0 (silent)");
+
+        // L-4: shift=0 with a REAL m0. The tripwire must fire. Note what the
+        // result is: 100 * 2**30 >>> 0 saturates to 127, because a lost shift
+        // means the value is never scaled down at all. That is the damage the
+        // check is there to report - it is not a rounding error, it is a
+        // channel pinned at saturation.
+        g_case(21'sd100, M0_HALF, 6'd0, 8'sd127, "L-4 shift=0 m0!=0 (must fire)");
+
+        // L-5: past SH_MAX the rounding term is suppressed instead of becoming
+        // -2**(ROUND_W-1). With m0 small the result is 0 either way, but the
+        // tripwire must say so.
+        g_case(21'sd100, M0_HALF, G_SH_MAX[5:0] + 6'd1, 8'sd0,
+               "L-5 shift=SH_MAX+1 (must fire)");
+        g_case(21'sd100, M0_HALF, 6'd63, 8'sd0, "L-5 shift=63 (must fire)");
+
+        // and the boundary that must stay silent and exact
+        g_case(21'sd100, M0_HALF, G_SH_MAX[5:0], 8'sd0, "shift=SH_MAX (silent)");
+        g_case(21'sd3,   M0_HALF, 6'd31,         8'sd2, "shift=31 unchanged by the guard");
+        g_case(-21'sd3,  M0_HALF, 6'd31,        -8'sd1, "shift=31 negative tie unchanged");
+        g_case(21'sd1,   M0_HALF, 6'd1,          8'sd127,
+               "shift=1 (smallest legal) unchanged");
 
         $display("");
         if (fails == 0)

@@ -223,6 +223,35 @@ module pw_feeder #(
         if (v_d)      begin acc_pix <= pix_d1; acc_oct <= oct_d1; end
     end
 
+    // ---- C-6: the weight rectangle must fit the weight buffer ------------
+    //
+    //  `w_addr` is WA_W bits and walks 0 .. n_oc*n_ic-1, so a layer needing
+    //  more than WDEPTH entries wraps SILENTLY and re-reads the start of the
+    //  rectangle. No live overflow today: the worst layer is features.18.0 at
+    //  40*20 = 800 of 1024 (78%), and the classifier needs only 80 because this
+    //  model has 4 classes. A stock 1000-class head would need 32*80 = 2560 and
+    //  would read the wrong weights for two thirds of the layer, producing a
+    //  plausible wrong answer.
+    //
+    //  Checked at `start`, when the shape arrives, rather than per tile. The
+    //  build-time assert in gen_program.py is the one that matters most - it
+    //  fires before a simulation is spent - and wgt_buffer's elaboration guard
+    //  covers a mis-parameterised instance. This one covers the runtime shape,
+    //  which neither of those sees.
+`ifndef SYNTHESIS
+    // n_oc and n_ic are OCT_W/ICT_W wide; multiply in a wide integer so the
+    // product itself cannot be the thing that overflows.
+    always @(posedge clock) begin
+        if (rst_n && start) begin
+            if ((n_oc * n_ic) > WDEPTH) begin
+                $display("ERROR: %m C-6 layer needs n_oc*n_ic = %0d weight entries, the buffer holds WDEPTH = %0d (WA_W = %0d) at time %0t. w_addr would wrap and re-read the start of the rectangle.",
+                         n_oc * n_ic, WDEPTH, WA_W, $time);
+                $finish;
+            end
+        end
+    end
+`endif
+
 endmodule
 
 `default_nettype wire

@@ -13,11 +13,20 @@
 //  Pure COMBINATIONAL, stateless: no clock, no accumulation. It sits between
 //  the conv accumulator register and the requantize register.
 //
-//  Widths: acc_in / acc_out are ACC_W (the 21-bit HW accumulator that feeds
-//  requantize). The manifest bias is int32, so BIAS_W defaults to 32; the
+//  Widths: acc_in / acc_out are ACC_W - the 26-bit HW accumulator that feeds
+//  requantize (26 since d5fb32b / DD-019, and this comment said 21 until
+//  L-15 caught it). The manifest bias is int32, so BIAS_W defaults to 32; the
 //  signed add sign-extends acc_in and the ACC_W result truncates the sum.
-//  Precondition (same as the whole datapath): the post-bias accumulator never
-//  overflows ACC_W, so truncation is exact.
+//
+//  PRECONDITION, and it is load-bearing: the post-bias accumulator never
+//  overflows ACC_W, so the truncation is exact. That precondition is the one
+//  the 2026-07 regression violated - a bias of 1,184,089 did not fit ACC_W=21
+//  on its own, wrapped negative here, and corrupted 2.2M elements downstream in
+//  silence. It is enforced by export.py's provable bound (DD-019) and, since
+//  L-12, WATCHED in simulation by rq_bank and logit_out, which are this
+//  module's only two instantiators. The check is not in here because this module
+//  is combinational with no clock and no enable, so it cannot tell a real sum
+//  from a settling transient; those two can.
 //============================================================================
 module bias_add #(
     parameter ACC_W  = 26,    // accumulator width (in and out)

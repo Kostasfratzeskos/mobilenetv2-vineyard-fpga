@@ -70,14 +70,17 @@ module pw_out #(
     parameter AA_W    = 16,     // activation buffer address width
 
     // Simulation only, and it does not affect synthesis at all: the check it
-    // guards lives inside `ifndef SYNTHESIS`. 1 means a tag drift stops the
+    // guards lives inside `ifndef SYNTHESIS`. 1 means a violation stops the
     // simulation where the evidence is, which is what every instance in the
     // design wants. The ONE legitimate reason to pass 0 is a testbench whose
-    // PURPOSE is to fire this tripwire and then check that it fired -
-    // pw_out_tb does exactly that, because a self-check that cannot fire is
+    // PURPOSE is to fire the tripwire and then check that it fired - pw_out_tb
+    // does exactly that, because a self-check that cannot fire is
     // indistinguishable from one that does not work. Do not pass 0 anywhere
     // else; accel_top does not.
-    parameter TAG_DRIFT_IS_FATAL = 1
+    //
+    // The same parameter with the same name and meaning is on `requantize`, so
+    // there is one convention to learn rather than one per module.
+    parameter CHECKS_ARE_FATAL = 1
 )(
     input  wire                     clock,
     input  wire                     rst_n,
@@ -202,7 +205,7 @@ module pw_out #(
 
     always @(posedge clock) begin
         if (rst_n && !start && acc_valid && (tag_mismatch || tag_unknown)) begin
-            if (TAG_DRIFT_IS_FATAL) begin
+            if (CHECKS_ARE_FATAL) begin
                 $display("ERROR: %m T-3 tag drift at time %0t: result carries (pix=%0d, oct=%0d), the emission order says (pix=%0d, oct=%0d)%s",
                          $time, acc_pix, acc_oct, exp_pix, exp_oct,
                          tag_unknown ? " [tag contains X]" : "");

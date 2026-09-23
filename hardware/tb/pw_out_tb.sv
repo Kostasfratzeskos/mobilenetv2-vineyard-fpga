@@ -90,7 +90,7 @@ module pw_out_tb;
              // purpose (see the header), so the drift must report rather than
              // stop the simulation. accel_top leaves this at 1, where a drift
              // has no correct continuation. T-3/T-4.
-             .TAG_DRIFT_IS_FATAL(0)) u_dut (
+             .CHECKS_ARE_FATAL(0)) u_dut (
         .clock(clock), .rst_n(rst_n),
         .start(start), .n_oc(n_oc), .base_out(base_out),
         .os_acc(os_acc), .os_acc_valid(os_acc_valid),

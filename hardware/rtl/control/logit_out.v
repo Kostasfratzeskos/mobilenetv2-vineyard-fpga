@@ -176,6 +176,37 @@ module logit_out #(
         end
     end
 
+    // ---- L-12: the same bias-overflow watch as rq_bank -------------------
+    //
+    //  This module is the second instantiator of bias_add, and it is the one
+    //  that matters most: the header above records that the classifier has the
+    //  network's longest dot product, IC=1280, and is the tightest point
+    //  against the provable bound at 5,094,750. T-8's complaint is exactly that
+    //  this path is a second copy of the requantize datapath that no shared
+    //  testbench covers - so it gets the same check, not a weaker one.
+    //
+    //  Zero synthesis cost; see rq_bank for why the check is not in bias_add.
+`ifndef SYNTHESIS
+    localparam signed [BIAS_W:0] ACC_MAX =  (1 <<< (ACC_W-1)) - 1;
+    localparam signed [BIAS_W:0] ACC_MIN = -(1 <<< (ACC_W-1));
+
+    genvar cc;
+    generate
+        for (cc = 0; cc < NLOG; cc = cc + 1) begin : chk
+            wire signed [BIAS_W:0] full =
+                 $signed(acc[cc*ACC_W +: ACC_W]) + $signed(p_bias[cc]);
+
+            always @(posedge clock) begin
+                if (rst_n && acc_valid && ((full > ACC_MAX) || (full < ACC_MIN))) begin
+                    $display("ERROR: %m L-12 class %0d: acc+bias = %0d leaves the ACC_W=%0d range [%0d, %0d] at time %0t. bias_add truncates, so this logit is already corrupt.",
+                             cc, full, ACC_W, ACC_MIN, ACC_MAX, $time);
+                    $finish;
+                end
+            end
+        end
+    endgenerate
+`endif
+
 endmodule
 
 `default_nettype wire

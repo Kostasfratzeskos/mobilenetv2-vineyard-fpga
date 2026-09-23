@@ -121,6 +121,54 @@ module rq_bank #(
         else        q_valid <= en;
     end
 
+    // ---- L-12: bias_add truncates, so watch the full-width sum -----------
+    //
+    //  `bias_add` is one line - acc_in + bias, evaluated at BIAS_W and
+    //  truncated back to ACC_W - and that one line is where the 2026-07
+    //  regression lived. features.3.conv.0.0 channel 110 came out of the
+    //  retrain with a bias of 1,184,089, which does not fit a 21-bit
+    //  accumulator ON ITS OWN, whatever the image. It wrapped negative, ReLU6
+    //  clamped it to 0, and 2,215,904 of 6,895,780 elements went wrong in
+    //  silence. DD-019 fixed the CAUSE - ACC_W is 26 and export.py checks a
+    //  provable bound - but the RTL still had no detection, so the module's
+    //  correctness rested entirely on a precondition enforced in a Python
+    //  script. If that bound is ever wrong, a manifest is hand-edited, or DMA
+    //  bytes are corrupted, the identical silent failure recurs with no trace.
+    //
+    //  Zero synthesis cost, and it would have caught that regression on the
+    //  first testbench run rather than two months later.
+    //
+    //  ---- why here and not in bias_add ---------------------------------
+    //
+    //  The review puts this check in bias_add. bias_add is purely
+    //  combinational with no clock and no enable, so the only check possible
+    //  there is `always @*`, which fires on settling transients - mixed
+    //  old-acc/new-bias values that were never a real sum. This module and
+    //  logit_out are bias_add's only two instantiators, and both have a clock
+    //  and a qualifier, so the check is sampled exactly when the sum is real.
+`ifndef SYNTHESIS
+    localparam signed [BIAS_W:0] ACC_MAX =  (1 <<< (ACC_W-1)) - 1;
+    localparam signed [BIAS_W:0] ACC_MIN = -(1 <<< (ACC_W-1));
+
+    genvar mc;
+    generate
+        for (mc = 0; mc < TM; mc = mc + 1) begin : chk
+            // the sum at FULL width, before bias_add truncates it to ACC_W
+            wire signed [BIAS_W:0] full =
+                 $signed(acc [mc*ACC_W  +: ACC_W ]) +
+                 $signed(bias[mc*BIAS_W +: BIAS_W]);
+
+            always @(posedge clock) begin
+                if (rst_n && en && ((full > ACC_MAX) || (full < ACC_MIN))) begin
+                    $display("ERROR: %m L-12 lane %0d: acc+bias = %0d leaves the ACC_W=%0d range [%0d, %0d] at time %0t. bias_add truncates, so this value is already corrupt. Check export.py's accumulator bound (DD-019).",
+                             mc, full, ACC_W, ACC_MIN, ACC_MAX, $time);
+                    $finish;
+                end
+            end
+        end
+    endgenerate
+`endif
+
 endmodule
 
 `default_nettype wire

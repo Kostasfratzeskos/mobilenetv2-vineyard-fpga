@@ -299,6 +299,73 @@ module stem_feeder #(
     assign aw_addr = base_out + out_cnt;
     assign aw_data = asm;
 
+    // ---- C-2: the witness that was being thrown away ---------------------
+    //
+    //  Same finding as in dw_feeder, and the same fix. line_buffer emits
+    //  out_x / out_y in OUTPUT coordinates with every window; they are declared,
+    //  connected and never read, while `out_cnt` - a free-running count of
+    //  entry_done pulses - is what actually forms the write address. One
+    //  spurious or missing win_valid shifts the whole 112x112 feature map by a
+    //  pixel and every value in it stays a plausible activation.
+    //
+    //  The alignment here is longer than the depthwise one because the sweep
+    //  sits in the middle: out_x/out_y are valid with win_valid, the window is
+    //  latched one cycle later, the sweep runs n_oct cycles, out_stage adds
+    //  OS_LAT, and the write is one cycle after entry_done.
+    //
+    //  Two registers rather than a shift register of that length. `ox_h` is
+    //  captured alongside win_q, and `ox_e` copies it at entry_done. The second
+    //  one is not optional and the check found out why: holding ox_h all the way
+    //  to wr_go reported the counter at pixel 0 against a witness at pixel 1,
+    //  because the stall releases at the LAST sweep cycle, so the next window is
+    //  latched - overwriting ox_h - in the same cycle entry_done fires for this
+    //  one. Copying at entry_done takes the value while it is still this
+    //  window's.
+    //
+    //  Inside `ifndef SYNTHESIS`, so the datapath is untouched.
+`ifndef SYNTHESIS
+    reg [XW-1:0] ox_h, oy_h, ox_e, oy_e;
+    always @(posedge clock or negedge rst_n) begin
+        if (!rst_n) begin
+            ox_h <= {XW{1'b0}}; oy_h <= {XW{1'b0}};
+            ox_e <= {XW{1'b0}}; oy_e <= {XW{1'b0}};
+        end else begin
+            if (win_valid && !sweeping) begin
+                ox_h <= out_x; oy_h <= out_y;      // captured with win_q
+            end
+            if (entry_done) begin
+                ox_e <= ox_h;  oy_e <= oy_h;       // now aligned with wr_go
+            end
+        end
+    end
+
+    wire [XW-1:0] out_w_e = (img_w + 1'b1) >> 1;    // the stem is always stride 2
+    wire [31:0]   wit_cnt = (oy_e * out_w_e) + ox_e;
+
+    //  Qualified by `busy` for the reason dw_feeder's copy documents: os_q_valid
+    //  is broadcast to every feeder (T-9), so an idle feeder's output pipeline
+    //  moves on another op's results.
+    always @(posedge clock) begin
+        if (rst_n && busy && wr_go) begin
+            if ({16'd0, out_cnt} != wit_cnt) begin
+                $display("ERROR: %m C-2 writeback address disagrees with line_buffer's own coordinates at time %0t: the entry counter says output pixel %0d, the window says (y=%0d, x=%0d) = pixel %0d with out_w=%0d. The whole feature map is shifted from here on.",
+                         $time, out_cnt, oy_e, ox_e, wit_cnt, out_w_e);
+                $finish;
+            end
+        end
+        // C-1's counterpart: a window arriving while the sweep is busy is
+        // dropped by the !sweeping guard, with no latch, no stall and no error.
+        // Correct today only because stride2 is tied to 1 three lines away, so
+        // the one in-flight pixel cannot produce a window. Reported here so a
+        // future stride-1 stem is loud rather than silently lossy.
+        if (rst_n && busy && win_valid && sweeping) begin
+            $display("ERROR: %m C-1 a window arrived while the oc_tile sweep was busy at time %0t and has been DISCARDED. There is no back-pressure path into line_buffer. This is only unreachable while the stem is stride 2.",
+                     $time);
+            $finish;
+        end
+    end
+`endif
+
     // ================= busy, including the drain ========================
     reg [3:0] drain;
     always @(posedge clock or negedge rst_n) begin

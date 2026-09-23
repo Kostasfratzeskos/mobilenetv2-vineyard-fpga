@@ -69,6 +69,24 @@ module wgt_buffer #(
 
     localparam BANK_BITS = TN*DATA_W;    // 128
 
+    // ---- C-6: the address width must actually reach DEPTH ----------------
+    //  This module is instantiated three times with three different shapes
+    //  (32x16 pointwise at DEPTH 1024, 16x9 depthwise at 64, 8x27 stem at 8),
+    //  so a transposed or stale ADDR_W is a realistic mistake and Verilog would
+    //  just truncate the address and wrap silently. Verilog-2001 has no $fatal
+    //  at elaboration, so the check instantiates a module that does not exist:
+    //  elaboration then fails and the tool prints the module name, which IS the
+    //  error message. Confirmed to fail both xsim (VRFC 10-2063) and Vivado
+    //  synthesis (Synth 8-439).
+    generate
+        if (DEPTH > (1 << ADDR_W)) begin : chk_depth
+            ERROR_WGT_DEPTH_EXCEEDS_ADDR_WIDTH u_err();
+        end
+        if ((1 << BANK_W) < TM) begin : chk_banks
+            ERROR_WGT_BANK_W_TOO_NARROW_FOR_TM u_err();
+        end
+    endgenerate
+
     genvar b;
     generate
         for (b = 0; b < TM; b = b + 1) begin : bank
