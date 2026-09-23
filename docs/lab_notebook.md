@@ -615,3 +615,90 @@ wrote quant_scales.json  (53 layers)
 - Next: the MAC-tree pipelining of DD-018, for which the async resets need to become
   synchronous first (DPIR-2, 10,940 warnings) or Vivado cannot fold the new registers
   into the DSPs.
+
+### 2026-09-23 - Phase 0 of the RTL review: baseline, and a latency inventory
+- Did: read all 28 RTL files, the 31 testbenches, `gen_program.py` and the XDC against
+  `docs/references/rtl_review.md` (43 findings). Ran the whole testbench suite. Recorded the
+  40 MHz baseline from the existing reports and started a second run at the real target.
+  Wrote `docs/latency_map.md` - every constant in the design that encodes a pipeline depth,
+  with what it depends on. Added `scripts/run_impl.sh` + `scripts/impl.tcl`, because until
+  today place-and-route only existed inside a GUI project and a number that cannot be
+  reproduced from a shell cannot go in the thesis.
+- Tests, baseline: **31/31 testbenches pass**, including `accel_tb` at 6,895,780 elements
+  bit-exact over 64 ops. So every Phase 2 regression from here is mine.
+- Not Icarus. The review's flow and the task both say Icarus Verilog; the testbenches are
+  SystemVerilog (`logic`, `localparam string`, `task automatic`) and the repo's own
+  `run_sim.sh` drives xsim. Icarus is not installed and converting 31 testbenches would
+  violate "existing testbenches keep their current language". Verification stays on xsim.
+- Baseline confirmed the review's critical path EXACTLY, which is worth recording because it
+  means the review was measuring this tree and not an older one:
+
+  | | synthesis | post-route |
+  |:--|--:|--:|
+  | constraint | 25.000 ns (40 MHz) | 25.000 ns |
+  | WNS | +3.706 ns | **+0.665 ns** (Fmax 41.1 MHz) |
+  | worst path | `u_stem/win_q_reg[7]` -> `u_os/acc_q_reg[568]` | `u_stem/win_q_reg[0]` -> `u_os/acc_q_reg[474]` |
+  | data path delay | 21.275 ns (logic 91%, route 9%) | 24.315 ns (logic 79%, route 21%) |
+  | logic levels | 64 (DSP_ALU=27) | 62 (DSP_ALU=27) |
+
+  LUT 34,159 / FF 6,171 / BRAM 163.5 / URAM 52 / DSP 944 at synthesis; 33,400 / 6,180 /
+  163.5 / 52 / 944 post-route. The path is `conv3x3_std`'s 27-tap combinational cascade,
+  exactly as the review says.
+- Second baseline, at the real target. `PERIOD=4.000 bash scripts/run_impl.sh`, synthesis:
+
+  | | 4.000 ns (250 MHz) |
+  |:--|--:|
+  | WNS | **-17.279 ns** (Fmax 47.0 MHz) |
+  | TNS | -32,575.918 ns over 2,856 failing endpoints of 92,767 |
+  | worst path | `u_stem/win_q_reg[7]` -> `u_os/acc_q_reg[184]`, 21.260 ns (logic 19.413 / 91.3%, route 1.847 / 8.7%), 64 levels, DSP_ALU=27 |
+  | LUT / FF / CARRY8 | 35,531 / 6,187 / 937 |
+  | BRAM / URAM / DSP | 176 / 52 / 944 |
+
+  These reproduce DD-019's ACC_W=26 column exactly, which is the check that the two runs
+  are the same tree. Per DSP_ALU hop: 19.413/27 = **0.719 ns** at synthesis, 19.171/27 =
+  0.710 ns of logic post-route, 0.901 ns including route. The review quotes 0.682 / 0.847,
+  which is the same measurement divided by 28 hops rather than 27.
+- Worth recording because it bounds what L-1 can be expected to prove: **all ten worst
+  post-route paths are the same stem path.** `mac_lane`'s own 16-deep cascade and
+  `requantize`'s chain never appear, so neither has ever been measured. L-3's "~9 ns" and
+  L-1's "0.682 ns/hop" for the pointwise array are inferences from the stem's 27 hops, not
+  observations of those modules. A-1 cites the route-delay growth 1.892 -> 5.144 ns as
+  evidence for pe_array's unregistered 128-bit fanout-32 broadcast; that growth is on the
+  STEM path, so it is evidence about spreading a 27-deep cascade across the die and says
+  nothing about pe_array. Measure pe_array's own path before acting on A-1 - it is the one
+  finding that contradicts a stated design constraint.
+- Found, and it changes the plan: **T-5 is not only a safety item, it gates L-1.** Vivado
+  says so itself, 10,940 times:
+
+      DPIR-2: DSP u_dw/u_arr/ch[0].u_dw/acc0 input pin .../A[0] is connected to registers
+      with an asynchronous reset. This is preventing the possibility of merging these
+      registers in to the DSP Block since the DSP block registers only possess
+      synchronous reset capability.
+
+  L-1's whole point is to use the DSP48E2's own A/B/M/P registers. While every flop in the
+  design is `posedge clock or negedge rst_n` (3,998 FDCE + 1 FDPE = the review's 3,999),
+  Vivado cannot put a pipeline register inside a DSP - it would add fabric flops in FRONT of
+  an unregistered cascade and buy nothing. The review has T-5 in Phase 1 for recovery/removal
+  reasons only and never connects the two. Worse, the fix it prescribes (two-flop
+  synchroniser, async assert / **sync deassert**) keeps `negedge rst_n` in every always block,
+  so it does **not** clear DPIR-2. Getting L-1's DSP folding needs the datapath registers on a
+  *synchronous* reset. That is a design-wide change and a DD, not a bug fix.
+- Found, also not in the review: three registers where Vivado warns of a simulation mismatch
+  in the same class as T-4 - `[Synth 8-7137] ... has both Set and reset with same priority` on
+  `top_seq`'s instruction register `w[0:7]`, `out_stage`'s `acc_q` and `dw_feeder`'s
+  `grp_wr_prev`. All three sit in an async-reset always block with no assignment in the reset
+  branch. T-10 lists `acc_q` alone and for a different reason.
+- Found: `act_buffer`'s URAM has no output pipeline register (`[Synth 8-6057]`), which is free
+  at 25 ns and probably is not at 4 ns - and fixing it is a read-latency change, i.e. a Phase
+  2 item the review does not list. Added to the latency map so it is not discovered mid-phase.
+  Relatedly, `img_buffer` lands in BRAM (35.5 tiles) because URAM would need 3 pipeline
+  stages (`[Synth 8-6793]`) - which is the concrete number T-10's "pin img_buffer's RAM
+  style" is missing.
+- Verified L-4 and L-5 by simulating `requantize`'s exact `half` expression over all 64 shift
+  values rather than reasoning about Verilog's self-determined shift-amount rule: shift=0 ->
+  half=0 (L-4 confirmed), shift=59 -> half=-2^58 (L-5's catastrophic case), shift 60..63 ->
+  half=0. So L-5's "shift in [59,63] gives -2^58" is true for 59 only.
+- Blocked on: nothing yet. Phase 1 needs no decision; Phase 2 needs the reset decision above.
+- Next: the 4.000 ns baseline, then Phase 1 (T-1, T-2, T-5, T-3, T-4, then the assertion-only
+  items). Phase 1 changes no datapath and no latency, which is the point - it makes Phase 2
+  debuggable.

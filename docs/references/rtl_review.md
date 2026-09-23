@@ -1,0 +1,138 @@
+Part A — Remaining Kernels: avgpool.v, bias_add.v, conv3x3_std.v, residual_add.v
+Verified correct
+avgpool.v — bit-exact against avgpool() in mobilenet.c. The C accumulates in int32, the RTL in 26 bits; the only GAP layer is 7×7, so max |sum| = 49 × 128 = 6,272 (14 signed bits) — both hold it exactly. base + a sign-extends the int8 sample correctly. Correctly uses a plain adder with no use_dsp attribute, as its header claims. The back-to-back channel handoff in gap_feeder works: acc holds the final sum for exactly one cycle and out_stage captures it on that cycle ✓ (zero margin, but correct).
+
+conv3x3_std.v — tap ordering matches the C (i = (ic*K + ky)*K + kx) and matches stem_array's transposition exactly ✓. ACC_W=26 against a 27-tap worst case of 27 × 127 × 128 = 438,912 (20 signed bits) ✓. $signed() casts on unsigned ports are correct ✓.
+
+bias_add.v — the width arithmetic is right. acc_in + bias evaluates at 32 bits (context = max(26, 32)) with both operands sign-extended, then truncates to 26. Exact while the sum fits ✓.
+
+New findings
+K-1 🟠 bias_add truncates silently on overflow — and this is exactly where the documented 2026-07 regression lived
+File: bias_add.v
+
+logit_out.v's header tells the story at length: with ACC_W=21, the retrain gave features.3.conv.0.0 channel 110 a bias of 1,184,089, which "does not fit a 21-bit accumulator ON ITS OWN, whatever the image. It wrapped negative, ReLU6 clamped it to 0, and 2.2M elements downstream went wrong in silence."
+
+That wrap happened in this one-line module. The remedy applied was to move export.py from a measured bound to a provable one and widen to 26 bits — which is the right fix for the cause. But the RTL still has no detection. The module's correctness rests entirely on a precondition enforced in a Python script, with nothing in hardware or simulation checking it. If export.py's bound is ever wrong, a manifest is hand-edited, or DMA bytes are corrupted, the identical silent failure recurs with no trace.
+
+Conceptual fix: A simulation-only assertion comparing the full-width sum against the ACC_W signed range. Zero synthesis cost. It would have caught the 2026-07 regression on the first testbench run, years of debugging earlier.
+
+K-2 🟠 residual_add's clamp/wrap deviation from the C model is live, and its safety argument is data-dependent
+Files: residual_add.v (dead), res_feeder.v (live), software/cmodel/src/mobilenet.c:135
+
+The C model, confirmed:
+
+out->data[idx] = requantize_elem(saved->data[idx], ...) + target->data[idx];
+
+out->data is int8_t*. Two int8 values sum to int by promotion, then narrow to int8_t — truncation (wrap). residual_add.v clamps instead, and its header says so explicitly, claiming the Python golden also clamps and that "on real data the residual sum fits int8 so the two agree."
+
+res_feeder.v — the path that actually ships — also clamps, so RTL and RTL agree ✓. But the state of the system is three implementations, two behaviours, agreement by data luck. Concretely: saved_q = 100, target = 100 → C gives −56, RTL gives 127.
+
+This is precisely the failure pattern the project already experienced once. The accumulator width was "measured, not bounded," a retrain broke it, and the response was to demand a provable bound. This deviation still rests on a measurement. Unlike the accumulator case, no export.py check covers it.
+
+Conceptual fix: Decide which semantics is authoritative and make all three agree — most likely correct the C model to clamp, matching Python and the RTL. Then add a simulation assertion in res_feeder on the pre-clamp sum leaving [−128, 127], so a future retrain that starts saturating is reported rather than silently diverging.
+
+K-3 🟡 residual_add carries a second, independent copy of the shift − 1'b1 underflow
+File: residual_add.v
+
+Identical to L-4: half = one << (shift - 1'b1) with shift unsigned, so shift==0 wraps the subtract to all-ones and the rounding term vanishes. No live impact — the module is not instantiated — but it means the same defect exists in two files, and only one of them is on anyone's fix list.
+
+K-4 ⚪ bias_add's header states the wrong accumulator width, in the sentence carrying its correctness precondition
+File: bias_add.v:16
+
+"acc_in / acc_out are ACC_W (the 21-bit HW accumulator that feeds requantize)"
+
+ACC_W has been 26 since commit d5fb32b. Ordinarily doc rot; here it sits two lines above "the post-bias accumulator never overflows ACC_W, so truncation is exact" — the precondition that K-1 is about, and the one whose previous violation cost the project a silent 2.2M-element corruption.
+
+K-5 ⚪ res_feeder's reimplementation is less careful than the module it replaced
+Files: residual_add.v, res_feeder.v
+
+residual_add writes its saturation bound as a plain -128 (a 32-bit signed literal) — correct and readable. res_feeder's inline rewrite uses -8'sd128, which is correct only because two 8-bit overflows cancel (C-12). The dead module is the better-written one.
+
+Findings that extend existing IDs
+L-1 / L-2 apply verbatim to conv3x3_std.v at 27 taps. It is no longer a hedge: this is the measured critical path — 21.275 ns at synthesis, 24.315 ns post-route, 27 unregistered DSP_ALU levels, 27 DSPs and zero flip-flops.
+L-8 / L-9 apply to conv3x3_std.v (blanket use_dsp, context-determined multiply width; Vivado pruned to 1 DSP/tap, so no live cost).
+L-10 applies to avgpool.v — done <= valid & last with no evidence a first was seen.
+L-11 confirmed for residual_add.v: dead, deliberately, documented at res_feeder.v:18.
+Part B — Complete Master Bug List
+Scope: all 19 RTL modules. Severity reflects live impact on the current design and this network.
+🔴 Critical · 🟠 High · 🟡 Medium · ⚪ Low / latent (verified not currently firing)
+
+1. Leaf Engines — Numerics & DSP
+ID	Sev	Files	Failure mechanism	Conceptual fix
+L-1	🔴	mac_lane, dwconv3x3, conv3x3_std	Blocking accumulation in a for loop describes a linear dependency chain, not a tree. Maps to N unregistered DSP48E2s in PCOUT→PCIN cascade, MREG/PREG bypassed. Measured 0.682 ns/hop synth, ~0.847 ns post-route; pe_array = 512 DSPs / 1 FF, conv3x3_std = 27 DSPs / 0 FF. At 250 MHz the accumulator samples an unsettled chain.	Register the products (DSP MREG), then a balanced adder tree with one register per level. Reassociation is bit-exact — integer addition is associative and every node stays under 2²⁵.
+L-2	🔴	mac_lane, dwconv3x3, conv3x3_std	valid/first/last consumed at zero delay because the sum is combinational. Once L-1 adds latency, first clears the accumulator before its products arrive and done strobes an unfinished acc.	Shift-register the control by exactly the added depth; gate only the accumulator, let the tree free-run. dwconv3x3/conv3x3_std need clock/rst_n ports they lack.
+L-3	🟠	requantize	26×32 multiply (2 DSPs, unregistered) → 59-bit add → 59-bit variable barrel shift → clamp, one clock. 2 DSPs / 8 FFs per instance; the 8 FFs are the output register only. ~9 ns; becomes critical once L-1 is fixed.	Four stages: product / round / shift / clamp+register, with en pipelined alongside. rq_bank's q_valid depth must grow to match.
+L-4	🟠	requantize ↔ param_buffer	shift - 1'b1 is a 6-bit unsigned subtract; at shift==0 it wraps to 63 and the rounding term truncates to zero. param_buffer's zero-init deliberately produces shift=0 for unwritten tail banks, and three channel counts here (16, 24, 144) leave tails. Correct today only because m0=0 for those lanes.	Make half=0 explicit for shift==0. Do not assert shift != 0 — it fires on every tail lane. The real contract is shift ≥ 1 or m0 == 0. Document a tail contract in param_buffer as wgt_buffer does.
+L-5	🟡	requantize	SHIFT_W=6 admits shift ≤ 63; at shift ∈ [59,63] the rounding one lands on the sign bit of the 59-bit vector, giving half = −2⁵⁸. Unreachable with a valid manifest, catastrophic and silent with a corrupt one.	Fold a range check into the L-4 guard.
+L-6	🟡	requantize vs requantize.c	C narrows (int32_t)(rounded >> shift) before clamping; RTL clamps the full 59-bit value. Disagree for |r| > 2³¹ — unreachable, and the RTL is the more correct of the two. But your methodology says every deviation is critical.	Narrow to 32 bits before the compare, or log it as a deliberate proven-unreachable deviation. Silently differing is the only unacceptable option.
+L-7	🟡	requantize, out_stage	Per-channel params arrive correctly delayed one cycle; per-layer act/relu6_qmax arrive at zero delay, yet both must be valid in the same en cycle. Masked only because top_seq doesn't refetch w[] until !op_busy. Guaranteed broken once L-3 adds three stages.	Pipeline act and relu6_qmax alongside the data inside requantize — 9 bits, structural instead of contractual.
+L-8	🟡	mac_lane, conv1x1, dwconv3x3, conv3x3_std	Blanket use_dsp="yes" solved the LUT problem (191k → 34k) by creating a DSP-budget and timing one: 944 DSPs = 54.6% vs the ~442 (26%) documented in rq_bank. Every internal register bypassed, so the DSPs are slower than the fabric they replaced.	Re-evaluate after L-1/L-3. requantize's 2 DSPs/lane can drop to 1 if M0 narrows to 27 bits — measure against golden vectors first.
+L-9	⚪	mac_lane, dwconv3x3, conv3x3_std	$signed(a)*$signed(w) inside a 26-bit assignment sign-extends both to 26 bits before multiplying. Numerically exact, and Vivado pruned to 1 DSP/tap — no live cost. Exactness depends on a bound stated only in a comment.	Explicit 16-bit signed product intermediate. The L-1 rewrite does this anyway; conv1x1 already shows the pattern.
+L-10	⚪	mac_lane, conv1x1, avgpool	done <= valid & last is unconditional. A last without a preceding first announces a stale partial sum as final.	Sticky "armed" bit set on first, cleared on done.
+L-11	⚪	conv1x1, residual_add	Both are dead — no RTL instantiation. residual_add deliberately so (documented at res_feeder.v:18); conv1x1 superseded by mac_lane. Both still referenced by testbenches and headers, so they read as live.	Delete, or mark explicitly as verified reference models.
+L-12	🟠	bias_add	Truncates silently when acc_in + bias exceeds ACC_W. This is where the documented 2026-07 regression lived — a 1,184,089 bias wrapped negative, ReLU6 clamped it to 0, 2.2M elements corrupted in silence. The fix widened ACC_W and added a provable bound in export.py; the RTL still has no detection.	Simulation-only assertion on the full-width sum against the ACC_W signed range. Zero synthesis cost; would have caught the regression on the first testbench run.
+L-13	🟠	residual_add, res_feeder, mobilenet.c:135	C narrows the int8+int8 sum to int8_t (wraps); RTL and res_feeder clamp. Documented in residual_add's header, with the safety argument "on real data the sum fits int8" — a measurement, which is the exact reasoning that already failed once for ACC_W. Example: 100 + 100 → C gives −56, RTL gives 127.	Pick the authoritative semantics (likely: correct the C to clamp, matching Python and RTL). Add a simulation assertion in res_feeder when the pre-clamp sum leaves [−128,127], so a future retrain is reported rather than silently divergent.
+L-14	🟡	residual_add	Second independent copy of L-4's shift - 1'b1 underflow. No live impact (dead code), but the same defect now exists in two files and only one is on a fix list.	Fix alongside L-4, or delete with L-11.
+L-15	⚪	bias_add, res_feeder	bias_add's header still says "the 21-bit HW accumulator" (ACC_W is 26 since d5fb32b), two lines above the truncation precondition L-12 is about. Separately, res_feeder's inline rewrite uses -8'sd128 (correct only via two cancelling 8-bit overflows) where the module it replaced used a plain -128.	Correct the comment; write the bound as -128 or 8'h80, and $signed()-cast the ternary's fall-through.
+2. Datapath Arrays — Broadcast & Wiring
+Verified correct, no action: broadcast integrity; 4096-bit oc-major/ic-minor weight slicing; done sourcing from lane 0; dw_array and stem_array transpositions; no latches, no combinational loops. All checked against producing modules, not headers.
+
+ID	Sev	Files	Failure mechanism	Conceptual fix
+A-1	🔴	pe_array, dw_array, stem_array	No pipeline stage exists and no port exists to add one. pe_array owns 1 FF; dw_array/stem_array own zero and have no clock. The 128-bit broadcast has fanout 32 per bit, unregistered, across ~30% of the device's DSP columns. Post-route route delay grew 1.892 → 5.144 ns (2.7×).	After L-1: split lanes into groups with a registered broadcast chain (a and controls delayed one cycle per group), then de-skew accumulators on the way out. Note this contradicts pe_array's "structural wiring only" constraint — an architecture decision, not a bug fix.
+A-2	🟠	dw_array, dw_feeder	dw_array has no clock, valid or done. dw_feeder derives downstream valid as a one-line assign os_acc_valid = win_valid; — correct only at zero latency. Adding a stage makes it wrong by that many cycles with no width mismatch, no elaboration error, no standalone-TB failure.	Give dw_array clock/rst_n and valid in/out so latency is expressible in the port list rather than encoded as the absence of ports.
+A-3	🟡	pe_array	The lockstep invariant behind lane-0 done is asserted in a comment and enforced nowhere. The A-1 fix deliberately breaks it — lane 0 finishes G−1 cycles early and done strobes while two-thirds of the 832-bit acc bus is stale.	Source done from the last group; delay early groups' accumulators. Update the header now — it currently argues for what would become wrong.
+A-4	⚪	pe_array, dw_array, stem_array	acc declared unsigned while carrying signed accumulators; part-selects are always unsigned. All six consumer sites verified to pass into signed formals — no live defect. Safety depends on every future consumer remembering, with no compile error if one forgets.	Declare the buses signed, or $signed() at each slice site.
+A-5	⚪	pe_array, dw_array	Nothing verifies the connected w bus width or that TM/TN match wgt_buffer's parameters. Verilog silently extends or truncates. wgt_buffer is instantiated twice with different parameters (32/16 and 16/9), so a transposed pair is realistic.	generate if guards with $fatal at elaboration.
+A-6	⚪	pe_array	31 dangling lane_done bits. Correct (synthesis prunes them; 1 FF confirmed), but trips unused-signal lint every run — training you to ignore the class that would also flag a genuinely disconnected lane.	Drive only lane 0's done port, or add a lint waiver.
+3. Control & Memory — Pipelines & Addressing
+Verified correct, no action: the one-cycle v_d/f_d/l_d delay; the two-stage (pix,oct) tag pipeline with both per-stage guards; act_buffer's sel_q pipelined with dout; wgt_buffer driving all 4096 bits uniformly; addr_gen's n_ic=1 case; line_buffer's window geometry, edge padding, stride-2 decimation and cross-group flushing; res_feeder's two-phase delay line; stem_feeder's weight prefetch; MAX_W sizing (224 stem / 112 depthwise).
+
+ID	Sev	Files	Failure mechanism	Conceptual fix
+C-1	🟠	stem_feeder	A win_valid arriving while sweeping is high hits the !sweeping guard and is discarded — no latch, no stall back into line_buffer, no error. No back-pressure path exists at all. Correct only because stride2 is tied to 1'b1 three lines away.	Simulation assertion on win_valid && sweeping; a real stall if the stem ever becomes stride 1. Document the dependency at the state machine.
+C-2	🟠	line_buffer, dw_feeder, stem_feeder	out_x/out_y are declared, connected, and never read. Both feeders address writeback from a free-running count of q_valid pulses. A single spurious or missing win_valid shifts the entire output feature map by one pixel, undetectably. Two derivations exist; the fragile one is used and the witness discarded.	Pipeline out_x/out_y alongside and cross-check against the counter offset in simulation. Datapath unchanged.
+C-3	🟠	pw_feeder, dw_feeder, stem_feeder, res_feeder, gap_feeder	addr_gen deliberately latches its shape at start so the caller may prefetch; no feeder honours that. All use raw n_oc/n_ent/img_w/img_h/n_grp/n_pix/n_sl/base_*. Masked only because top_seq doesn't refetch w[] until !op_busy. Implementing the advertised prefetch breaks all five silently. base_out is additionally consumed during the drain.	Latch shape and base registers locally at start, mirroring addr_gen.
+C-4	🟠	act_buffer	NBA ordering models clean READ_FIRST; UltraRAM returns undefined data on a same-address collision. Simulation is the optimistic side, so a base_in/base_out overlap passes golden vectors and fails on the board. Disjointness is sequencer policy with no hardware guard.	Simulation-only collision trap so a policy violation is loud rather than silently divergent.
+C-5	🟡	pw_feeder, dw_feeder, res_feeder, gap_feeder	Every feeder pairs a SEL_W-derived half-select with a literal >> 1 / [W-1:1] — ~8 sites across four modules. They agree only because both equal 1. At ratio 4, each a_sel widens correctly while every address still divides by 2; half the reads land wrong, silently.	>> SEL_W throughout, so SEL_W is the single encoding.
+C-6	🟡	pw_feeder, wgt_buffer	w_addr is 10 bits and wraps silently at 1024; nothing checks n_oc * n_ic. No live overflow — worst case is features.18.0 at 800/1024 (78%), and the classifier is only 80 entries because this model has 4 classes. A stock 1000-class head needs 2560 and reads wrong weights for two-thirds of the layer.	Elaboration check on WA_W/WDEPTH, runtime check at start, and — most usefully — an assertion in gen_program.py so it fails at build time.
+C-7	🟡	stem_feeder	oct is 4 bits but only reaches 3, so the variable-index writes into acc_wide and asm build decoders for all 16 positions. stem_feeder is the largest feeder at 8,968 LUTs vs pw_feeder's 724 for a path carrying 512 DSPs.	Constrain the index to its actual range; assert n_oct <= 4 at start.
+C-8	🟡	dw_feeder, stem_feeder	addr_gen, res_feeder and gap_feeder guard every counter; dw_feeder omits img_w/img_h, stem_feeder omits n_oct. Neither hangs, but both write garbage into the pool with busy asserted. See T-2 — the guards that do exist are what trigger the top-level hang.	Apply addr_gen's pattern to the missing terms.
+C-9	🟡	pw_feeder, accel_top	accel_top ties .stall(1'b0), so the entire stall path — including the ag_valid gating that makes it safe — is never exercised. Every consumer must absorb a result every cycle unconditionally. Holds today (R=32 drains in one cycle); the first time it runs will be the first time it's needed.	Wire to real back-pressure, or tie off at the feeder port with a comment stating the single-cycle-drain guarantee.
+C-10	🟡	out_stage	flush clears stage A's vA only — not acc_q, not rq_bank's q_valid, not the requantize output registers. A flush with vA high leaves a result already latched, whose q_valid fires one cycle after the flush into whichever feeder is now selected.	Extend flush through stage B by gating rq_bank's valid register.
+C-11	🟡	wgt_buffer, top_seq	Header says fill "is meant to be overlapped with the previous layer's compute (double buffer)." There is no second bank and top_seq is strictly serial. features.18.0: 25,600 fill cycles vs 39,200 compute — 65% overhead, none hidden.	Second weight bank plus prefetch; also requires C-3.
+C-12	⚪	act_buffer, pw_feeder, addr_gen, stem_feeder	Documentation and hygiene: act_buffer's initial claims a URAM INIT that does not exist (UltraRAM has no INIT; the same comment in wgt_buffer is correct because it infers BRAM). The half-write convention documented ("replicate") is stricter than what all three callers do (place at slice wr_sel). pw_feeder's tag pipeline has no reset. addr_gen's busy means "still reading," not "results landed" — pw_feeder documents being burned by this. stem_feeder's asm is never cleared (safe only because n_oct*TS == POOL_TM exactly) and has a last-assignment-wins double NBA to img_off.	Correct the comments; add the missing reset; rename or document busy; clear asm or assert the equality.
+4. Top Level & Integration — FSM & Handshakes
+ID	Sev	Files	Failure mechanism	Conceptual fix
+T-1	🔴	top_seq	fetch_addr uses only pc[5:0] — six bits of an eight-bit pc — a hard ceiling of 64 instructions. PROG_DEPTH=512 = 64×8 exactly. This network has exactly 64 instructions. n_instr is 8 bits and accepts 255; instruction 64 fetches instruction 0's words. No bounds check anywhere. One added layer or debug op corrupts execution rather than failing to build.	Elaboration check tying PGA_W to PROG_DEPTH, runtime check on n_instr, and assert len(ops) <= 64 in gen_program.py.
+T-2	🔴	top_seq	S_WAIT has no escape if op_busy never rises. Three reachable causes: (a) op_code is one of the ten of sixteen undecoded encodings; (b) a feeder's own zero-shape guard correctly refuses the op — the defensive behaviour in C-8 triggers the hang; (c) ld_done never arrives in S_LOAD. All park with running=1, done never pulsing, recoverable only by reset. default: st <= S_IDLE guards an illegal state, not an illegal opcode.	One shared watchdog across S_LOAD/S_WAIT/S_RUN feeding an error state with a sticky fault output, plus an opcode-validity check at S_GO.
+T-3	🟠	pw_out, accel_top, top_seq	pw_out correctly mirrors emission order and detects tag drift — then tag_error goes to a top-level pin and nowhere else. On a drift the corrupted write still happens, remaining layers consume the bad tensor, and the run completes with a confident wrong classification. The bit is cleared by the next start.	Feed into the sequencer as a terminating condition; add a simulation $fatal. Counterpart to C-2: there no witness exists; here a correct witness exists and its verdict is discarded.
+T-4	🟠	pw_out:144	Vivado's own log in the repo: WARNING: [Synth 8-589] replacing case/wildcard equality operator !== with logical equality operator !=. In simulation an X sets tag_error; with != an X yields X and the flag stays clear. The circuit you verified is not the circuit that ships — in the one module whose header argues for the check's value.	Use != in RTL; move 4-state detection into the T-3 simulation assertion.
+T-5	🟠	accel_top (all modules)	rst_n is a raw top-level input driving posedge clock or negedge rst_n across 3,999 async endpoints with no synchronizer. Async assertion is correct; async deassertion is not — recovery is undefined, so an unknown subset of flip-flops leaves reset a cycle late. For pc, fw, st, every run/cx/cy/drain, that is a nondeterministic initial state. Vivado reports the path clean only because the XDC gives rst_n an input delay, modelling a synchronous reset the design lacks.	Two-flop synchronizer at the top (ASYNC_REG), async assert / sync deassert, distributed to all submodules; matching set_false_path in the XDC.
+T-6	🟡	pw_out	Write address is a pulse counter; the tag is checked but not used to form it. acc_pix/acc_oct arrive exactly two cycles ahead of q_valid — the depth of the existing pipeline — so a tag-derived address would make drift harmless rather than merely detected. With T-3, "detect but neither correct nor stop" is the one combination with no benefit.	Derive aw_addr from the tag, or act on tag_error.
+T-7	🟡	accel_top, top_seq, gen_program.py	ld_pchan is simultaneously the DMA's parameter count, top_seq's no_load decision, and the stem's oc-tile count. gen_program.py already carries a comment about meaning (2) biting them. Meaning (3) is the same hazard, still live and unguarded because of C-8. st_noct_full[OCTW-1:0] also truncates silently above pchan=128.	Derive the stem's tile count from a shape field, not a load field.
+T-8	🟡	logit_out	Duplicates the requantize datapath out_stage exists to eliminate (634 → 442 DSPs, "one block to verify instead of five") — 4 lanes / 8 DSPs with its own parameter registers, a second copy that must stay bit-exact and that no shared testbench covers. Inherits L-3's timing problem plus a combinational 4-way argmax.	Parameterize rq_bank's OUT_W and route LINEAR through out_stage, or accept the split and add explicit cross-verification.
+T-9	🟡	accel_top	Stated deliberately: os_q broadcasts to all six feeders and isolation is the write mux. Functionally correct (all five muxes verified), but all six output pipelines toggle every cycle of every op, and an idle feeder's asserting aw_en sits one mux input from the pool.	Gate each feeder's q_valid by its own sel_* — one AND gate each.
+T-10	⚪	top_seq, accel_top, img_buffer, out_stage, logit_out	ld_done has no edge detection (a stale assertion completes a load with no data moved — and the DMA doesn't exist yet, so this contract will be written after the code depending on it). GAP_CYC=4 is asserted, not derived, and combines with five independent drain values (7, 7, 15, 6, 7). op_busy is an unqualified OR. prog is writable while running. out_stage's acc_q has no reset. logit_out holds stale logits/argmax between inferences. img_buffer has no ram_style pragma unlike act_buffer, whose header documents a prior synthesis disaster from leaving the choice to the tool.	Edge-detect ld_done; derive GAP_CYC; qualify op_busy; guard prog; reset acc_q; clear the logit outputs on start; pin img_buffer's RAM style.
+Cross-cutting dependency — read before sequencing
+L-1 and L-3 are latency changes, and seven other modules encode those latencies as constants. Fixing a kernel in isolation breaks bit-exactness at integration even though the kernel itself is correct.
+
+Trigger	Must move in the same commit
+L-1/L-2 (mac_lane +LAT)	pw_feeder tag pipeline (1 stage → LAT); pw_feeder drain (3-bit 7 → wider); A-3 done sourcing
+L-1/L-2 (dwconv3x3 gains clock+latency)	dw_array port list (A-2); dw_feeder's os_acc_valid = win_valid; dw_feeder grp_d2..d4 depth and drain
+L-1/L-2 (conv3x3_std gains clock+latency)	stem_array port list; stem_feeder's win_q latch, sweep timing, oct_d1/d2, drain
+L-3 (requantize +3)	rq_bank q_valid depth; L-7 act/qmax pipelining; every feeder's tag depth (grp_dN/sl_dN/oct_dN/ws/wa); every drain; GAP_CYC; logit_out's lv
+L-12 absorbed	bias_add is combinational in L-3's cone — fold it into the new stage-1 register
+A-1 (registered broadcast)	A-3 done from last group; accumulator de-skew
+Recommended implementation order
+Phase 1 — free, independent, and they make everything after it debuggable. No timing impact, no datapath change: T-1, T-2, T-5, then T-3, T-4, then the assertion-only items L-12, L-4, C-4, C-6, C-2. This phase converts today's silent failures into detectable ones before you start changing latencies — which matters because Phase 2 is where bit-exactness is easiest to lose.
+
+Phase 2 — the latency block, as coordinated commits per the dependency table: L-1/L-2 for each of the three MAC kernels with its array and feeder, then L-3/L-7 with every tag depth and drain counter.
+
+Phase 3 — physical: A-1/A-3 registered broadcast, L-8 DSP budget re-evaluation.
+
+Phase 4 — semantics and cleanup: L-6 and L-13 (decide and document the two C-model deviations), L-11/L-14 (delete or mark dead code), C-5, C-12, T-10.
+
+Acceptance test: restore accel_top_ooc.xdc to -period 4.000. Until the constraint says 4.000 ns, no timing claim in the thesis is measured — the current 40 MHz constraint closes at WNS +0.665 ns post-route, i.e. a real Fmax of 41 MHz against a 250 MHz target.
+
+Regression discipline: every Phase 2 transformation is a reassociation or a latency change, never a change of value. A golden-vector failure therefore means the latency bookkeeping is wrong — a tag pipeline or a *_valid depth — not the arithmetic. Bisect the bookkeeping, not the math.
+
+Totals: 43 findings across 19 modules — 4 critical, 10 high, 18 medium, 11 low/latent. Audit is now complete; no RTL file remains unreviewed.

@@ -104,6 +104,24 @@ build/synth/timing_summary.rpt
 .Xil/
 build/synth/*backup.log
 
+# ── Place-and-route artifacts (scripts/run_impl.sh) ──
+#  Same rule as build/synth above, one directory per constraint so two runs can
+#  be compared. The utilization reports are small and are the evidence behind
+#  the before/after tables in docs/, so they stay. Checkpoints, tool logs and
+#  the ~3 MB timing reports are regenerable with:
+#      PERIOD=4.000 bash scripts/run_impl.sh
+#  and the numbers that matter (WNS, TNS, the worst path, the logic/route split)
+#  are quoted verbatim in docs/lab_notebook.md.
+build/impl_*/*.dcp
+build/impl_*/vivado.log
+build/impl_*/*.jou
+build/impl_*/*backup.log
+build/impl_*/timing_paths.rpt
+build/impl_*/timing_summary.rpt
+build/impl_*/synth_timing_summary.rpt
+#  The period-overridden XDC is a generated copy of the committed one.
+build/impl_*/accel_top_ooc_*.xdc
+
 # ── Vivado GUI project ───────────────────────────────
 #  Entirely regenerable, and it references sources where they live, so nothing
 #  here is a source of truth. Delete it and re-run whenever:
