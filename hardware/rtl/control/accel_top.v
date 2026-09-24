@@ -425,7 +425,8 @@ module accel_top #(
         .POOL_TM(TM), .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W),
         .XW(XW_ST), .MAX_W(224), .OCTW(OCTW), .IA_W(IA_W), .AA_W(AA_W),
         .WA_W(ST_WA_W), .PA_W(PA_W), .BANK_W(ST_BANK_W), .PBANK_W(BANK_W),
-        .WDEPTH(ST_WDEPTH), .PDEPTH(PDEPTH)
+        .WDEPTH(ST_WDEPTH), .PDEPTH(PDEPTH),
+        .OS_LAT(OS_LAT)
     ) u_stem (
         .clock(clock), .rst_n(rst_n_i),
         .start(st_start), .img_w(st_img_w), .img_h(st_img_h),

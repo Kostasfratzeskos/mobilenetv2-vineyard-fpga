@@ -2,7 +2,11 @@
 //============================================================================
 //  conv3x3_std_tb.sv  -  self-checking testbench for rtl/kernels/conv3x3_std.v
 //
-//  conv3x3_std is a pure combinational NT-tap MAC (NT = K*K*CIN). No clock:
+//  conv3x3_std is a PIPELINED NT-tap MAC (NT = K*K*CIN) since L-1: one
+//  registered product stage plus clog2(27) = 5 tree levels, so ST_LAT = 6 and it
+//  has a clock. The window is HELD while the pipeline fills, which is what the
+//  real feeder does - stem_feeder latches win_q once and sweeps it.
+//  Previously:
 //  fill the window+kernel, pack into the flat vectors, compare the accumulator
 //  against an independent reference sum.
 //
@@ -16,12 +20,22 @@ module conv3x3_std_tb;
     localparam K      = 3;
     localparam CIN    = 3;
     localparam NT     = K*K*CIN;     // 27
+
+    // L-1: one registered product stage + clog2(NT) tree levels, no accumulate.
+    localparam LEVELS = $clog2(NT);          // 5
+    localparam ST_LAT = 1 + LEVELS;          // 6
     localparam ACC_W  = 26;
 
     logic [NT*DATA_W-1:0]     win_v, wk_v;
     wire  signed [ACC_W-1:0]  acc;
 
+    logic clock, rst_n;
+    initial clock = 1'b0;
+    always #5 clock = ~clock;
+
     conv3x3_std #(.DATA_W(DATA_W), .K(K), .CIN(CIN), .ACC_W(ACC_W)) dut (
+        .clock (clock),
+        .rst_n (rst_n),
         .win (win_v),
         .wk  (wk_v),
         .acc (acc)
@@ -43,7 +57,9 @@ module conv3x3_std_tb;
                 wk_v [i*DATA_W +: DATA_W] = g[i];
                 expected += longint'(a[i]) * longint'(g[i]);
             end
-            #1;
+            // hold the window while the pipeline fills
+            repeat (ST_LAT) @(posedge clock);
+            @(negedge clock);
             total++;
             if (acc !== ACC_W'(expected)) begin
                 fails++;
@@ -60,6 +76,12 @@ module conv3x3_std_tb;
 
     integer i, n;
     initial begin
+        win_v = '0; wk_v = '0;
+        rst_n = 1'b0;
+        repeat (2) @(negedge clock);
+        rst_n = 1'b1;
+        @(negedge clock);
+
         $display("directed cases:");
         fill(0, 0);                 run_case("all zero");
         fill(8'sd127, 8'sd127);     run_case("all +127");     // 27*16129 = 435483

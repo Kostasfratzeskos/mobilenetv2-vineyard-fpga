@@ -51,7 +51,20 @@
 //  rather than a precondition, unlike the pointwise array where IC reaches
 //  1280. See logit_out.v for why the width is 26 and not 21.
 //
-//  Purely combinational, like the conv3x3_std it wraps.
+//  ---- LATENCY: this array is no longer transparent (L-1, L-2) ---------
+//
+//  conv3x3_std is a pipelined ST_LAT = 1 + clog2(CIN*K*K) = 6 stage engine now:
+//  one registered product per tap, then clog2(27) = 5 adder-tree levels. It was
+//  the design's critical path in every run from Phase 0 onward - 27 unregistered
+//  DSP_ALU levels, 19.2 ns of logic - and this is the change that removes it.
+//
+//  The latency is in the PORT LIST, for the reason A-2 gives about dw_array: a
+//  feeder that derives the downstream valid as an equality on the input valid is
+//  wrong by ST_LAT cycles the moment the array stops being combinational, with
+//  no width mismatch and no elaboration error to say so. `valid` in,
+//  `valid_out` out, and ONE shift register for all TS lanes rather than TS
+//  copies - every lane sees the same window timing and none looks at its own
+//  data.
 //============================================================================
 module stem_array #(
     parameter DATA_W = 8,     // int8 activations and weights
@@ -60,12 +73,39 @@ module stem_array #(
     parameter K      = 3,     // KxK spatial kernel
     parameter ACC_W  = 26
 )(
+    input  wire                         clock,
+    input  wire                         rst_n,  // SYNCHRONOUS (DD-020)
+    input  wire                         valid,  // win/wk carry a real window
     input  wire [K*K*CIN*DATA_W-1:0]    win,  // from line_buffer: tap-major
     input  wire [TS*CIN*K*K*DATA_W-1:0] wk,   // per-lane, already conv-ordered
-    output wire [TS*ACC_W-1:0]          acc
+    // signed for the reason A-4 gives: these carry signed accumulators and a
+    // part-select is unsigned whatever the parent bus is.
+    output wire signed [TS*ACC_W-1:0]   acc,
+    output wire                         valid_out  // `acc` is final this cycle
 );
 
-    localparam NT = CIN*K*K;      // 27 taps per output element
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
+
+    localparam NT     = CIN*K*K;      // 27 taps per output element
+    // conv3x3_std's latency, derived from the same inputs it derives it from.
+    localparam ST_LAT = 1 + clog2(NT);          // 6
+
+    // ---- the control, travelling beside a free-running pipeline ---------
+    reg [ST_LAT-1:0] v_sr;
+
+    always @(posedge clock) begin
+        if (!rst_n) v_sr <= {ST_LAT{1'b0}};
+        else        v_sr <= {v_sr[ST_LAT-2:0], valid};
+    end
+
+    assign valid_out = v_sr[ST_LAT-1];
 
     // ---- transpose once, then broadcast ---------------------------------
     wire [NT*DATA_W-1:0] win_c;
@@ -91,9 +131,11 @@ module stem_array #(
                 .CIN    (CIN),
                 .ACC_W  (ACC_W)
             ) u_conv (
-                .win (win_c),                              // shared
-                .wk  (wk[m*NT*DATA_W +: NT*DATA_W]),       // per lane
-                .acc (acc[m*ACC_W +: ACC_W])
+                .clock (clock),
+                .rst_n (rst_n),
+                .win   (win_c),                            // shared
+                .wk    (wk[m*NT*DATA_W +: NT*DATA_W]),     // per lane
+                .acc   (acc[m*ACC_W +: ACC_W])
             );
         end
     endgenerate

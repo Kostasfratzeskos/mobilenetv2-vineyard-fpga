@@ -1005,3 +1005,57 @@ wrote quant_scales.json  (53 layers)
   DD-021 with the numbers, so it stops being re-proposed.
 - Blocked on: nothing.
 - Next: Phase 2b (dwconv3x3, dw_array, dw_feeder), applying DD-021's rule from the start.
+
+### 2026-09-24 - Phase 2b: dwconv3x3 pipelined, and A-2 becomes a wire
+- Did: L-1, L-2, L-9 in `dwconv3x3`; A-2 in `dw_array`; and everything in `dw_feeder` that
+  encoded the old zero latency, in one commit.
+- Tests: all 31 pass. `accel_tb` bit-exact at 6,895,780 elements, `dw_datapath` at 405,568.
+- Structure is DD-021's, applied from the start this time: registered products with
+  use_dsp="yes", level 1 of the tree left to the tool, levels 2.. forced "no". No accumulate
+  stage, because a depthwise window completes in one pass - so DW_LAT = 1 + clog2(K*K) = 5
+  where mac_lane's MAC_LAT is 6.
+- K*K = 9 is not a power of two, so the tree pads to 16 leaves. Padding the BUSES in a
+  generate block rather than the loop, because a dynamic index past the end of `win` reads X
+  while a zero product and the adds consuming it are constants synthesis prunes.
+- **A-2 was the interesting half and the review was exactly right about it.** `dw_array` had
+  no clock, no valid and no done, and `dw_feeder` derived the downstream valid as
+  `assign os_acc_valid = win_valid;`. Adding five cycles of array latency would have made that
+  line wrong with no width mismatch, no elaboration error and no standalone-testbench
+  failure - nothing in the toolchain would have said so. The array carries `valid` and
+  `valid_out` now, with ONE shift register for all 16 channels rather than 16 copies, and the
+  feeder connects a wire instead of asserting an equality.
+- Constants that moved, all declared in one place at the top of `dw_feeder` next to DW_LAT
+  because they move together:
+
+      os_acc_valid   win_valid          -> arr_valid, a wire from the array
+      group tag      grp_d2/d3/d4 (4)   -> grp_sr[] at GRP_WR = 2+DW_LAT+OS_LAT = 9,
+                                            with grp_arr at GRP_ARR = 7 for acc_wide
+                                            and the parameter address
+      C-2 witness    2                  -> WIT_LAT = DW_LAT + OS_LAT = 7
+      drain          literal 3'd7       -> 1 + DW_LAT + OS_LAT = 8
+      step -> arr_valid   2 -> 7        step -> aw_en   4 -> 9
+
+- The C-2 witness is **not in the review's cross-cutting table**, because it did not exist
+  when the review was written - Phase 1 added it. It is what made this phase debuggable: it
+  compares the writeback address against line_buffer's own out_x/out_y and names the pixel
+  where they diverge, which is precisely the symptom a wrong group-tag depth produces. Phase 1
+  paying for itself in Phase 2, which was the argument for doing it first.
+- `dw_feeder` also MEASURES the real win_valid -> arr_valid distance and names all four
+  derived constants in the failure message if it is not DW_LAT. That is what makes restating
+  DW_LAT outside `dw_array` safe rather than a second opinion - the same arrangement
+  `pw_feeder` got in 2a.
+- Three testbenches treated the engine as combinational: `dwconv3x3_tb` had no clock at all
+  and settled with `#1`, `dw_array_tb` the same, `dwconv_layer_tb` drove it combinationally
+  into requantize. All three hold the window while the pipeline fills now, and `dw_array_tb`
+  asserts `valid_out` comes back after exactly DW_LAT. Holding a window while a free-running
+  tree fills is what the real feeder does anyway - `line_buffer` only updates its output when
+  it is fed.
+- One build error worth recording, because it is the shape of mistake this phase invites: the
+  latency check referenced WIT_LAT before its declaration, since I inserted the check above
+  the witness block. Hoisting every derived depth into one place next to DW_LAT fixed it and
+  is the better arrangement regardless - if they move together they should be declared
+  together.
+- Blocked on: nothing.
+- Next: Phase 2c - conv3x3_std, stem_array, stem_feeder. This is the one that matters for the
+  clock: the worst path has been `u_stem/.../acc26` -> `u_os/acc_q` in every run since Phase
+  0, 27 unregistered DSP_ALU levels and 19.2 of the 20.4 ns.

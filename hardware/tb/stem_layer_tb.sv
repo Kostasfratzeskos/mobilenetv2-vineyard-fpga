@@ -32,6 +32,10 @@ module stem_layer_tb;
     localparam S   = 2;                  // stride
     localparam NT  = CIN*K*K;            // 27 taps
 
+    // L-1: conv3x3_std is one registered product stage + clog2(NT) tree levels.
+    localparam LEVELS = $clog2(NT);
+    localparam ST_LAT = 1 + LEVELS;          // 6
+
     localparam ACT_RELU6  = 1'b1;
     localparam RELU6_QMAX = 8'sd127;
 
@@ -49,7 +53,7 @@ module stem_layer_tb;
 
     // ---- DUT I/O -----------------------------------------------------------
     logic                clock, rst_n;
-    logic [NT*8-1:0]     win_v, wk_v;         // conv3x3_std (combinational)
+    logic [NT*8-1:0]     win_v, wk_v;         // conv3x3_std (ST_LAT pipeline)
     wire  signed [20:0]  acc_w;
     logic signed [31:0]  bias_r;              // bias_add (combinational)
     wire  signed [20:0]  biased_w;
@@ -60,6 +64,7 @@ module stem_layer_tb;
     wire  signed [7:0]   q_w;
 
     conv3x3_std #(.DATA_W(8), .K(K), .CIN(CIN), .ACC_W(21)) u_conv (
+        .clock(clock), .rst_n(rst_n),
         .win(win_v), .wk(wk_v), .acc(acc_w)
     );
 
@@ -102,6 +107,12 @@ module stem_layer_tb;
                     end
                 end
             end
+
+            // conv3x3_std is PIPELINED since L-1: hold the window for ST_LAT
+            // edges so the tree fills before bias_add and requantize see the
+            // sum. bias_add is still combinational.
+            repeat (ST_LAT) @(posedge clock);
+            @(negedge clock);
 
             bias_r = b_mem[oc];
             m0_r   = m0_mem[oc];

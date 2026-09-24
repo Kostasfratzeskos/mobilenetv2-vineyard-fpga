@@ -17,13 +17,19 @@
 //  Each window needs ceil(OC/TS) = 4 cycles of compute (DD-016). So the input
 //  stream is stalled while a window is swept.
 //
-//      C     counters; image read issued
-//      C+1   pixel arrives; line_buffer fed
-//      C+2   win_valid. Weights for oc_tile 0 requested; the input stalls
-//      C+3   window LATCHED; oc_tile 0 computed -> out_stage
-//      C+4-6 oc_tiles 1..3
-//      C+5-8 the four q_valid results arrive and are assembled
-//      C+8   one full 32-channel entry written
+//      C      counters; image read issued
+//      C+1    pixel arrives; line_buffer fed
+//      C+2    win_valid. Weights for oc_tile 0 requested; the input stalls
+//      C+3    window LATCHED; oc_tile 0 ENTERS the array
+//      C+4-6  oc_tiles 1..3 enter it
+//      C+9-12 the array's four results emerge (ST_LAT = 6 stages, L-1)
+//      C+11-14 the four q_valid results arrive and are assembled
+//      C+15   one full 32-channel entry written
+//
+//  The sweep is still n_oct cycles - the array accepts one oc_tile per cycle, so
+//  pipelining it did not slow the stall down, only moved the results further
+//  away. Weights still lead by ONE cycle, because they have to arrive at the
+//  array's INPUT with the window, which is unchanged by anything behind it.
 //
 //  Latching the window matters: line_buffer's registers move on every
 //  in_valid, and exactly one more pixel is in flight when the stall begins, so
@@ -76,7 +82,12 @@ module stem_feeder #(
     parameter BANK_W  = 3,      // clog2(TS), the weight banks
     parameter PBANK_W = 5,      // clog2(POOL_TM), the shared param banks
     parameter WDEPTH  = 8,
-    parameter PDEPTH  = 64
+    parameter PDEPTH  = 64,
+
+    // Latency of the shared out_stage, which lives in accel_top: acc_valid to
+    // q_valid. A PARAMETER because this module's oc_tile tag and drain are both
+    // sized from it and out_stage is not instantiated here.
+    parameter OS_LAT  = 2
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -121,6 +132,32 @@ module stem_feeder #(
 );
 
     localparam NT       = CIN*K*K;          // 27 taps
+
+    // ---- every depth in this module, derived and in one place ----------
+    //  ST_LAT is stem_array's, restated from the same inputs it derives it from:
+    //  one registered product stage plus clog2(NT) adder-tree levels, and no
+    //  accumulate stage. The simulation check at the bottom MEASURES the real
+    //  distance from the sweep to the array's valid_out and names every constant
+    //  below if it disagrees - which is what makes restating it safe.
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
+
+    localparam ST_LAT    = 1 + clog2(NT);           // 6
+    localparam OCT_ARR   = ST_LAT;                  // oct -> array output
+    localparam OCT_WR    = ST_LAT + OS_LAT;         // oct -> q_valid
+    //  Drain: `busy` already covers the sweep itself via `sweeping`, and `adv`
+    //  can only fire inside a sweep on its LAST cycle (see `adv` above), so
+    //  layer_done can coincide with the end of a sweep but never its middle.
+    //  After `sweeping` drops, the longest anything is still in flight is the
+    //  array, the requantize stage, and the one cycle wr_go adds.
+    localparam DRAIN_CYC = ST_LAT + OS_LAT + 1;     // 9
+    localparam DRAIN_W   = clog2(DRAIN_CYC + 1);    // 4
 
     // ================= stage 0 : the raster walk ========================
     reg [XW-1:0]  cy, cx;
@@ -256,18 +293,47 @@ module stem_feeder #(
     );
 
     wire [TS*ACC_W-1:0] acc;
+    wire                arr_valid;
 
     stem_array #(.DATA_W(DATA_W), .TS(TS), .CIN(CIN), .K(K), .ACC_W(ACC_W)) u_arr (
-        .win(win_q), .wk(wk), .acc(acc)
+        .clock(clock), .rst_n(rst_n),
+        .valid(sweeping),
+        .win(win_q), .wk(wk),
+        .acc(acc), .valid_out(arr_valid)
     );
 
-    // place the TS accumulators in lanes oct*TS .. +TS-1
+    // ---- the oc_tile tag, now that the array has latency ----------------
+    //  `oct` used to serve three places directly or one cycle apart, because the
+    //  array was combinational: the lane placement below, and the `asm` fold two
+    //  cycles later. With ST_LAT stages in between they are OCT_ARR and OCT_WR
+    //  apart, so there is one shift register and two taps off it.
+    //
+    //  Pushed every cycle rather than only while sweeping: the array free-runs,
+    //  so the tag has to travel at the same rate as the data inside it, exactly
+    //  as in pw_feeder.
+    reg [OCTW-1:0] oct_sr [0:OCT_WR-1];
+
+    integer os;
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            for (os = 0; os < OCT_WR; os = os + 1) oct_sr[os] <= {OCTW{1'b0}};
+        end else begin
+            oct_sr[0] <= oct;
+            for (os = 1; os < OCT_WR; os = os + 1) oct_sr[os] <= oct_sr[os-1];
+        end
+    end
+
+    wire [OCTW-1:0] oct_arr = oct_sr[OCT_ARR-1];   // aligned with arr_valid
+    wire [OCTW-1:0] oct_wr  = oct_sr[OCT_WR-1];    // aligned with q_valid
+
+    // place the TS accumulators in lanes oct*TS .. +TS-1, using the tag that
+    // travelled with them through the array
     reg [POOL_TM*ACC_W-1:0] acc_wide;
     integer L;
     always @* begin
         acc_wide = {POOL_TM*ACC_W{1'b0}};
         for (L = 0; L < TS; L = L + 1)
-            acc_wide[(oct*TS + L)*ACC_W +: ACC_W] = acc[L*ACC_W +: ACC_W];
+            acc_wide[(oct_arr*TS + L)*ACC_W +: ACC_W] = acc[L*ACC_W +: ACC_W];
     end
 
     // OC <= POOL_TM for the stem, so every oc_tile shares parameter entry 0
@@ -275,19 +341,15 @@ module stem_feeder #(
 
     // The requantize stage itself is in accel_top; this drives it.
     assign os_acc        = acc_wide;
-    assign os_acc_valid  = sweeping;
+    // was `= sweeping`, i.e. the array had no latency. A WIRE from the array's
+    // own valid output now, so the latency cannot be asserted wrongly.
+    assign os_acc_valid  = arr_valid;
     assign os_param_addr = param_addr;
 
     wire [POOL_TM*DATA_W-1:0] q       = os_q;
     wire                      q_valid = os_q_valid;
 
     // ================= assemble four quarters into one entry ============
-    reg [OCTW-1:0] oct_d1, oct_d2;
-    always @(posedge clock) begin
-        if (!rst_n) begin oct_d1 <= {OCTW{1'b0}}; oct_d2 <= {OCTW{1'b0}}; end
-        else        begin oct_d1 <= oct;          oct_d2 <= oct_d1;       end
-    end
-
     // Every quarter folds into the same register; the write is delayed one
     // cycle so the last fold has landed before the entry is stored.
     reg [POOL_TM*DATA_W-1:0] asm;
@@ -296,11 +358,11 @@ module stem_feeder #(
         if (!rst_n) asm <= {POOL_TM*DATA_W{1'b0}};
         else if (q_valid)
             for (B = 0; B < TS; B = B + 1)
-                asm[(oct_d2*TS + B)*DATA_W +: DATA_W] <=
-                    q[(oct_d2*TS + B)*DATA_W +: DATA_W];
+                asm[(oct_wr*TS + B)*DATA_W +: DATA_W] <=
+                    q[(oct_wr*TS + B)*DATA_W +: DATA_W];
     end
 
-    wire entry_done = q_valid && (oct_d2 == n_oct - 1'b1);
+    wire entry_done = q_valid && (oct_wr == n_oct - 1'b1);
 
     reg            wr_go;
     reg [AA_W-1:0] out_cnt;
@@ -335,29 +397,98 @@ module stem_feeder #(
     //  latched one cycle later, the sweep runs n_oct cycles, out_stage adds
     //  OS_LAT, and the write is one cycle after entry_done.
     //
-    //  Two registers rather than a shift register of that length. `ox_h` is
-    //  captured alongside win_q, and `ox_e` copies it at entry_done. The second
-    //  one is not optional and the check found out why: holding ox_h all the way
-    //  to wr_go reported the counter at pixel 0 against a witness at pixel 1,
-    //  because the stall releases at the LAST sweep cycle, so the next window is
-    //  latched - overwriting ox_h - in the same cycle entry_done fires for this
-    //  one. Copying at entry_done takes the value while it is still this
-    //  window's.
+    //  ---- and why the shape of this check had to change in Phase 2c ----
+    //
+    //  Phase 1 held the coordinates in `ox_h` from the win_q latch and copied
+    //  them at entry_done, which worked while the array was combinational: the
+    //  distance from the latch to entry_done was n_oct + OS_LAT = 6 cycles, and
+    //  the next window could not be latched before then.
+    //
+    //  With ST_LAT = 6 stages in the array that distance is
+    //  n_oct + ST_LAT + OS_LAT = 12, while the next window can be latched as
+    //  soon as 3 cycles after the sweep ends. So `ox_h` is overwritten LONG
+    //  before entry_done and the hold is simply wrong now.
+    //
+    //  The fix is to stop holding and start travelling: the coordinates ride the
+    //  SAME shift register as the oc_tile tag, so whatever `oct_wr` belongs to,
+    //  these belong to as well - by construction, at any array latency. `ox_live`
+    //  is what gets pushed, and it is correct for every cycle of a sweep because
+    //  the next latch cannot happen until the sweep has ended.
     //
     //  Inside `ifndef SYNTHESIS`, so the datapath is untouched.
 `ifndef SYNTHESIS
-    reg [XW-1:0] ox_h, oy_h, ox_e, oy_e;
+    reg [XW-1:0] ox_live, oy_live;
     always @(posedge clock) begin
         if (!rst_n) begin
-            ox_h <= {XW{1'b0}}; oy_h <= {XW{1'b0}};
-            ox_e <= {XW{1'b0}}; oy_e <= {XW{1'b0}};
+            ox_live <= {XW{1'b0}}; oy_live <= {XW{1'b0}};
+        end else if (win_valid && !sweeping) begin
+            ox_live <= out_x; oy_live <= out_y;    // captured with win_q
+        end
+    end
+
+    reg [XW-1:0] ox_sr [0:OCT_WR-1];
+    reg [XW-1:0] oy_sr [0:OCT_WR-1];
+
+    integer xs;
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            for (xs = 0; xs < OCT_WR; xs = xs + 1) begin
+                ox_sr[xs] <= {XW{1'b0}};
+                oy_sr[xs] <= {XW{1'b0}};
+            end
         end else begin
-            if (win_valid && !sweeping) begin
-                ox_h <= out_x; oy_h <= out_y;      // captured with win_q
+            ox_sr[0] <= ox_live;
+            oy_sr[0] <= oy_live;
+            for (xs = 1; xs < OCT_WR; xs = xs + 1) begin
+                ox_sr[xs] <= ox_sr[xs-1];
+                oy_sr[xs] <= oy_sr[xs-1];
             end
-            if (entry_done) begin
-                ox_e <= ox_h;  oy_e <= oy_h;       // now aligned with wr_go
+        end
+    end
+
+    // aligned with q_valid, exactly like oct_wr; entry_done IS a q_valid, so
+    // capturing there gives the coordinates of the entry about to be written
+    reg [XW-1:0] ox_e, oy_e;
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            ox_e <= {XW{1'b0}}; oy_e <= {XW{1'b0}};
+        end else if (entry_done) begin
+            ox_e <= ox_sr[OCT_WR-1];
+            oy_e <= oy_sr[OCT_WR-1];
+        end
+    end
+
+    // ---- ST_LAT is restated here, so MEASURE it (L-1, L-2) --------------
+    //  The oc_tile tag, the witness depth above and the drain are all sized from
+    //  ST_LAT, and a wrong value has no width mismatch and no elaboration error.
+    //  Time the real distance from a sweep cycle to the array's valid_out. One
+    //  measurement per layer, then stop.
+    reg [7:0] lat_cnt;
+    reg       lat_arm, lat_seen;
+    always @(posedge clock) begin
+        if (!rst_n || start) begin
+            lat_arm  <= 1'b0;
+            lat_seen <= 1'b0;
+            lat_cnt  <= 8'd0;
+        end else if (!lat_seen) begin
+            if (!lat_arm) begin
+                if (sweeping) begin
+                    lat_arm <= 1'b1;
+                    lat_cnt <= 8'd1;
+                end
+            end else if (arr_valid) begin
+                lat_seen <= 1'b1;
+            end else begin
+                lat_cnt <= lat_cnt + 8'd1;
             end
+        end
+    end
+
+    always @(posedge clock) begin
+        if (rst_n && lat_arm && !lat_seen && arr_valid && (lat_cnt != ST_LAT[7:0])) begin
+            $display("ERROR: %m L-1 stem_array answered %0d cycles after the window entered it, but this module's ST_LAT says %0d at time %0t. The oc_tile tag (arr %0d, wr %0d) and the drain (%0d) are all sized from ST_LAT, so they are wrong too.",
+                     lat_cnt, ST_LAT, $time, OCT_ARR, OCT_WR, DRAIN_CYC);
+            $finish;
         end
     end
 
@@ -389,12 +520,12 @@ module stem_feeder #(
 `endif
 
     // ================= busy, including the drain ========================
-    reg [3:0] drain;
+    reg [DRAIN_W-1:0] drain;
     always @(posedge clock) begin
-        if (!rst_n)             drain <= 4'd0;
-        else if (start)         drain <= 4'd0;
-        else if (layer_done)    drain <= 4'd15;
-        else if (drain != 4'd0) drain <= drain - 4'd1;
+        if (!rst_n)          drain <= {DRAIN_W{1'b0}};
+        else if (start)      drain <= {DRAIN_W{1'b0}};
+        else if (layer_done) drain <= DRAIN_CYC[DRAIN_W-1:0];
+        else if (drain != {DRAIN_W{1'b0}}) drain <= drain - 1'b1;
     end
 
     // `layer_done` is in here for a reason that only shows up at the top level.
@@ -405,7 +536,7 @@ module stem_feeder #(
     // op's weight load while this one still had its whole drain to go. Found by
     // accel_tb; invisible to a standalone testbench, which waits on layer_done
     // rather than on busy falling.
-    assign busy = run || layer_done || sweeping || (drain != 4'd0);
+    assign busy = run || layer_done || sweeping || (drain != {DRAIN_W{1'b0}});
 
 endmodule
 

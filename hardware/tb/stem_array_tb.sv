@@ -28,12 +28,25 @@ module stem_array_tb;
     localparam NT     = CIN*K*K;      // 27
     localparam ACC_W  = 26;
 
+    // L-1 / L-2: the array is an ST_LAT-stage pipeline now and says so in its
+    // port list. Derived here the same way it derives it, then MEASURED via
+    // valid_out below.
+    localparam LEVELS = $clog2(NT);          // 5
+    localparam ST_LAT = 1 + LEVELS;          // 6
+
+    logic clock, rst_n;
+    initial clock = 1'b0;
+    always #5 clock = ~clock;
+
+    logic                         valid;
     logic [K*K*CIN*DATA_W-1:0]    win;
     logic [TS*NT*DATA_W-1:0]      wk;
-    wire  [TS*ACC_W-1:0]          acc;
+    wire  signed [TS*ACC_W-1:0]   acc;
+    wire                          valid_out;
 
     stem_array #(.DATA_W(DATA_W), .TS(TS), .CIN(CIN), .K(K), .ACC_W(ACC_W)) u_dut (
-        .win(win), .wk(wk), .acc(acc)
+        .clock(clock), .rst_n(rst_n), .valid(valid),
+        .win(win), .wk(wk), .acc(acc), .valid_out(valid_out)
     );
 
     // ---- oracle 2: one conv3x3_std, driven lane by lane ------------------
@@ -41,6 +54,7 @@ module stem_array_tb;
     wire  signed [ACC_W-1:0] s_acc;
 
     conv3x3_std #(.DATA_W(DATA_W), .K(K), .CIN(CIN), .ACC_W(ACC_W)) u_single (
+        .clock(clock), .rst_n(rst_n),
         .win(s_win), .wk(s_wk), .acc(s_acc)
     );
 
@@ -65,13 +79,31 @@ module stem_array_tb;
     endtask
 
     task automatic run_case(input string tag);
-        integer m, c, ky, kx, i, bad_ref, bad_ora;
+        integer m, c, ky, kx, i, bad_ref, bad_ora, lat;
         longint expd;
         logic signed [ACC_W-1:0] got;
         begin
             bad_ref = 0; bad_ora = 0;
             pack;
-            #1;
+            // pulse `valid` with the window, then hold while the pipeline fills
+            @(negedge clock);
+            valid = 1'b1;
+            @(posedge clock);
+            @(negedge clock);
+            valid = 1'b0;
+            lat = 1;
+            while (valid_out !== 1'b1 && lat < 64) begin
+                @(posedge clock); @(negedge clock);
+                lat++;
+            end
+            if (valid_out !== 1'b1) begin
+                fails++;
+                $display("  [ERR] %-18s valid_out never came back", tag);
+            end else if (lat !== ST_LAT) begin
+                fails++;
+                $display("  [ERR] %-18s valid_out came %0d cycles after the window, ST_LAT says %0d",
+                         tag, lat, ST_LAT);
+            end
 
             for (m = 0; m < TS; m++) begin
                 // oracle 1: the conv order is i = (c*K + ky)*K + kx
@@ -96,7 +128,9 @@ module stem_array_tb;
                             s_win[((c*K + ky)*K + kx)*DATA_W +: DATA_W] = a[c][ky][kx];
                 for (i = 0; i < NT; i++)
                     s_wk[i*DATA_W +: DATA_W] = w[m][i];
-                #1;
+                // the single engine is pipelined too, so hold and wait
+                repeat (ST_LAT) @(posedge clock);
+                @(negedge clock);
                 if (s_acc !== got) begin
                     bad_ora++;
                     if (bad_ora <= 4)
@@ -118,7 +152,11 @@ module stem_array_tb;
 
     integer m, c, ky, kx, i, n;
     initial begin
-        win = 0; wk = 0; s_win = 0; s_wk = 0;
+        win = 0; wk = 0; s_win = 0; s_wk = 0; valid = 0;
+        rst_n = 1'b0;
+        repeat (2) @(negedge clock);
+        rst_n = 1'b1;
+        @(negedge clock);
 
         $display("stem_array: %0d lanes x %0d taps (%0d ch x %0dx%0d) = %0d MACs, ACC_W=%0d",
                  TS, NT, CIN, K, K, TS*NT, ACC_W);
