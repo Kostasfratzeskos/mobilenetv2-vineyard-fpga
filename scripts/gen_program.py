@@ -41,7 +41,12 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, "software", "export", "manifest.json")
 OUT_DIR = os.path.join(ROOT, "software", "export")
-DEFAULT_GOLDEN_DIR = os.path.join(ROOT, "software", "golden", "image_1")
+#  NOT image_1: that set has no ckpt_sha256 (it predates the field and the
+#  2026-07 retrain), so the check in emit_tb_include cannot verify it and now
+#  refuses it. healthy_hl6025 is one of the five sets that carry the current
+#  checkpoint's hash, and it is the set the RTL testbenches already compare
+#  against - lin_datapath_tb's expected logits are its logits.
+DEFAULT_GOLDEN_DIR = os.path.join(ROOT, "software", "golden", "healthy_hl6025")
 TB_INCLUDE = os.path.join(ROOT, "hardware", "tb", "program_ops.svh")
 
 # --- datapath constants (keep in sync with the RTL parameters) ---------------
@@ -169,6 +174,38 @@ def build_ops(manifest):
             h, w, c = oh, ow, oc
 
         elif kind == "res_add":
+            #  L-13 / DD-025: the residual rescale must not exceed 1.
+            #
+            #  The three models disagree on the INTERMEDIATE clamp, not just the
+            #  final one. Python's requantize_arr returns the raw shifted value
+            #  (export.py:101) and only clamps after the add; the C model and the
+            #  RTL both clamp the rescaled skip branch to int8 first, because in
+            #  hardware that value comes out of the shared out_stage as int8 and
+            #  is written to the pool as int8 - there is no wider intermediate to
+            #  add. Worked example, saved rescaling to 200 with target -100:
+            #  Python gives clamp_i8(100) = 100, the C and the RTL give
+            #  clamp_i8(200) - 100 = 27.
+            #
+            #  That is unreachable exactly while M = m0 * 2**-shift <= 1, because
+            #  then |res| <= 127 and the intermediate clamp never fires. Every
+            #  res_add in the current manifest satisfies it - worst is
+            #  features.10.add at M = 0.909 - but that is a property of THIS
+            #  checkpoint's scales (M <= 1 means S_saved <= S_out), not of the
+            #  architecture. A retrain could break it, and the symptom would be
+            #  the RTL disagreeing with Python while still matching the
+            #  C-validated goldens - i.e. silent.
+            #
+            #  Checked HERE, at build time, rather than in simulation: this must
+            #  fail before the hardware is ever programmed, not only if a test
+            #  vector happens to reach it.
+            _res_M = op["m0"] / float(2 ** op["shift"])
+            assert _res_M <= 1.0, (
+                "res_add %s has rescale M = %.6f > 1 (m0=%d, shift=%d). "
+                "The RTL and C clamp the rescaled skip branch to int8 before the "
+                "add and Python does not, so they only agree while M <= 1. "
+                "At M > 1 the hardware diverges from the Python reference "
+                "SILENTLY - see DD-025." % (op["name"], _res_M, op["m0"], op["shift"]))
+
             out = new_tensor(h, w, c, idx)
             ops.append(dict(
                 idx=idx, opcode=OP_RES, name=op["name"],
@@ -436,9 +473,25 @@ def emit_tb_include(ops, golden_dir, manifest):
             f"  {os.path.relpath(golden_dir, ROOT)}: {ck_gold[:16]}...\n"
             f"  software/export/manifest.json:      {ck_wgt[:16]}...\n"
             f"Re-run export.py with --image to regenerate this golden set.")
+    # ...and a MISSING sha is the same risk, not a lesser one. This used to be a
+    # printed note, which left the guard above with a hole exactly where it was
+    # needed: software/golden/image_1 has no ckpt_sha256 at all, because it was
+    # exported before this field existed - i.e. before the retrain described
+    # above - and it was also this script's DEFAULT golden set. So the check that
+    # was added after losing an afternoon could be walked straight past by
+    # running the script with no arguments. Verified: the C model scores 1/66
+    # layers against image_1 and 66/66 against every golden set that carries a
+    # sha. An unverifiable golden set is not usable evidence.
     if not (ck_gold and ck_wgt):
-        print("  note: no ckpt_sha256 in one of the manifests - "
-              "cannot verify the golden set and the weights share a checkpoint")
+        sys.exit(
+            f"UNVERIFIABLE GOLDEN SET - no ckpt_sha256 to compare:\n"
+            f"  {os.path.relpath(golden_dir, ROOT)}: "
+            f"{(ck_gold[:16] + '...') if ck_gold else 'MISSING'}\n"
+            f"  software/export/manifest.json:      "
+            f"{(ck_wgt[:16] + '...') if ck_wgt else 'MISSING'}\n"
+            f"A golden set without a checkpoint hash predates the guard that "
+            f"catches stale goldens, so it cannot be shown to match these "
+            f"weights. Re-run export.py with --image to regenerate it.")
 
     # the whole-tensor goldens the testbench loads directly, not per op
     g_input = by_name.get("input")

@@ -653,9 +653,40 @@ module accel_top #(
                      sel_gap  ? gp_aw_data : {TM*DATA_W{1'b0}};
 
     // ================= back to the sequencer =============================
-    // Only the started feeder can be busy: every other one is held in its idle
-    // state because its `start` never pulsed.
-    assign op_busy = st_busy | pwf_busy | dw_busy | rs_busy | gp_busy;
+    //  T-10: the OR is QUALIFIED by the decoded opcode now. The comment here
+    //  used to read "Only the started feeder can be busy: every other one is
+    //  held in its idle state because its `start` never pulsed" - which is true,
+    //  and was the entire enforcement. An unqualified OR means any feeder that
+    //  ever asserts busy spuriously - a reset escape, a drain counter reloaded by
+    //  a stray pulse, a future feeder wired in wrongly - holds the WHOLE
+    //  sequencer in S_RUN until the watchdog fires, and the fault is reported
+    //  against the innocent instruction that happened to be running.
+    //
+    //  `op_code` is held stable for the whole op (S_GO through S_RUN), so the
+    //  selects are stable across the feeder's run AND its drain. Note pwf_busy is
+    //  qualified with sel_pwf, not sel_pw: pw_feeder serves LINEAR too.
+    assign op_busy = (sel_stem & st_busy)
+                   | (sel_pwf  & pwf_busy)
+                   | (sel_dw   & dw_busy)
+                   | (sel_res  & rs_busy)
+                   | (sel_gap  & gp_busy);
+
+`ifndef SYNTHESIS
+    //  And the half the qualification would otherwise hide: a feeder that is
+    //  busy while NOT selected is now invisible to the sequencer, so it has to be
+    //  visible here instead. Qualified by `running`, because before the first
+    //  start no feeder is selected and none should be busy either.
+    wire [4:0] busy_v = {st_busy, pwf_busy, dw_busy, rs_busy, gp_busy};
+    wire [4:0] sel_v  = {sel_stem, sel_pwf, sel_dw, sel_res, sel_gap};
+
+    always @(posedge clock) begin
+        if (rst_n_i && running && ((busy_v & ~sel_v) != 5'b0)) begin
+            $display("ERROR: %m T-10 a feeder is busy while not selected at time %0t: busy={st,pwf,dw,res,gap}=%b, selected=%b. op_busy is qualified, so the sequencer cannot see this one - it would run to the watchdog or, worse, the writeback mux would carry this feeder's data.",
+                     $time, busy_v, sel_v);
+            $finish;
+        end
+    end
+`endif
 
 endmodule
 

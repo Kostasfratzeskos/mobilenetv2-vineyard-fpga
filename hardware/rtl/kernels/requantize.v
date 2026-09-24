@@ -197,6 +197,47 @@ module requantize #(
         else        s3 <= (p2 + half) >>> sh_d2;    // >>> is arithmetic: signed
     end
 
+`ifndef SYNTHESIS
+    // ---- L-6 / DD-024: the one place this RTL and the C model disagree ----
+    //
+    //  requantize.c narrows to int32 BEFORE clamping - `(int32_t)(rounded >>
+    //  shift)` - and this module does not: `s3` is the full ROUND_W-wide value
+    //  and stage 4 clamps that. So for |s3| > 2^31 the C wraps and this
+    //  saturates, and the two models produce different int8s.
+    //
+    //  DD-024 accepted that deviation deliberately, on a structural bound: a
+    //  normalized manifest (2^30 <= m0 < 2^31, shift >= 31) forces |s3| < 2^25,
+    //  six bits clear. This check is what makes the bound worth trusting - it
+    //  turns "proven unreachable" into "checked on every vector we run",
+    //  including every one of accel_tb's 6,895,780 elements.
+    //
+    //  If it ever fires, the golden vectors and the RTL have diverged and the
+    //  vectors are the ones that are wrong, because the C is the model that
+    //  wraps. That is the opposite of the usual direction, which is exactly why
+    //  it says so here rather than leaving the next person to work it out.
+    localparam signed [ROUND_W-1:0] I32_MAX =  (1 <<< 31) - 1;
+    localparam signed [ROUND_W-1:0] I32_MIN = -(1 <<< 31);
+
+    //  Respects CHECKS_ARE_FATAL, like L-4 and L-5 above and for the same reason:
+    //  requantize_tb drives a second instance into exactly the corners that must
+    //  NOT be reachable in a real build - shift=0 with a live m0, shift past
+    //  SH_MAX - and those corners blow the int32 bound as a side effect. A
+    //  100 * 2^30 product unshifted is 1.07e11, which is this check firing
+    //  CORRECTLY on a deliberately illegal input. Fatal in the shipping
+    //  configuration, a tripwire line in the testbench's guard instance.
+    always @(posedge clock) begin
+        if (rst_n && en_sr[2] && ((s3 > I32_MAX) || (s3 < I32_MIN))) begin
+            if (CHECKS_ARE_FATAL) begin
+                $display("ERROR: %m L-6 s3 = %0d leaves int32 range at time %0t. requantize.c narrows to int32 here and this module does not, so the C model and the RTL now disagree on this element. DD-024's bound (normalized m0 and shift >= 31 give |s3| < 2^25) has been violated - check the manifest, not this module.",
+                         s3, $time);
+                $finish;
+            end else
+                $display("  [tripwire] %m L-6 s3 = %0d leaves int32 range at time %0t",
+                         s3, $time);
+        end
+    end
+`endif
+
     // ================= stage 4 : activation, saturation, output =========
     // Unsized literals (0, 127, -128) are 32-bit signed, so every compare and
     // assign below stays in signed arithmetic.

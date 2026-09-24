@@ -46,6 +46,15 @@ module img_buffer #(
 
     localparam PIX_BITS = CIN*DATA_W;      // 24
 
+    //  T-10: the RAM style is PINNED, like act_buffer's. act_buffer's header
+    //  records a prior synthesis disaster from leaving the choice to the tool,
+    //  and this was the one on-chip memory still leaving it. "block" rather than
+    //  act_buffer's "ultra": this array is CIN*DATA_W = 24 bits wide and holds
+    //  one image, which is small enough that a URAM (72 bits x 4096) would waste
+    //  two thirds of its width, and there are only 96 of them on the device
+    //  against 312 BRAMs. Pinning it to the resource it should use also means a
+    //  change in DEPTH cannot silently move it into distributed RAM.
+    (* ram_style = "block" *)
     reg [PIX_BITS-1:0] mem [0:DEPTH-1];
 
     // deterministic power-up, as in the other on-chip memories

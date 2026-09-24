@@ -96,10 +96,20 @@ module out_stage #(
     reg [TM*ACC_W-1:0] acc_q;
     reg                vA;
 
+    //  T-10: acc_q is reset now. It was left un-reset on the argument that vA
+    //  gates every reader, which is true - so this buys no functional change and
+    //  is not a bug fix. What it buys is that the register powers up at a known
+    //  value instead of x, so a simulation that reads it before the first
+    //  acc_valid propagates 0 rather than x through bias_add and the multiply.
+    //  An x there is indistinguishable from a real timing error in a waveform,
+    //  which is the kind of thing that costs an afternoon.
     always @(posedge clock) begin
-        if (!rst_n)      vA <= 1'b0;
-        else if (flush)  vA <= 1'b0;
-        else begin
+        if (!rst_n) begin
+            vA    <= 1'b0;
+            acc_q <= {TM*ACC_W{1'b0}};
+        end else if (flush) begin
+            vA <= 1'b0;
+        end else begin
             vA <= acc_valid;
             if (acc_valid) acc_q <= acc;
         end

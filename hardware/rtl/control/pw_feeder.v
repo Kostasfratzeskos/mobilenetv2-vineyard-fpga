@@ -245,7 +245,23 @@ module pw_feeder #(
         end
     end
 
-    assign a_addr  = pix_base + (ict >> 1);
+    // ---- C-5: SEL_W is the ONE encoding of the entry/word ratio ---------
+    //  Every one of these used to pair a SEL_W-derived half-select with a
+    //  literal divide-by-two - `x[W-1:1]` or `x >> 1` - and the two agreed only
+    //  because POOL_TM/TN happens to be 2, so SEL_W happens to be 1. At ratio 4
+    //  the `*_sel` port would widen correctly and every address would still
+    //  divide by 2, so three quarters of the reads would land on the wrong entry
+    //  with no width mismatch and nothing to say so. The shift is `>> SEL_W`
+    //  now, which is the same value today and the right one at any ratio.
+    //
+    //  Done through a 32-bit intermediate and then resized to exactly the port
+    //  width: a bare shift keeps the operand's own width, so the result would be
+    //  silently truncated or zero-extended at the assignment depending on which
+    //  side was wider.
+    wire [31:0]     ict_wide = {{(32-ICT_W){1'b0}}, ict} >> SEL_W;
+    wire [AA_W-1:0] ict_ent  = ict_wide[AA_W-1:0];
+
+    assign a_addr  = pix_base + ict_ent;
     assign a_sel   = ict[SEL_W-1:0];
     assign a_rd_en = ag_valid;
 

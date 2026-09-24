@@ -150,9 +150,21 @@ module gap_feeder #(
         end
     end
 
-    // sl >> 1 resized exactly to the port, for both the parameter index and the
-    // output entry - see res_feeder on why this is done through a wide value
-    wire [31:0]     sl_half_w = {{(32-SLW){1'b0}}, sl} >> 1;
+    // ---- C-5: SEL_W is the ONE encoding of the entry/word ratio ---------
+    //  Every one of these used to pair a SEL_W-derived half-select with a
+    //  literal divide-by-two - `x[W-1:1]` or `x >> 1` - and the two agreed only
+    //  because POOL_TM/TN happens to be 2, so SEL_W happens to be 1. At ratio 4
+    //  the `*_sel` port would widen correctly and every address would still
+    //  divide by 2, so three quarters of the reads would land on the wrong entry
+    //  with no width mismatch and nothing to say so. The shift is `>> SEL_W`
+    //  now, which is the same value today and the right one at any ratio.
+    //
+    //  Done through a 32-bit intermediate and then resized to exactly the port
+    //  width: a bare shift keeps the operand's own width, so the result would be
+    //  silently truncated or zero-extended at the assignment depending on which
+    //  side was wider.
+    // for both the parameter index and the output entry
+    wire [31:0]     sl_half_w = {{(32-SLW){1'b0}}, sl} >> SEL_W;
     wire [AA_W-1:0] sl_ent    = sl_half_w[AA_W-1:0];
 
     assign a_rd_en = run;
@@ -210,7 +222,7 @@ module gap_feeder #(
     wire [POOL_TM*ACC_W-1:0] acc_wide =
         sl_d2[0] ? {acc, {TN*ACC_W{1'b0}}} : {{TN*ACC_W{1'b0}}, acc};
 
-    wire [31:0]     sl2_half   = {{(32-SLW){1'b0}}, sl_d2} >> 1;
+    wire [31:0]     sl2_half   = {{(32-SLW){1'b0}}, sl_d2} >> SEL_W;   // C-5
     wire [PA_W-1:0] param_addr = sl2_half[PA_W-1:0];
 
     // The requantize stage itself is in accel_top; this drives it.
@@ -242,7 +254,7 @@ module gap_feeder #(
 
     wire [SLW-1:0] sl_d4 = sl_sr[OS_LAT-1];         // aligned with q_valid
 
-    wire [31:0]     sl4_half = {{(32-SLW){1'b0}}, sl_d4} >> 1;
+    wire [31:0]     sl4_half = {{(32-SLW){1'b0}}, sl_d4} >> SEL_W;     // C-5
     wire [AA_W-1:0] out_ent  = sl4_half[AA_W-1:0];
 
     assign aw_en   = q_valid;

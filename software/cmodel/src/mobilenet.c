@@ -132,8 +132,26 @@ void residual_add(const tensor_i8 *target, const tensor_i8 *saved,
      int arr_len = target->c * target->h * target->w;
 
      for(int idx = 0; idx < arr_len; idx++) {
-        out->data[idx] = requantize_elem(saved->data[idx], m0, (int)shift, ACT_NONE, relu6_qmax) + 
-                         target->data[idx];
+        /* L-13 / DD-025: the sum is CLAMPED, not narrowed.
+         *
+         * This used to assign the int-promoted sum straight into an int8_t
+         * field, which wraps: 100 + 100 gave -56 where Python's
+         *     q = clamp_i8(q.astype(np.int64) + res)        (export.py:303)
+         * and the RTL's res_feeder both give 127. Three implementations, and
+         * this was the only one that wrapped - by C's implicit-narrowing rules
+         * rather than by anyone's decision. Python is the head of this
+         * project's chain of trust and the RTL agreed with it, so this file was
+         * simply wrong.
+         *
+         * Reachable: the residual rescale has max M = 0.909 across the ten
+         * res_add ops in this manifest, so |res| <= 115, and target is a full
+         * int8 - a sum of 242 is arithmetically available. It does not occur for
+         * the checkpoint and image the golden vectors are built from, which is
+         * exactly the "on real data it fits" argument DD-019 records failing. */
+        int32_t sum = (int32_t)requantize_elem(saved->data[idx], m0, (int)shift,
+                                               ACT_NONE, relu6_qmax)
+                    + (int32_t)target->data[idx];
+        out->data[idx] = clamp_i8(sum);
      }
 }
 

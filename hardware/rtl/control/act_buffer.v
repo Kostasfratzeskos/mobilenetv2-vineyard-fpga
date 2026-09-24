@@ -52,9 +52,18 @@
 //  leaving the other half of the entry as the previous pass left it. On
 //  BRAM/URAM this is a native byte-enable, not a read-modify-write.
 //
-//  Convention for a half write: the caller REPLICATES its payload across the
-//  whole wr_data word and lets wr_sel choose which copy lands. That keeps this
-//  module generic over TM/TN rather than hard-coding which half is which.
+//  Convention for a half write: the caller PLACES its payload at the slice
+//  `wr_sel` names, and the other slices of `wr_data` are don't-care. That keeps
+//  this module generic over TM/TN rather than hard-coding which half is which.
+//
+//  C-12: this used to say the caller REPLICATES its payload across the whole
+//  word. Replication does satisfy the requirement - any copy will do when only
+//  one slice is enabled - but it is STRICTER than the code needs, and none of
+//  the three callers actually does it. dw_feeder and gap_feeder both build a
+//  POOL_TM-wide word with the payload in the matching half and zeros in the
+//  other; stem_feeder always writes full entries. A convention no caller follows
+//  is worse than none, because the next caller reads it, does the extra work,
+//  and the reader after that infers that the extra work must be load-bearing.
 //
 //  Read latency is ONE cycle, like wgt_buffer. rd_sel is pipelined with the
 //  data so the caller presents it with the address, not a cycle later.
@@ -99,9 +108,19 @@ module act_buffer #(
     reg [ENT_BITS-1:0]  dout;
     reg [SEL_W-1:0]     sel_q;            // travels with the data
 
-    // Deterministic power-up. On Xilinx this becomes the memory INIT and
-    // costs nothing; it also keeps simulation free of X before the first
-    // layer has written anything.
+    // Deterministic power-up, for SIMULATION. It keeps the model free of X
+    // before the first layer has written anything, which is the whole benefit
+    // here.
+    //
+    // C-12: this used to claim "on Xilinx this becomes the memory INIT and costs
+    // nothing". That is true of wgt_buffer, which infers BRAM - BRAM has an INIT
+    // and the tool uses it. It is NOT true of this module: `ram_style = "ultra"`
+    // infers UltraRAM, and URAM288 has no INIT mechanism at all. The array comes
+    // up zeroed because the DEVICE clears it at configuration, not because of
+    // this block, and a synthesis tool that decided otherwise would not warn. So
+    // nothing may DEPEND on the initial contents of this memory in hardware; the
+    // network never reads an entry it has not written, which is what actually
+    // makes that safe.
     integer i;
     initial begin
         for (i = 0; i < DEPTH; i = i + 1) mem[i] = {ENT_BITS{1'b0}};

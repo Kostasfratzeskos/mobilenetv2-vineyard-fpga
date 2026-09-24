@@ -62,7 +62,16 @@ module addr_gen #(
     output wire              valid,       // pix/oct/ict address a real tile
     output wire              first,       // first tile of this dot product
     output wire              last,        // final tile of this dot product
-    output wire              busy,        // a layer is in flight
+    // C-12: `busy` here means "I am still EMITTING addresses", NOT "the results
+    // have landed". It drops the cycle this module consumes the last tile, while
+    // that tile is still travelling through the array and the requantize stage.
+    // Every other `busy` in this design means the second thing (DD-017), so this
+    // one is the odd case out and it has already cost once: pw_feeder exposed it
+    // directly as its own `busy` and lost the last two pixels of every pointwise
+    // layer, which accel_tb caught. pw_feeder now wraps it with a drain counter.
+    // Read the name as `emitting`, and do not wire it to anything that means
+    // "done".
+    output wire              busy,        // still EMITTING - see above
     output reg               layer_done   // pulses once, after the final tile
 );
 

@@ -231,7 +231,23 @@ module dw_feeder #(
         end
     end
 
-    assign a_addr  = base_in + {{(AA_W-GRPW+1){1'b0}}, grp[GRPW-1:1]} + pix_off;
+    // ---- C-5: SEL_W is the ONE encoding of the entry/word ratio ---------
+    //  Every one of these used to pair a SEL_W-derived half-select with a
+    //  literal divide-by-two - `x[W-1:1]` or `x >> 1` - and the two agreed only
+    //  because POOL_TM/TN happens to be 2, so SEL_W happens to be 1. At ratio 4
+    //  the `*_sel` port would widen correctly and every address would still
+    //  divide by 2, so three quarters of the reads would land on the wrong entry
+    //  with no width mismatch and nothing to say so. The shift is `>> SEL_W`
+    //  now, which is the same value today and the right one at any ratio.
+    //
+    //  Done through a 32-bit intermediate and then resized to exactly the port
+    //  width: a bare shift keeps the operand's own width, so the result would be
+    //  silently truncated or zero-extended at the assignment depending on which
+    //  side was wider.
+    wire [31:0]     grp_wide = {{(32-GRPW){1'b0}}, grp} >> SEL_W;
+    wire [AA_W-1:0] grp_ent  = grp_wide[AA_W-1:0];
+
+    assign a_addr  = base_in + grp_ent + pix_off;
     assign a_sel   = grp[SEL_W-1:0];
     assign a_rd_en = step && is_real;
 
@@ -333,8 +349,9 @@ module dw_feeder #(
     // Size the parameter address EXACTLY to the port. A narrower expression on
     // a wider input port leaves the top bits undriven in xsim, and mem[X] reads
     // X - which is what a whole word of xxxx turned out to be.
-    wire [PA_W-1:0] param_addr_w =
-        {{(PA_W-GRPW+1){1'b0}}, grp_arr[GRPW-1:1]};
+    //  C-5: >> SEL_W, not a literal halving - see the note at a_addr above.
+    wire [31:0]     grp_arr_wide = {{(32-GRPW){1'b0}}, grp_arr} >> SEL_W;
+    wire [PA_W-1:0] param_addr_w = grp_arr_wide[PA_W-1:0];
 
     // The requantize stage itself is in accel_top; this drives it.
     assign os_acc        = acc_wide;
@@ -372,8 +389,12 @@ module dw_feeder #(
 
     assign aw_en   = q_valid;
     assign aw_full = (TC == POOL_TM);           // constant: 0 for TC=16
+    //  C-5: >> SEL_W, not a literal halving - see the note at a_addr above.
+    wire [31:0]     grp_wr_wide = {{(32-GRPW){1'b0}}, grp_wr} >> SEL_W;
+    wire [AA_W-1:0] grp_wr_ent  = grp_wr_wide[AA_W-1:0];
+
     assign aw_sel  = grp_wr[SEL_W-1:0];
-    assign aw_addr = base_out + {{(AA_W-GRPW+1){1'b0}}, grp_wr[GRPW-1:1]} + cur_off;
+    assign aw_addr = base_out + grp_wr_ent + cur_off;
     // q already carries the results in the half wr_sel will store, so it goes
     // straight through - the replication convention is not needed here.
     assign aw_data = q;

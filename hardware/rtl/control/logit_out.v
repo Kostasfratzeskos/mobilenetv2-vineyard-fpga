@@ -85,7 +85,7 @@ module logit_out #(
     input  wire                      acc_valid,
 
     // ---- the answer -----------------------------------------------------
-    output wire [NLOG*LOG_W-1:0]     logits,
+    output wire [NLOG*LOG_W-1:0]     logits,       // zeroed until this inference answers (T-10)
     output wire                      logits_valid,
     output reg  [IDX_W-1:0]          argmax,
     output reg                       argmax_valid
@@ -113,8 +113,28 @@ module logit_out #(
         end
     end
 
+    // ---- T-10: the outputs do not survive a new inference ---------------
+    //  `logits` and `argmax` used to hold the PREVIOUS inference's answer from
+    //  `start` until the new one emerged, ARR_LAT + RQ_LAT cycles later. Both
+    //  valid flags were already cleared on start, so nothing that reads the
+    //  contract correctly was wrong - but the PS reads these over AXI, and a
+    //  poll that arrives between `start` and the first `logits_valid` gets a
+    //  complete, plausible, four-class answer belonging to the previous image.
+    //  That is the worst shape a stale value can take: not an x, not a zero, but
+    //  last frame's confident prediction of a healthy leaf.
+    //
+    //  `stale` is set by start and cleared by the first real result, so the
+    //  window reads as zeros instead. It is a gate on the output rather than a
+    //  register on it, because `logits_valid` means "logits are good THIS cycle"
+    //  and inserting a register would have moved that by one.
+    //  The update is further down, next to `lv`, which it depends on - a net has
+    //  to be declared before it is read, and `lv` comes from cls_valid.
+    reg stale;
+
     // ---- bias + requantize to int16, one chain per class ----------------
-    wire [NLOG-1:0] cls_valid;
+    wire [NLOG-1:0]          cls_valid;
+    wire [NLOG*LOG_W-1:0]    logits_raw;
+
 
     genvar c;
     generate
@@ -140,7 +160,7 @@ module logit_out #(
                 .M0         (p_m0[c]),
                 .shift      (p_shift[c]),
                 .relu6_qmax (8'sd0),
-                .quantized  (logits[c*LOG_W +: LOG_W]),
+                .quantized  (logits_raw[c*LOG_W +: LOG_W]),
                 .q_valid    (cls_qv)
             );
 
@@ -169,6 +189,28 @@ module logit_out #(
     wire lv = cls_valid[0] & lv_gate;
     assign logits_valid = lv;
 
+    //  T-10's `stale` gate, declared above and updated here: set by start,
+    //  cleared by the first real result of this inference.
+    always @(posedge clock) begin
+        if (!rst_n)     stale <= 1'b1;
+        else if (start) stale <= 1'b1;
+        else if (lv)    stale <= 1'b0;
+    end
+
+    //  `stale && !lv`, not bare `stale`: `stale` is a REGISTER, so it is still
+    //  high during the very cycle `lv`/`logits_valid` asserts - gating on it alone
+    //  zeroed the logits exactly when the contract says they are good, which
+    //  lin_datapath_tb caught immediately. The `!lv` term lets the first real
+    //  result through in its own cycle.
+    //
+    //  After that first result this passes logits_raw straight through, which is
+    //  what it always did: requantize's output register free-runs, so `logits`
+    //  only ever means anything in a `logits_valid` cycle. T-10's complaint was
+    //  the window from `start` to the FIRST result, and that is the window this
+    //  closes - it deliberately does not turn `logits` into a latched output,
+    //  because that would move `logits_valid` by a cycle.
+    assign logits = (stale && !lv) ? {NLOG*LOG_W{1'b0}} : logits_raw;
+
 `ifndef SYNTHESIS
     //  Lockstep, checked - the four classes see the same acc_valid and none
     //  looks at its own data. Also gives the other NLOG-1 bits a reader.
@@ -184,23 +226,30 @@ module logit_out #(
     // ---- argmax over the shared logit scale (DD-011) --------------------
     // A plain signed comparison is enough because every class shares S_logit.
     // `>` keeps the lower index on a tie, which is what argmax_i16() does.
+    //  Over logits_RAW, not the gated `logits`: the comparison happens in the
+    //  cycle `lv` is high, when `stale` is already being cleared, and reading the
+    //  gated copy would make the winner depend on which of the two updated first.
     reg [IDX_W-1:0]      best_i;
     reg signed [LOG_W-1:0] best_v;
     integer k;
     always @* begin
         best_i = {IDX_W{1'b0}};
-        best_v = $signed(logits[0 +: LOG_W]);
+        best_v = $signed(logits_raw[0 +: LOG_W]);
         for (k = 1; k < NLOG; k = k + 1)
-            if ($signed(logits[k*LOG_W +: LOG_W]) > best_v) begin
-                best_v = $signed(logits[k*LOG_W +: LOG_W]);
+            if ($signed(logits_raw[k*LOG_W +: LOG_W]) > best_v) begin
+                best_v = $signed(logits_raw[k*LOG_W +: LOG_W]);
                 best_i = k[IDX_W-1:0];
             end
     end
 
+    //  T-10: `argmax` itself is cleared on start, not just its valid flag - same
+    //  argument as `logits` above. A class index is one of four legal values
+    //  whatever it holds, so a stale one is unfalsifiable from the outside.
     always @(posedge clock) begin
         if (!rst_n) begin
             argmax <= {IDX_W{1'b0}};  argmax_valid <= 1'b0;
         end else if (start) begin
+            argmax       <= {IDX_W{1'b0}};
             argmax_valid <= 1'b0;
         end else begin
             argmax_valid <= lv;

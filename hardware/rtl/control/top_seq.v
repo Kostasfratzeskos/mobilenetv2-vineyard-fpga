@@ -168,8 +168,60 @@ module top_seq #(
         for (i = 0; i < PROG_DEPTH; i = i + 1) prog[i] = {PW_W{1'b0}};
     end
 
+    //  T-10: the program is NOT writable while running. It used to be, which
+    //  means a host write landing mid-inference could change an instruction this
+    //  sequencer had already fetched, or one it was about to - and the symptom
+    //  would be an output tensor, not an error. The guard costs one AND gate.
+    //
+    //  This is a real behavioural change, not just a check: a write attempted
+    //  while running is now DROPPED rather than applied. That is the safe
+    //  direction - silently ignoring a write the host should not have made beats
+    //  silently honouring it - and the simulation check below says so by name so
+    //  the drop is never invisible during bring-up.
     always @(posedge clock)
-        if (pg_en) prog[pg_addr] <= pg_data;
+        if (pg_en && !running) prog[pg_addr] <= pg_data;
+
+`ifndef SYNTHESIS
+    always @(posedge clock) begin
+        if (rst_n && pg_en && running)
+            $display("[FAULT] %m T-10 program write to address %0d attempted while running at time %0t. It was DROPPED. The program memory is read-only between `start` and `done`.",
+                     pg_addr, $time);
+    end
+`endif
+
+    // ---- T-10: ld_done is EDGE detected ---------------------------------
+    //  `ld_done` is a handshake from a DMA that does not exist yet, so this
+    //  module's contract for it will be written AFTER the code that depends on
+    //  it - which is exactly the situation where a level-sensitive read is a
+    //  trap. Read as a level, a `ld_done` left asserted from the previous load
+    //  completes the next one two cycles after S_LOAD is entered, with no data
+    //  moved and nothing to say so; the weights for that layer are then whatever
+    //  the previous layer left in the buffer, and the output is a plausible
+    //  feature map.
+    //
+    //  Requiring a RISING edge while `ld_req` is asserted means a stuck-high
+    //  `ld_done` produces a HANG instead, which T-2's watchdog already catches
+    //  and reports as a fault. Turning a silent wrong answer into a loud stop is
+    //  the whole trade.
+    reg ld_done_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) ld_done_q <= 1'b0;
+        else        ld_done_q <= ld_done;
+    end
+
+    wire ld_done_edge = ld_done & ~ld_done_q;
+
+`ifndef SYNTHESIS
+    //  The other half: a `ld_done` that is high when nobody asked is a protocol
+    //  violation by whoever owns the bus. The hardware copes (it is ignored, and
+    //  the edge never comes while ld_req is low), so this reports and continues.
+    always @(posedge clock) begin
+        if (rst_n && ld_done && !ld_req)
+            $display("[FAULT] %m T-10 ld_done is asserted with no ld_req outstanding at time %0t. Ignored - but the load handshake is being driven wrongly, and a level-sensitive reader would have completed a load here with no data moved.",
+                     $time);
+    end
+`endif
 
     // ---- the instruction register ----------------------------------------
     reg [PW_W-1:0] w [0:7];
@@ -296,7 +348,7 @@ module top_seq #(
                     st <= S_GO;
                 end else if (!ld_req) begin
                     ld_req <= 1'b1;
-                end else if (ld_done) begin
+                end else if (ld_done_edge) begin
                     ld_req <= 1'b0;
                     st     <= S_GO;
                 end

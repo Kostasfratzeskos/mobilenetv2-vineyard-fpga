@@ -171,8 +171,23 @@ module res_feeder #(
         end
     end
 
+    // ---- C-5: SEL_W is the ONE encoding of the entry/word ratio ---------
+    //  Every one of these used to pair a SEL_W-derived half-select with a
+    //  literal divide-by-two - `x[W-1:1]` or `x >> 1` - and the two agreed only
+    //  because POOL_TM/TN happens to be 2, so SEL_W happens to be 1. At ratio 4
+    //  the `*_sel` port would widen correctly and every address would still
+    //  divide by 2, so three quarters of the reads would land on the wrong entry
+    //  with no width mismatch and nothing to say so. The shift is `>> SEL_W`
+    //  now, which is the same value today and the right one at any ratio.
+    //
+    //  Done through a 32-bit intermediate and then resized to exactly the port
+    //  width: a bare shift keeps the operand's own width, so the result would be
+    //  silently truncated or zero-extended at the assignment depending on which
+    //  side was wider.
     // both operands live at the same offset inside their own tensors
-    wire [AA_W-1:0] slice_off = pix_off + {{(AA_W-SLW+1){1'b0}}, sl[SLW-1:1]};
+    wire [31:0]     sl_wide   = {{(32-SLW){1'b0}}, sl} >> SEL_W;
+    wire [AA_W-1:0] sl_ent    = sl_wide[AA_W-1:0];
+    wire [AA_W-1:0] slice_off = pix_off + sl_ent;
 
     assign a_rd_en = run;
     assign a_addr  = (ph ? base_saved : base_in) + slice_off;
@@ -258,7 +273,7 @@ module res_feeder #(
     // {(PA_W-SLW+1){1'b0}} is a negative repetition when SLW > PA_W, and a bare
     // slice would be too narrow the other way. Both halves of that mistake read
     // as X at the parameter memory.
-    wire [31:0]     sl_half    = {{(32-SLW){1'b0}}, sav_sl} >> 1;
+    wire [31:0]     sl_half    = {{(32-SLW){1'b0}}, sav_sl} >> SEL_W;  // C-5
     wire [PA_W-1:0] param_addr = sl_half[PA_W-1:0];
 
     // The requantize stage itself is in accel_top; this drives it.
@@ -279,9 +294,19 @@ module res_feeder #(
             wire signed [DATA_W:0] s =
                  $signed(q_half[m*DATA_W +: DATA_W]) +
                  $signed(tgt2  [m*DATA_W +: DATA_W]);
+            //  L-15: the bounds are written as 8-bit signed CONSTANTS now.
+            //  The lower one used to be `-8'sd128`, which is correct only by
+            //  accident: 8'sd128 does not fit an 8-bit signed literal so it
+            //  wraps to -128, and the unary minus then overflows back to -128.
+            //  Two cancelling overflows that happen to land on the right value
+            //  is not something the next reader should have to re-derive.
+            //  The fall-through is $signed()-cast because a part-select is
+            //  UNSIGNED whatever its parent, and one unsigned arm makes the
+            //  whole conditional expression unsigned.
             assign sum16[m*DATA_W +: DATA_W] =
-                   (s >  127) ? 8'sd127 :
-                   (s < -128) ? -8'sd128 : s[DATA_W-1:0];
+                   (s >  127) ? 8'sh7F :              // +127
+                   (s < -128) ? 8'sh80                // -128
+                              : $signed(s[DATA_W-1:0]);
         end
     endgenerate
 

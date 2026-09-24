@@ -13,6 +13,28 @@ int32_t requant_mul_shift(int32_t acc, int32_t m0, int shift) {
      *     signed types; it matches numpy >>, Python >>, and Verilog >>>.
      *     Floor applied after the +half gives round-half-UP toward +inf,
      *     which is why negative ties go up (-2.5 -> -2, not -3).        */
+
+    /* (4) L-6 / DD-024: this cast NARROWS to 32 bits before any clamp, and the
+     *     RTL does not - requantize.v keeps the full ROUND_W = ACC_W + M0_W + 1
+     *     = 59-bit value and clamps THAT. The two therefore disagree for
+     *     |rounded >> shift| > 2^31, where this wraps and the RTL saturates.
+     *
+     *     That is a DELIBERATE, documented deviation, not an oversight, and it
+     *     is unreachable by a structural bound rather than by observation:
+     *     export.py emits a NORMALIZED multiplier, 2^30 <= m0 < 2^31, and the
+     *     same normalization forces shift >= 31 because every real scale
+     *     M = m0 * 2^-shift in this network is < 1. So
+     *
+     *         |r| = |acc * m0 >> shift| <= |acc| * (m0 / 2^shift) < |acc| <= 2^25
+     *
+     *     which is six bits clear of 2^31, whatever the input data. The bound
+     *     depends only on the manifest being normalized - not on a measurement,
+     *     which is the distinction DD-019 exists to record.
+     *
+     *     Do NOT "fix" this into agreement by widening the return type or by
+     *     narrowing the RTL. The RTL is the more correct of the two, nothing
+     *     reads a wider value here, and requantize.v carries a simulation check
+     *     that fires if the disagreement is ever actually reached. */
     return (int32_t)(rounded >> shift);
 }
 

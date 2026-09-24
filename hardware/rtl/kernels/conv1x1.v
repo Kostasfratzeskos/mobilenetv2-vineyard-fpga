@@ -22,6 +22,28 @@
 //    first  - this valid pair is the first of a new dot product (acc <- 0)
 //    last   - this valid pair is the final element -> `done` pulses next cycle
 //  When `done` is high, `acc` holds the completed dot product (same edge).
+//
+//  ---- L-11 / DD-026: THIS MODULE IS A VERIFIED REFERENCE MODEL ---------
+//
+//  It is NOT INSTANTIATED by any RTL. Nothing in accel_top reaches it, and no
+//  synthesis run includes it. It is kept deliberately, with its own passing
+//  testbench, because it is an INDEPENDENT implementation of arithmetic that the
+//  shipping design computes a different way - so the testbench is evidence that
+//  the arithmetic was validated separately from the implementation that replaced
+//  it, which matters for a thesis in a way it would not for a product.
+//
+//  What this module shadows: `mac_lane`, which superseded it. conv1x1 computes
+//  the same TN-term int8 dot product in one cycle with a blocking for-loop;
+//  mac_lane computes it with a registered product stage and a balanced
+//  clog2(TN)-level adder tree over six cycles (L-1, L-2, L-9), and pe_array adds
+//  an input register on top (A-1). Three phases of pipelining were checked
+//  against this module's testbench, which is the evidence DD-026 decided not to
+//  throw away.
+//
+//  If mac_lane's ARITHMETIC ever changes - as opposed to its timing - this file
+//  and conv1x1_tb are the second opinion that says so. Keep them in step.
+//
+//  DD-026 considered deleting this file and chose not to.
 //============================================================================
 // Force the multipliers into DSP48E2. Left on "auto", Vivado put almost all of
 // them in fabric: the first synthesis run of accel_top used 191,372 LUTs (83%

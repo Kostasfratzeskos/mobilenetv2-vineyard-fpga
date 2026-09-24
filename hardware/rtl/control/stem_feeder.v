@@ -192,11 +192,20 @@ module stem_feeder #(
         end else begin
             layer_done <= 1'b0;
             if (adv) begin
-                if (is_real) img_off <= img_off + 1'b1;
+                // C-12: ONE assignment to img_off per path. This used to be two
+                // - `if (is_real) img_off <= img_off + 1` here, and a reset to
+                // zero inside the `last_y` branch below - which both fire on the
+                // last real pixel of a layer and resolve by last-assignment-wins.
+                // The result was correct and the mechanism was invisible: nothing
+                // in the code said the ordering mattered, so any reordering of
+                // those two statements would have silently changed behaviour.
+                if (last_y)       img_off <= {IA_W{1'b0}};
+                else if (is_real) img_off <= img_off + 1'b1;
+
                 if (last_y) begin
                     run <= 1'b0;
                     layer_done <= 1'b1;
-                    cy <= {XW{1'b0}}; cx <= {XW{1'b0}}; img_off <= {IA_W{1'b0}};
+                    cy <= {XW{1'b0}}; cx <= {XW{1'b0}};
                 end else if (last_x) begin
                     cy <= cy + 1'b1;  cx <= {XW{1'b0}};
                 end else begin
@@ -369,6 +378,27 @@ module stem_feeder #(
     end
 
     wire entry_done = q_valid && (oct_wr == n_oct - 1'b1);
+
+`ifndef SYNTHESIS
+    //  C-12: `asm` is never cleared between entries - each quarter overwrites its
+    //  own TS bytes and the register is stored whole. That is safe if and only if
+    //  the quarters between them cover ALL of it, i.e. n_oct*TS == POOL_TM. Today
+    //  they do exactly (4*8 = 32), so no byte of a stored entry is ever left over
+    //  from the previous pixel.
+    //
+    //  n_oct is a RUNTIME input, so this cannot be an elaboration guard. If a
+    //  future layer shape ever makes n_oct*TS smaller than POOL_TM, the top
+    //  channels of every stem output would silently be the previous pixel's -
+    //  which looks like a plausible feature map, not like a bug. Checked once per
+    //  entry, where it is cheap and where the value being stored is the evidence.
+    always @(posedge clock) begin
+        if (rst_n && entry_done && ((n_oct * TS) != POOL_TM)) begin
+            $display("ERROR: %m C-12 n_oct*TS = %0d but POOL_TM = %0d at time %0t. `asm` is only ever partially written and is stored whole, so %0d bytes of this entry are left over from the previous pixel. Either clear asm on the first quarter or fix the shape.",
+                     n_oct * TS, POOL_TM, $time, POOL_TM - (n_oct * TS));
+            $finish;
+        end
+    end
+`endif
 
     reg            wr_go;
     reg [AA_W-1:0] out_cnt;

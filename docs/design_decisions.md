@@ -926,8 +926,10 @@ argmax over the 4 int16 logits is the predicted class.
   a placement problem as much as a logic one). See DD-023, whose condition this resolves.
 
 ### DD-023 - The `act_buffer` URAM cascade, which is the largest term and is not in the review
-- Status: **PROPOSED** - the condition below has now RESOLVED IN FAVOUR of doing it; awaiting
-  approval to implement
+- Status: **Deferred** - the condition resolved in favour of doing it, and the decision was
+  taken NOT to. 2026-09-24: clock work stops at 179.0 MHz and the review's remaining effort
+  goes to correctness. This entry stays because the analysis is the reason 250 MHz was not
+  reached, and whoever picks the clock back up should start here rather than re-deriving it.
 - Date: 2026-09-24
 - Context: not one of the 43 findings. It entered the project as a synthesis warning noted in
   docs/latency_map.md before Phase 2 started, on the grounds that it might have to change and
@@ -982,3 +984,162 @@ argmax over the 4 int16 logits is the predicted class.
   one, all derived from one parameter the way `OS_LAT` is; `line_buffer`'s and `wgt_buffer`'s
   alignment against the activation path must be re-checked, since only ONE of the two operands
   would get slower.
+
+
+### DD-024 - L-6: the C model narrows to int32 before clamping, the RTL does not
+- Status: **Accepted** - logged as a deliberate proven-unreachable deviation; neither side's
+  arithmetic changed. Comment added to the C, simulation check added to the RTL.
+- Date: 2026-09-24
+- Context: L-6 says `requantize.c` computes `(int32_t)(rounded >> shift)` and only then clamps,
+  while the RTL clamps the full ROUND_W-wide value; the two disagree for |r| > 2^31; the case
+  is unreachable and "the RTL is the more correct of the two", but the project methodology says
+  every deviation is critical, and "silently differing is the only unacceptable option".
+
+- Confirmed in the source. `software/cmodel/src/requantize.c`:
+
+      int32_t requant_mul_shift(int32_t acc, int32_t m0, int shift) {
+          ...
+          return (int32_t)(rounded >> shift);      /* <- narrows HERE */
+      }
+
+  and `requantize_elem` then calls `clamp_i8(r)` on the already-narrowed value. In the RTL,
+  `requantize.v` stage 3 keeps the full ROUND_W = ACC_W + M0_W + 1 = 59-bit value in `s3` and
+  stage 4 clamps THAT. So for any r outside int32, C wraps and the RTL saturates.
+
+- **Why it is unreachable, stated as a bound rather than an observation.** This matters because
+  DD-019 exists precisely because a measurement-based safety argument failed once. The bound
+  here is structural, not measured:
+    * `m0` is a NORMALIZED multiplier by construction - export.py emits 2^30 <= m0 < 2^31 - and
+      `shift >= 31` follows from the same normalization, because M = m0 * 2^-shift is the real
+      scale and every scale in this network is < 1.
+    * so |r| = |acc * m0 >> shift| <= |acc| * (m0 / 2^shift) < |acc| * 1 <= 2^25.
+  2^25 against 2^31 is six bits of headroom, and it does not depend on the data - only on the
+  manifest being normalized. A corrupt manifest could break it, which is what the L-4/L-5 shift
+  guards already watch for from the other direction.
+
+- **Recommendation: log it as a deliberate, proven-unreachable deviation. Do not change either
+  side.** Narrowing the RTL to 32 bits to match the C would be adding a truncation to the more
+  correct implementation in order to reproduce a C artefact - and it would cost an extra guard
+  on a path that Phase 2d just finished making the critical one. Widening the C to 64 bits would
+  be harmless but pointless: nothing reads the wider value.
+
+  What the deviation needs is to stop being silent, and there are two cheap ways to do that,
+  both proposed:
+    1. A comment in `requantize.c` at the narrowing, naming the bound above and pointing at this
+       DD, so the next reader does not "fix" it into agreement by mistake.
+    2. A `` `ifndef SYNTHESIS `` check in `requantize.v` that fires if `s3` ever leaves int32
+       range. That is the assertion that turns "proven unreachable" into "checked on every
+       vector we run", which is the only form of unreachability worth trusting. It costs nothing
+       in synthesis and it would have caught the 2026-07 retrain class of problem.
+
+- Consequences if accepted: one comment in `software/cmodel/src/requantize.c` (a comment only -
+  no behaviour change, so this does not touch the chain of trust); one simulation check in
+  `hardware/rtl/kernels/requantize.v`; an entry in the deviations list. L-6 closes as
+  "deliberate, documented, checked" rather than "fixed".
+
+### DD-025 - L-13: the residual add - three implementations, and the C is the wrong one
+- Status: **Accepted** - the C model is corrected to clamp, matching Python and the RTL.
+  Approved 2026-09-24, including the C-model edit.
+- Date: 2026-09-24
+- Context: L-13 says the C narrows the int8+int8 residual sum to `int8_t` (wrapping) while the
+  RTL and `res_feeder` clamp; that `residual_add`'s header defends this with "on real data the
+  sum fits int8", which is a MEASUREMENT - "the exact reasoning that already failed once for
+  ACC_W"; and gives the example 100 + 100, where C gives -56 and the RTL gives 127.
+
+- **Three implementations, and they do not agree two-to-one the way the review assumes - they
+  agree two-to-one AGAINST the C.** Checked all three:
+
+  | | what it does | 100 + 100 |
+  |:--|:--|--:|
+  | Python, `export.py:303` | `q = clamp_i8(q.astype(np.int64) + res)` | **127** |
+  | RTL, `res_feeder.v` + `residual_add.v` | clamps to [-128, 127] | **127** |
+  | C, `mobilenet.c:135` | `out->data[idx] = requantize_elem(...) + target->data[idx];` assigned to `int8_t` | **-56** |
+
+  `clamp_i8` in Python is `np.clip(a, QMIN, QMAX)`. So Python - which is the head of this
+  project's chain of trust, the thing the quantization was designed in and the thing export.py
+  validates the manifest against - clamps. The RTL agrees with Python. The C is the only one
+  that wraps, and it wraps by C's implicit-narrowing rules rather than by a decision anyone
+  wrote down.
+
+  That reframes the finding. This is not "pick the authoritative semantics"; the authoritative
+  semantics were already picked, in Python, and the C model departed from them silently.
+
+- **Why it has never shown up.** The golden vectors are generated from the C, and `accel_tb`
+  compares the RTL against those vectors and passes at 6,895,780 elements - so on THIS
+  checkpoint no residual sum leaves int8 range, in any of the four residual layers, for the test
+  image. That is exactly the "on real data it fits" argument, and DD-019 is the record of that
+  argument failing: the 2026-07 retrain gave one channel a bias of 1,184,089 and 2.2M elements
+  went wrong in silence. A retrain that pushes one residual sum to 130 would make the C and the
+  RTL disagree, and the first symptom would be a golden-vector failure in a layer nobody
+  touched.
+
+- **Recommendation: correct the C to clamp, and add the RTL check the finding asks for.**
+    1. `software/cmodel/src/mobilenet.c` `residual_add`: clamp the sum with the existing
+       `clamp_i8` before storing, so C matches Python and the RTL.
+    2. Regenerate the golden vectors. **This is the part that needs care**, and it is why this DD
+       exists rather than just a patch: the vectors are the chain of trust, and the rule for this
+       whole review has been that they are never edited to make a test pass. Regenerating them
+       after a deliberate, approved C fix is a different act from editing them - but it must be
+       done as its own commit, with the diff inspected and reported. My expectation is that the
+       regenerated vectors are BYTE-IDENTICAL, because the clamp changes nothing that this
+       checkpoint reaches; if they are not identical, that is a finding in itself and I stop and
+       report rather than proceeding.
+    3. Add the `` `ifndef SYNTHESIS `` check in `res_feeder` that L-13 asks for: report when the
+       pre-clamp sum leaves [-128, 127]. Then a future retrain that reaches the disagreement is
+       reported by name instead of silently diverging.
+    4. Rewrite `residual_add.v`'s header, which currently defends the wrap with the measurement
+       argument.
+
+- **What I will NOT do without being told to.** Change the RTL to wrap. It would match the C and
+  contradict Python, and it would mean a real activation of 130 becoming -126 in hardware - a
+  sign flip in a residual path, which is the worst place in the network for one.
+
+- Consequences if accepted: an edit to `software/cmodel/src/mobilenet.c`; a regeneration of the
+  golden vectors with the diff reported (expected empty); a simulation check in `res_feeder.v`;
+  a header rewrite in `residual_add.v`. If L-11 is also approved, `residual_add.v` is deleted
+  instead and only `res_feeder` gets the check.
+
+### DD-026 - L-11 / L-14: two dead modules, and whether to delete them
+- Status: **Accepted** - KEEP both, marked as verified reference models; L-14 fixed in place.
+  Nothing deleted.
+- Date: 2026-09-24
+- Context: L-11 says `conv1x1.v` and `residual_add.v` are both dead - no RTL instantiation -
+  with `residual_add` deliberately so (documented at `res_feeder.v:18`) and `conv1x1` superseded
+  by `mac_lane`; both are still referenced by testbenches and headers, "so they read as live".
+  L-14 says `residual_add` contains a SECOND independent copy of L-4's `shift - 1'b1` underflow,
+  with no live impact because the code is dead, but "the same defect now exists in two files and
+  only one is on a fix list".
+
+- The state of play, verified: neither module is instantiated by any RTL. Both have their own
+  passing testbenches (`conv1x1_tb`, `residual_add_tb`), and both are named in the `Run:` lines
+  of other testbenches' headers, which is why they still look alive.
+
+- **The two options, and why this is a judgement call rather than a defect.**
+
+  **Delete both.** Removes L-14 for free - the duplicate shift underflow goes away with the file
+  rather than having to be fixed twice and kept in sync. Removes two testbenches from the suite
+  (31 -> 29). The cost is that `conv1x1` is the only remaining *independent* implementation of
+  the dot product that `mac_lane` computes; `conv1x1_tb` is a second opinion about the same
+  arithmetic, and Phase 2a's pipelining was checked against it.
+
+  **Keep both, marked.** A header line on each saying REFERENCE MODEL - NOT INSTANTIATED, and
+  L-14 fixed in `residual_add` the same way L-4 was fixed in `requantize`. Keeps the second
+  opinion. The cost is carrying two files that must not drift from the modules they shadow, and
+  the review's own point stands: they currently read as live.
+
+- **Recommendation: keep both, marked as reference models, and fix L-14.** The deciding argument
+  is that this is a thesis: `conv1x1_tb` and `residual_add_tb` are evidence that the arithmetic
+  was validated independently of the pipelined implementations that replaced them, and deleting
+  the modules deletes that evidence from the repository even though it stays in the git history.
+  L-14 costs one line to fix and the same guard already exists in `requantize`, so keeping the
+  file is cheap.
+
+  I would rather be told to delete them than delete them and be wrong, because the deletion is
+  the irreversible direction and the marking is not.
+
+- Consequences if "keep" is accepted: a header block on `conv1x1.v` and `residual_add.v` stating
+  they are verified reference models with no RTL instantiation, and naming what each one shadows;
+  L-14's `shift - 1'b1` guard added to `residual_add.v` matching `requantize.v`'s; the suite
+  stays at 31. If "delete" is chosen instead: both `.v` files and both `_tb.sv` files go, the
+  `Run:` lines that name them are corrected, L-14 closes as "removed with the file", and
+  DD-025's `residual_add.v` header rewrite becomes unnecessary.
