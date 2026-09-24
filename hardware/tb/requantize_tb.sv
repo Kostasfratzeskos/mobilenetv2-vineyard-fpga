@@ -36,6 +36,12 @@ module requantize_tb;
     logic        [5:0]         shift;        // SHIFT_W = 6
     logic signed [7:0]         relu6_qmax;
     logic signed [7:0]         quantized;
+    logic                      q_valid;
+
+    // L-3: four register stages - in_data (absorbing bias_add), product,
+    // round+shift, clamp. Derived here so a change to the DUT shows up as a
+    // latency mismatch rather than as a wrong value.
+    localparam RQ_LAT = 4;
 
     integer total = 0;
     integer fails = 0;
@@ -54,7 +60,8 @@ module requantize_tb;
         .M0         (M0),
         .shift      (shift),
         .relu6_qmax (relu6_qmax),
-        .quantized  (quantized)
+        .quantized  (quantized),
+        .q_valid    (q_valid)
     );
 
     // ---- a second DUT for the L-4 / L-5 guards -------------------------
@@ -75,7 +82,7 @@ module requantize_tb;
                  .CHECKS_ARE_FATAL(0)) g_dut (
         .clock(clock), .rst_n(rst_n), .en(1'b1), .act(ACT_NONE),
         .in_data(g_acc), .M0(g_m0), .shift(g_shift), .relu6_qmax(8'sd0),
-        .quantized(g_q)
+        .quantized(g_q), .q_valid()
     );
 
     // ---- clock: 10 ns period ------------------------------------------
@@ -92,6 +99,7 @@ module requantize_tb;
         input logic signed [7:0]  t_expect,
         input string              tag
     );
+        integer lat;
         @(negedge clock);
         in_data    = t_acc;
         M0         = t_m0;
@@ -99,9 +107,26 @@ module requantize_tb;
         act        = t_act;
         relu6_qmax = t_q6;
         en         = 1'b1;
-        @(posedge clock);          // result register loads here
-        @(negedge clock);          // let the registered value settle
+        @(posedge clock);          // stage 1 captures in_data and the params
+        @(negedge clock);
         en = 1'b0;
+
+        // L-3: the answer is RQ_LAT stages away now, and `q_valid` marks it.
+        // Counted rather than assumed - docs/latency_map.md's convention, where
+        // a single registered output is 1.
+        lat = 1;
+        while (q_valid !== 1'b1 && lat < 32) begin
+            @(posedge clock); @(negedge clock);
+            lat++;
+        end
+        if (q_valid !== 1'b1) begin
+            fails++;
+            $display("  [ERR] %-22s q_valid never came back", tag);
+        end else if (lat !== RQ_LAT) begin
+            fails++;
+            $display("  [ERR] %-22s q_valid came %0d cycles after en, RQ_LAT says %0d",
+                     tag, lat, RQ_LAT);
+        end
 
         total++;
         if (quantized === t_expect)
@@ -124,7 +149,9 @@ module requantize_tb;
         begin
             @(negedge clock);
             g_acc = acc_in; g_m0 = m0_in; g_shift = sh_in;
-            @(posedge clock);
+            // the guard DUT has en tied high, so the pipeline free-runs: hold
+            // the inputs for RQ_LAT edges and the answer emerges.
+            repeat (RQ_LAT) @(posedge clock);
             @(negedge clock);
             total++;
             if (g_q === expect_q)

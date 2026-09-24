@@ -23,6 +23,11 @@
 //============================================================================
 module dwconv_layer_tb;
 
+    // L-3: requantize is four register stages - in_data (absorbing bias_add),
+    // product, round+shift, clamp. These testbenches drive one element at a
+    // time, so a fixed wait is enough; the integration testbenches use q_valid.
+    localparam RQ_LAT = 4;
+
     // ---- layer geometry ----------------------------------------------------
     localparam C  = 32;
     localparam H  = 112;
@@ -123,6 +128,10 @@ module dwconv_layer_tb;
             @(posedge clock);
             @(negedge clock);
             rq_en  = 1'b0;
+            // L-3: requantize is RQ_LAT stages deep now, so the answer is not
+            // ready the cycle after `en`. Wait for it.
+            repeat (RQ_LAT - 1) @(posedge clock);
+            @(negedge clock);
             got    = q_w;
         end
     endtask

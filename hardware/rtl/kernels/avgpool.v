@@ -44,10 +44,35 @@ module avgpool #(
         else if (valid) acc <= base + a;
     end
 
+    // ---- done, with the armed bit (L-10) -------------------------------
+    //  `done <= valid & last` was unconditional, so a `last` with no preceding
+    //  `first` announced a stale partial sum as a finished channel. The same
+    //  defect mac_lane had, and the same fix: a sticky bit recording that a
+    //  `first` was actually seen. `armed | first` rather than `armed`, because a
+    //  one-sample channel has first and last in the same cycle.
+    reg armed;
+
     always @(posedge clock) begin
-        if (!rst_n) done <= 1'b0;
-        else        done <= valid & last;
+        if (!rst_n) begin
+            armed <= 1'b0;
+            done  <= 1'b0;
+        end else begin
+            done <= valid & last & (armed | first);
+
+            if      (valid & first) armed <= 1'b1;
+            else if (valid & last)  armed <= 1'b0;
+        end
     end
+
+`ifndef SYNTHESIS
+    always @(posedge clock) begin
+        if (rst_n && valid && last && !armed && !first) begin
+            $display("ERROR: %m L-10 `last` with no preceding `first` at time %0t: the accumulator holds a stale partial sum and `done` is being suppressed.",
+                     $time);
+            $finish;
+        end
+    end
+`endif
 
 endmodule
 

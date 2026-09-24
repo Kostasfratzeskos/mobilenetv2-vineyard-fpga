@@ -114,6 +114,8 @@ module logit_out #(
     end
 
     // ---- bias + requantize to int16, one chain per class ----------------
+    wire [NLOG-1:0] cls_valid;
+
     genvar c;
     generate
         for (c = 0; c < NLOG; c = c + 1) begin : cls
@@ -124,6 +126,8 @@ module logit_out #(
                 .bias    (p_bias[c]),
                 .acc_out (biased)
             );
+
+            wire cls_qv;
 
             requantize #(
                 .ACC_W(ACC_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W), .OUT_W(LOG_W)
@@ -136,18 +140,46 @@ module logit_out #(
                 .M0         (p_m0[c]),
                 .shift      (p_shift[c]),
                 .relu6_qmax (8'sd0),
-                .quantized  (logits[c*LOG_W +: LOG_W])
+                .quantized  (logits[c*LOG_W +: LOG_W]),
+                .q_valid    (cls_qv)
             );
+
+            assign cls_valid[c] = cls_qv;
         end
     endgenerate
 
-    reg lv;
+    // ---- `lv` is requantize's own q_valid now (L-3) ----------------------
+    //  It used to be a single register mirroring requantize's single register.
+    //  L-3 made requantize four stages deep, so a one-cycle `lv` would have
+    //  marked the logits valid three cycles before they existed - and T-8 is
+    //  why that matters here specifically: this is a SECOND copy of the
+    //  requantize datapath that no shared testbench covers, and after Phase 2c
+    //  it is on the design's critical path. Taking the valid from the module
+    //  itself means the copy cannot drift from the original.
+    //
+    //  `start` still forces it low, so a new op cannot inherit the previous
+    //  answer while the pipeline refills.
+    reg lv_gate;
     always @(posedge clock) begin
-        if (!rst_n)     lv <= 1'b0;
-        else if (start) lv <= 1'b0;
-        else            lv <= acc_valid;
+        if (!rst_n)     lv_gate <= 1'b0;
+        else if (start) lv_gate <= 1'b0;
+        else            lv_gate <= 1'b1;
     end
+
+    wire lv = cls_valid[0] & lv_gate;
     assign logits_valid = lv;
+
+`ifndef SYNTHESIS
+    //  Lockstep, checked - the four classes see the same acc_valid and none
+    //  looks at its own data. Also gives the other NLOG-1 bits a reader.
+    always @(posedge clock) begin
+        if (rst_n && (cls_valid != {NLOG{cls_valid[0]}})) begin
+            $display("ERROR: %m L-3 the classifier lanes are NOT in lockstep at time %0t: cls_valid = %b.",
+                     $time, cls_valid);
+            $finish;
+        end
+    end
+`endif
 
     // ---- argmax over the shared logit scale (DD-011) --------------------
     // A plain signed comparison is enough because every class shares S_logit.

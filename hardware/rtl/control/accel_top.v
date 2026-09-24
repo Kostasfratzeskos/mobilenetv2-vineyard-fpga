@@ -114,17 +114,31 @@ module accel_top #(
     parameter PGA_W   = 9,
     parameter PROG_DEPTH = 512,
     parameter NI_W    = 8,
-    parameter GAP_CYC = 4,
-    parameter WDOG_W  = 20,     // top_seq's hang watchdog; see its header
-
+    // NOTE on the ORDER of the next two blocks: OS_LAT has to be declared
+    // before GAP_CYC, because GAP_CYC is derived from it and Verilog-2001
+    // resolves a parameter list strictly top to bottom. Putting the derived
+    // one first is a compile error, not a warning.
     // Latency of the ONE shared requantize stage: acc_valid to q_valid. Stage A
     // registers the accumulators while the parameter memory answers (1), then
     // rq_bank's requantize registers the result (1). Every feeder's drain
     // counter is sized from this, and out_stage is instantiated HERE rather
     // than inside the feeders, so it has to be passed down. Changing
     // out_stage's depth without changing this is the bookkeeping failure
-    // docs/latency_map.md exists to prevent.
-    parameter OS_LAT  = 2,
+    // docs/latency_map.md exists to prevent. It is 1 (out_stage's accumulator
+    // capture) + requantize's RQ_LAT, which L-3 made 4 - so 5, from 2.
+    parameter OS_LAT  = 5,
+
+    // T-10 asked for GAP_CYC to be DERIVED rather than asserted, and the honest
+    // derivation is that it is now REDUNDANT. Every feeder's `busy` covers its
+    // own drain, and since Phase 2 every one of those drains is computed from
+    // MAC_LAT / DW_LAT / ST_LAT and OS_LAT rather than guessed - so the
+    // sequencer could start the next op the cycle busy falls. It is kept as a
+    // second line of defence, at one requantize pipeline's worth of cycles, and
+    // it MOVES with OS_LAT instead of sitting at 4 while everything around it
+    // changed. Cost: 64 ops x OS_LAT cycles over the whole network, which is
+    // nothing next to reloading the weight buffer between layers.
+    parameter GAP_CYC = OS_LAT,
+    parameter WDOG_W  = 20,     // top_seq's hang watchdog; see its header
 
     // ---- classifier ------------------------------------------------------
     parameter NLOG    = 4,
@@ -369,7 +383,8 @@ module accel_top #(
     out_stage #(
         .TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
         .SHIFT_W(SHIFT_W), .DATA_W(DATA_W),
-        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W)
+        .PDEPTH(PDEPTH), .PA_W(PA_W), .BANK_W(BANK_W),
+        .OS_LAT(OS_LAT)
     ) u_os (
         .clock(clock), .rst_n(rst_n_i),
         .flush(op_start),
@@ -549,7 +564,8 @@ module accel_top #(
         .DATA_W(DATA_W), .POOL_TM(TM), .TN(TN), .ACC_W(ACC_W),
         .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W), .SEL_W(SEL_W),
         .PA_W(PA_W), .BANK_W(BANK_W), .PDEPTH(PDEPTH), .AA_W(AA_W),
-        .PIX_W(PIX_W), .SLW(SLW)
+        .PIX_W(PIX_W), .SLW(SLW),
+        .OS_LAT(OS_LAT)
     ) u_res (
         .clock(clock), .rst_n(rst_n_i),
         .start(rs_start), .n_pix(op_n_pix), .n_sl(op_n_ic), .n_ent(n_ent_w),
@@ -576,7 +592,8 @@ module accel_top #(
         .DATA_W(DATA_W), .POOL_TM(TM), .TN(TN), .ACC_W(ACC_W),
         .BIAS_W(BIAS_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W), .SEL_W(SEL_W),
         .PA_W(PA_W), .BANK_W(BANK_W), .PDEPTH(PDEPTH), .AA_W(AA_W),
-        .PIX_W(PIX_W), .SLW(SLW)
+        .PIX_W(PIX_W), .SLW(SLW),
+        .OS_LAT(OS_LAT)
     ) u_gap (
         .clock(clock), .rst_n(rst_n_i),
         .start(gp_start), .n_pix(op_n_pix), .n_sl(op_n_ic), .n_ent(n_ent_w),

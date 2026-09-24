@@ -95,7 +95,13 @@ module dw_feeder #(
     // Latency of the shared out_stage, which lives in accel_top: acc_valid to
     // q_valid. A PARAMETER because this module's writeback tag and drain are
     // both sized from it and out_stage is not instantiated here.
-    parameter OS_LAT  = 2
+    // Default is the REAL value, not a placeholder. It was 2 while requantize
+    // was one register; L-3 made it 5, and the standalone testbenches
+    // instantiate this module directly and take the default - so a stale
+    // default is not a cosmetic issue, it silently desynchronises this feeder
+    // from the out_stage sitting next to it. dw_datapath_tb caught exactly that
+    // via the C-2 witness: a 3-cycle gap showed up as a 3-pixel shift.
+    parameter OS_LAT  = 5
 )(
     input  wire                      clock,
     input  wire                      rst_n,

@@ -28,6 +28,10 @@
 module rq_bank_tb;
 
     localparam TM      = 32;
+
+    // L-3: requantize is four register stages - in_data (absorbing bias_add),
+    // product, round+shift, clamp.
+    localparam RQ_LAT = 4;
     localparam ACC_W   = 26;        // the real datapath width
     localparam BIAS_W  = 32;
     localparam M0_W    = 32;
@@ -129,6 +133,7 @@ module rq_bank_tb;
     // drive the 32-wide bank once, then replay every lane through the
     // single chain, and score both against the reference
     task automatic run_case(input string tag);
+        integer lat;
         integer m, bad_ref, bad_ora;
         logic signed [7:0] got, expd;
         begin
@@ -141,9 +146,22 @@ module rq_bank_tb;
             @(negedge clock);
             en = 1'b0;
 
+            // L-3: requantize is RQ_LAT stages deep now, and rq_bank's q_valid
+            // comes from the lanes themselves rather than a local register.
+            // Counted rather than assumed, in docs/latency_map.md's convention
+            // where a single registered output is 1.
+            lat = 1;
+            while (q_valid !== 1'b1 && lat < 32) begin
+                @(posedge clock); @(negedge clock);
+                lat++;
+            end
             if (q_valid !== 1'b1) begin
                 fails++;
                 $display("  [ERR] %-18s q_valid not asserted", tag);
+            end else if (lat !== RQ_LAT) begin
+                fails++;
+                $display("  [ERR] %-18s q_valid came %0d cycles after en, RQ_LAT says %0d",
+                         tag, lat, RQ_LAT);
             end
 
             // oracle 1 - every lane against the independent reference
@@ -169,6 +187,10 @@ module rq_bank_tb;
                 @(posedge clock);
                 @(negedge clock);
                 s_en = 1'b0;
+                // the single chain is the same pipelined requantize, so it owes
+                // RQ_LAT cycles too
+                repeat (RQ_LAT - 1) @(posedge clock);
+                @(negedge clock);
                 if (s_q !== q_bus[m*DATA_W +: DATA_W]) begin
                     bad_ora++;
                     if (bad_ora <= 4)

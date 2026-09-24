@@ -1110,3 +1110,81 @@ wrote quant_scales.json  (53 layers)
   q_valid depth, every feeder's tag depths and drains, GAP_CYC derived, logit_out's lv, and
   L-10 in avgpool. The last latency sub-step, and the one aimed at the module that is now the
   bottleneck.
+
+### 2026-09-24 (later still) - Phase 2d: requantize pipelined, 149.2 -> 163.2 MHz, and the path leaves the datapath entirely
+- Did: L-3 and L-7 in `requantize`, L-12 absorbed, `rq_bank`'s and `logit_out`'s `q_valid`
+  sourcing, every feeder's tag depth and drain re-derived at OS_LAT 2 -> 5, GAP_CYC derived
+  (T-10), and L-10 in `avgpool`. The last latency sub-step.
+- `requantize` is four stages now, RQ_LAT = 4: `in_data` (which IS `bias_add`'s output - that
+  is what L-12 "absorbed" means), the M0 product, round+shift, clamp. It grew a `q_valid`
+  output port driven by an `en_sr` of depth RQ_LAT, and `rq_bank` and `logit_out` both take
+  their valid FROM it instead of keeping a local register. That is the part worth keeping: a
+  second opinion about a module's own depth is exactly what went wrong everywhere else in
+  this review.
+- L-7 was real and would have bitten silently: `act` and `relu6_qmax` are consumed at stage 4
+  and were arriving combinationally. They now ride `act_d1..d3` / `qmax_d1..d3`, and `M0` and
+  `shift` ride to the stages that use them (`m0_d1`, `sh_d1`/`sh_d2`).
+- Tests: all 31 pass. `accel_tb` bit-exact at 6,895,780 elements over 64 ops, `dw_datapath`
+  and `stem_datapath` at 405,568 each, `pw_datapath` 200,704, `res_datapath` 76,512.
+- Post-route at 4.000 ns:
+
+      baseline    -18.821    43.8 MHz   34,834 LUT   944 DSP   DPIR-2 10,940
+      Phase 1     -18.463    44.5 MHz   34,957 LUT   944 DSP   DPIR-2 10,940
+      DD-020      -18.282    44.8 MHz   32,919 LUT   976 DSP   DPIR-2 0
+      2a          -16.411    49.0 MHz   29,935 LUT   944 DSP
+      2b          -16.569    49.3 MHz   31,348 LUT   944 DSP
+      2c           -2.701   149.2 MHz   41,264 LUT   944 DSP   DPIR-2 0
+      2d           -2.126   163.2 MHz   34,062 LUT   944 DSP   DPIR-2 0
+
+  3.7x the baseline Fmax. 18,243 flip-flops (from 13,992), 178 BRAM, 52 URAM, DSP still 944
+  through every phase.
+- **The critical path has left the datapath.** All 25 of the worst post-route paths are the
+  SAME path, and synthesis agrees with route on it:
+
+      u_act/mem_reg_1_uram_13/CLK  ->  u_pwf/u_array/lane[10].u_lane/prod_reg[12]/DSP_OUTPUT_INST/ALU_OUT[10]
+      6.066 ns data path (logic 4.179, route 1.887), 13 logic levels
+
+  That is `act_buffer`'s URAM read feeding the MAC's product register. Not requantize, not
+  out_stage, not logit_out - **none of those appears in the worst-path list at all** now,
+  where in 2c both the synthesis and the post-route worst path ended in a `quantized_reg`. L-3
+  did what it was supposed to do, and T-8's urgency drops with it: `logit_out`'s duplicate
+  copy is off the critical path.
+- And the new bottleneck is the item docs/latency_map.md flagged as "not on any list in the
+  review": `WARNING: [Synth 8-6057] Memory: "mem_reg" ... implemented as Ultra-Ram has no
+  pipeline registers`. Still there, twice. A 52-URAM array read in one cycle at 4.000 ns is
+  the path, exactly as predicted. Fixing it is a **latency change** - read latency 1 -> 2 moves
+  every feeder's stage-1 delay and every tag pipeline behind it - so it belongs in a phase of
+  its own, not bolted onto a later one.
+- On the LUT count, because the -7,202 looks like a Phase 2d win and mostly is not. Read by
+  hierarchy, two things happened:
+  - `u_param` 13,035 -> 2,852 LUTs and `u_rq` 1,001 -> 11,488. That is the same logic moving
+    back where it belongs: in 2c, with requantize one giant combinational cone, Vivado had
+    pulled it across the hierarchy boundary into `param_buffer`. Real registers keep it home.
+    Net `u_os` is FLAT: 14,036 -> 14,340 LUTs, +3,871 FFs. L-3 bought its depth with
+    flip-flops and almost no LUTs.
+  - The actual saving is `u_stem`, 11,982 -> 4,922, which Phase 2d did not touch. Each of the
+    8 `conv3x3_std` lanes went ~1,200 -> ~350 LUTs with its FF count identical at 270. That is
+    2c's implementation having replicated logic to chase a path that has now moved elsewhere,
+    not a structural improvement. Worth recording as a side effect, not a result.
+- Two mistakes of my own, both the shape this phase was warned about:
+  - Every feeder's `OS_LAT` default was still 2 while `out_stage`'s was 5, so standalone
+    testbenches took the defaults and ran a 3-cycle-shallower pipeline than `accel_top`
+    builds. It surfaced as a 3-pixel C-2 witness error in `dw_datapath_tb` - the witness
+    earning its keep exactly as Phase 1 intended. Every default is the true value now.
+  - `accel_top` had `parameter GAP_CYC = OS_LAT` ABOVE `parameter OS_LAT = 5`. Verilog-2001
+    resolves a parameter list strictly top to bottom, so deriving upward is a compile error.
+    Noted in the file, since the natural place to add a derived parameter is next to what
+    reads it.
+- Also cleaned up while in here: `res_feeder` and `gap_feeder` had `DRAIN_W = 4` hand-written.
+  Both derive it from `clog2(DRAIN_CYC + 1)` now, so no drain constant in the design is a
+  guess any more. The five were `7, 7, 15, 6, 7` with unexplained slack at Phase 0; they are
+  `11, 11, 12, 5, 6`, each derived from the stages it covers.
+- One process note, because it cost a run: I stopped a suite run and restarted it, and the
+  stopped run's Vivado was still alive with the log file open. Both processes wrote to the
+  same path at their own offsets and the log ended with TWO summaries, one saying 31/31 and
+  one saying 30/31. Neither number meant anything. Killed the orphan, reran to a fresh file,
+  got a single 31/31. A test result from a log with two summaries in it is not a test result.
+- Blocked on: nothing.
+- Next: Phase 3 - A-1/A-3 registered broadcast, which needs a DD proposal and approval first.
+  L-8 is already settled by DD-021. Worth saying plainly that Phase 3 is no longer a timing
+  fix: the broadcast is not on the critical path, the URAM read is.

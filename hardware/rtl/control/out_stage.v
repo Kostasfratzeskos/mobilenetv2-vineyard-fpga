@@ -53,7 +53,15 @@ module out_stage #(
     parameter DATA_W  = 8,
     parameter PDEPTH  = 64,
     parameter PA_W    = 6,
-    parameter BANK_W  = 5
+    parameter BANK_W  = 5,
+
+    // The latency this stage actually has: acc_valid to q_valid. It is
+    // 1 (the accumulator capture below) + requantize's RQ_LAT, which is 4
+    // since L-3, so 5. Every feeder's drain and tag depth is sized from the
+    // SAME parameter, passed down from accel_top - so this is not a second
+    // opinion, it is the one value, and the check at the bottom of this file
+    // measures the real hardware against it.
+    parameter OS_LAT  = 5
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -130,6 +138,45 @@ module out_stage #(
         .q          (q),
         .q_valid    (q_valid)
     );
+
+`ifndef SYNTHESIS
+    // ---- OS_LAT is the number every feeder is sized from: MEASURE it ------
+    //  accel_top passes one OS_LAT to this module and to all five feeders, so
+    //  there is a single source of truth - but nothing makes that value agree
+    //  with the hardware it describes. Time the real distance from acc_valid to
+    //  q_valid. If L-3 ever gains or loses a stage and this parameter does not
+    //  follow, five drain counters and four tag pipelines are wrong at once and
+    //  the symptom is a shifted output tensor full of plausible numbers.
+    //  One measurement per flush, then stop.
+    reg [7:0] lat_cnt;
+    reg       lat_arm, lat_seen;
+    always @(posedge clock) begin
+        if (!rst_n || flush) begin
+            lat_arm  <= 1'b0;
+            lat_seen <= 1'b0;
+            lat_cnt  <= 8'd0;
+        end else if (!lat_seen) begin
+            if (!lat_arm) begin
+                if (acc_valid) begin
+                    lat_arm <= 1'b1;
+                    lat_cnt <= 8'd1;
+                end
+            end else if (q_valid) begin
+                lat_seen <= 1'b1;
+            end else begin
+                lat_cnt <= lat_cnt + 8'd1;
+            end
+        end
+    end
+
+    always @(posedge clock) begin
+        if (rst_n && lat_arm && !lat_seen && q_valid && (lat_cnt != OS_LAT[7:0])) begin
+            $display("ERROR: %m L-3 out_stage answered %0d cycles after acc_valid, but OS_LAT says %0d at time %0t. Every feeder's drain and tag depth is sized from OS_LAT, so they are all wrong now.",
+                     lat_cnt, OS_LAT, $time);
+            $finish;
+        end
+    end
+`endif
 
 endmodule
 

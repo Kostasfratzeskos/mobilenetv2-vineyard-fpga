@@ -67,7 +67,12 @@ module res_feeder #(
     parameter PDEPTH  = 64,
     parameter AA_W    = 16,
     parameter PIX_W   = 16,
-    parameter SLW     = 8       // slice counter width
+    parameter SLW     = 8,      // slice counter width
+
+    // Latency of the shared out_stage: acc_valid to q_valid. A PARAMETER
+    // because the target delay line and the drain are both sized from it and
+    // out_stage is not instantiated here. L-3 took it from 2 to 5.
+    parameter OS_LAT  = 5
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -108,6 +113,17 @@ module res_feeder #(
     output wire                      busy,
     output reg                       layer_done
 );
+
+    //  Used to size the drain counter from the drain length rather than from a
+    //  guess. Same function as in the other three feeders.
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
 
 
     // ================= the walk: pixel-major, slice-minor ================
@@ -164,28 +180,45 @@ module res_feeder #(
 
     // ================= the target delay line ============================
     // Pushed on the phase where the target word is on the bus, shifted every
-    // cycle, so its third stage lines up with that slice's q_valid.
-    reg [TN*DATA_W-1:0] tgt0, tgt1, tgt2;
-    reg [AA_W-1:0]      wa0, wa1, wa2;
-    reg [SEL_W-1:0]     ws0, ws1, ws2;
+    // cycle, so its LAST stage lines up with that slice's q_valid.
+    //  It was three named registers (tgt0/1/2) because the distance was 1 - the
+    //  push leads sav_valid by a cycle - plus OS_LAT, and OS_LAT was 2. L-3 made
+    //  OS_LAT 5, so this is a shift register of a DERIVED depth now. Three names
+    //  would have had to become six, which is exactly the kind of edit that gets
+    //  done wrong once and is then invisible.
+    localparam TGT_LAT = 1 + OS_LAT;            // 6
 
+    reg [TN*DATA_W-1:0] tgt_sr [0:TGT_LAT-1];
+    reg [AA_W-1:0]      wa_sr  [0:TGT_LAT-1];
+    reg [SEL_W-1:0]     ws_sr  [0:TGT_LAT-1];
+
+    integer ts;
     always @(posedge clock) begin
         if (!rst_n) begin
-            tgt0 <= {TN*DATA_W{1'b0}}; tgt1 <= {TN*DATA_W{1'b0}}; tgt2 <= {TN*DATA_W{1'b0}};
-            wa0  <= {AA_W{1'b0}};  wa1 <= {AA_W{1'b0}};  wa2 <= {AA_W{1'b0}};
-            ws0  <= {SEL_W{1'b0}}; ws1 <= {SEL_W{1'b0}}; ws2 <= {SEL_W{1'b0}};
+            for (ts = 0; ts < TGT_LAT; ts = ts + 1) begin
+                tgt_sr[ts] <= {TN*DATA_W{1'b0}};
+                wa_sr [ts] <= {AA_W{1'b0}};
+                ws_sr [ts] <= {SEL_W{1'b0}};
+            end
         end else begin
             if (slice_hi) begin
                 // the target word issued last cycle is on the bus now, and the
                 // counters still hold this slice's indices
-                tgt0 <= a_word;
-                wa0  <= base_out + slice_off;
-                ws0  <= sl[SEL_W-1:0];
+                tgt_sr[0] <= a_word;
+                wa_sr [0] <= base_out + slice_off;
+                ws_sr [0] <= sl[SEL_W-1:0];
             end
-            tgt1 <= tgt0;  wa1 <= wa0;  ws1 <= ws0;
-            tgt2 <= tgt1;  wa2 <= wa1;  ws2 <= ws1;
+            for (ts = 1; ts < TGT_LAT; ts = ts + 1) begin
+                tgt_sr[ts] <= tgt_sr[ts-1];
+                wa_sr [ts] <= wa_sr [ts-1];
+                ws_sr [ts] <= ws_sr [ts-1];
+            end
         end
     end
+
+    wire [TN*DATA_W-1:0] tgt2 = tgt_sr[TGT_LAT-1];   // aligned with q_valid
+    wire [AA_W-1:0]      wa2  = wa_sr [TGT_LAT-1];
+    wire [SEL_W-1:0]     ws2  = ws_sr [TGT_LAT-1];
 
     // ================= feed the shared requantize stage =================
     // `saved` arrives one cycle after the second read is issued, i.e. on the
@@ -260,12 +293,18 @@ module res_feeder #(
                             : {{TN*DATA_W{1'b0}}, sum16};
 
     // ================= busy, including the drain ========================
-    reg [2:0] drain;
+    //  Derived: sav_valid is high in the SAME cycle as layer_done - both are one
+    //  cycle after the last counter step - so the last write lands OS_LAT cycles
+    //  after the layer_done cycle, and `busy` covers layer_done plus `drain`.
+    localparam DRAIN_CYC = OS_LAT;                  // 5
+    localparam DRAIN_W   = clog2(DRAIN_CYC + 1);
+
+    reg [DRAIN_W-1:0] drain;
     always @(posedge clock) begin
-        if (!rst_n)             drain <= 3'd0;
-        else if (start)         drain <= 3'd0;
-        else if (layer_done)    drain <= 3'd6;
-        else if (drain != 3'd0) drain <= drain - 3'd1;
+        if (!rst_n)          drain <= {DRAIN_W{1'b0}};
+        else if (start)      drain <= {DRAIN_W{1'b0}};
+        else if (layer_done) drain <= DRAIN_CYC[DRAIN_W-1:0];
+        else if (drain != {DRAIN_W{1'b0}}) drain <= drain - 1'b1;
     end
 
     // `layer_done` is in here for a reason that only shows up at the top level.
@@ -276,7 +315,7 @@ module res_feeder #(
     // op's weight load while this one still had its whole drain to go. Found by
     // accel_tb; invisible to a standalone testbench, which waits on layer_done
     // rather than on busy falling.
-    assign busy = run || layer_done || (drain != 3'd0);
+    assign busy = run || layer_done || (drain != {DRAIN_W{1'b0}});
 
 endmodule
 

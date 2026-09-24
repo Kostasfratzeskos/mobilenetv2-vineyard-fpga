@@ -102,7 +102,13 @@ module pw_feeder #(
     // counter is defined against it and out_stage is not instantiated here, so
     // there is nothing else that would make the two move together. See
     // docs/latency_map.md.
-    parameter OS_LAT = 2
+    // Default is the REAL value, not a placeholder. It was 2 while requantize
+    // was one register; L-3 made it 5, and the standalone testbenches
+    // instantiate this module directly and take the default - so a stale
+    // default is not a cosmetic issue, it silently desynchronises this feeder
+    // from the out_stage sitting next to it. dw_datapath_tb caught exactly that
+    // via the C-2 witness: a 3-cycle gap showed up as a 3-pixel shift.
+    parameter OS_LAT = 5
 )(
     input  wire                   clock,
     input  wire                   rst_n,
@@ -196,7 +202,7 @@ module pw_feeder #(
     //  MAC_LAT + OS_LAT. `busy` is high during the layer_done cycle and for
     //  `drain` cycles after it, so DRAIN_CYC = MAC_LAT + OS_LAT covers it with
     //  nothing to spare and nothing wasted.
-    localparam DRAIN_CYC = MAC_LAT + OS_LAT;            // 8
+    localparam DRAIN_CYC = MAC_LAT + OS_LAT;            // 11 at OS_LAT=5
     localparam DRAIN_W   = clog2(DRAIN_CYC + 1);        // 4
 
     reg [DRAIN_W-1:0] drain;

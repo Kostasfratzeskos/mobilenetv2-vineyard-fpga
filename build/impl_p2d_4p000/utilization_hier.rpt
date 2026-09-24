@@ -1,0 +1,196 @@
+Copyright 1986-2023 Xilinx, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2022.2.2 (win64) Build 3788238 Tue Feb 21 20:00:34 MST 2023
+| Date         : Thu Sep 24 13:33:31 2026
+| Host         : DESKTOP-0MFHRGM running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -file build/impl_p2d_4p000/utilization_hier.rpt
+| Design       : accel_top
+| Device       : xczu7ev-ffvc1156-2-e
+| Speed File   : -2
+| Design State : Routed
+--------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++-----------------------+-------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+|        Instance       |             Module            | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | URAM | DSP Blocks |
++-----------------------+-------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+| accel_top             |                         (top) |      34062 |      28125 |    5733 |  204 | 18243 |    178 |      0 |   52 |        944 |
+|   (accel_top)         |                         (top) |         16 |         16 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|   u_act               |                    act_buffer |        365 |        365 |       0 |    0 |     5 |      0 |      0 |   52 |          0 |
+|   u_dw                |                     dw_feeder |       3732 |       2050 |    1669 |   13 |  2334 |      2 |      0 |    0 |        144 |
+|     (u_dw)            |                     dw_feeder |        125 |        113 |       0 |   12 |   195 |      0 |      0 |    0 |          0 |
+|     u_arr             |                      dw_array |       1607 |       1606 |       0 |    1 |  1777 |      0 |      0 |    0 |        144 |
+|       (u_arr)         |                      dw_array |          2 |          1 |       0 |    1 |     2 |      0 |      0 |    0 |          0 |
+|       ch[0].u_dw      |                     dwconv3x3 |        105 |        105 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[10].u_dw     |                 dwconv3x3_112 |        100 |        100 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[11].u_dw     |                 dwconv3x3_113 |        102 |        102 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|       ch[12].u_dw     |                 dwconv3x3_114 |        100 |        100 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[13].u_dw     |                 dwconv3x3_115 |        102 |        102 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[14].u_dw     |                 dwconv3x3_116 |         97 |         97 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[15].u_dw     |                 dwconv3x3_117 |         99 |         99 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[1].u_dw      |                 dwconv3x3_118 |         98 |         98 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[2].u_dw      |                 dwconv3x3_119 |         98 |         98 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[3].u_dw      |                 dwconv3x3_120 |         99 |         99 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[4].u_dw      |                 dwconv3x3_121 |        108 |        108 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[5].u_dw      |                 dwconv3x3_122 |         97 |         97 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[6].u_dw      |                 dwconv3x3_123 |         99 |         99 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[7].u_dw      |                 dwconv3x3_124 |        101 |        101 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[8].u_dw      |                 dwconv3x3_125 |        100 |        100 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|       ch[9].u_dw      |                 dwconv3x3_126 |        101 |        101 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|     u_lb              |   line_buffer__parameterized0 |        649 |        324 |     325 |    0 |   362 |      2 |      0 |    0 |          0 |
+|     u_wgt             |    wgt_buffer__parameterized1 |       1354 |         10 |    1344 |    0 |     0 |      0 |      0 |    0 |          0 |
+|   u_gap               |                    gap_feeder |       1068 |       1060 |       0 |    8 |   506 |      0 |      0 |    0 |          0 |
+|     (u_gap)           |                    gap_feeder |         67 |         59 |       0 |    8 |    88 |      0 |      0 |    0 |          0 |
+|     ch[0].u_ap        |                       avgpool |         61 |         61 |       0 |    0 |    28 |      0 |      0 |    0 |          0 |
+|     ch[10].u_ap       |                    avgpool_97 |         58 |         58 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[11].u_ap       |                    avgpool_98 |         60 |         60 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[12].u_ap       |                    avgpool_99 |         63 |         63 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[13].u_ap       |                   avgpool_100 |         65 |         65 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[14].u_ap       |                   avgpool_101 |         69 |         69 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[15].u_ap       |                   avgpool_102 |         73 |         73 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[1].u_ap        |                   avgpool_103 |         54 |         54 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[2].u_ap        |                   avgpool_104 |         55 |         55 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[3].u_ap        |                   avgpool_105 |         60 |         60 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[4].u_ap        |                   avgpool_106 |         69 |         69 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[5].u_ap        |                   avgpool_107 |         69 |         69 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[6].u_ap        |                   avgpool_108 |         69 |         69 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[7].u_ap        |                   avgpool_109 |         67 |         67 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[8].u_ap        |                   avgpool_110 |         58 |         58 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|     ch[9].u_ap        |                   avgpool_111 |         51 |         51 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|   u_img               |                    img_buffer |         47 |         47 |       0 |    0 |     9 |     48 |      0 |    0 |          0 |
+|   u_log               |                     logit_out |       1347 |       1346 |       0 |    1 |   550 |      0 |      0 |    0 |          8 |
+|     (u_log)           |                     logit_out |          1 |          1 |       0 |    0 |   132 |      0 |      0 |    0 |          0 |
+|     cls[0].u_b        |                   bias_add_90 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|     cls[0].u_r        |    requantize__parameterized0 |        302 |        301 |       0 |    1 |   106 |      0 |      0 |    0 |          2 |
+|     cls[1].u_b        |                   bias_add_91 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|     cls[1].u_r        | requantize__parameterized0_92 |        354 |        354 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|     cls[2].u_b        |                   bias_add_93 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|     cls[2].u_r        | requantize__parameterized0_94 |        293 |        293 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|     cls[3].u_b        |                   bias_add_95 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|     cls[3].u_r        | requantize__parameterized0_96 |        294 |        294 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|   u_os                |                     out_stage |      14340 |      11779 |    2560 |    1 |  5991 |      0 |      0 |    0 |         64 |
+|     (u_os)            |                     out_stage |          0 |          0 |       0 |    0 |   833 |      0 |      0 |    0 |          0 |
+|     u_param           |                  param_buffer |       2852 |        292 |    2560 |    0 |  2048 |      0 |      0 |    0 |          0 |
+|     u_rq              |                       rq_bank |      11488 |      11487 |       0 |    1 |  3110 |      0 |      0 |    0 |         64 |
+|       (u_rq)          |                       rq_bank |          1 |          1 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[0].u_bias    |                      bias_add |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[0].u_rq      |                    requantize |        329 |        328 |       0 |    1 |    98 |      0 |      0 |    0 |          2 |
+|       ch[10].u_bias   |                   bias_add_38 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[10].u_rq     |                 requantize_39 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[11].u_bias   |                   bias_add_40 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[11].u_rq     |                 requantize_41 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[12].u_bias   |                   bias_add_42 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[12].u_rq     |                 requantize_43 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[13].u_bias   |                   bias_add_44 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[13].u_rq     |                 requantize_45 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[14].u_bias   |                   bias_add_46 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[14].u_rq     |                 requantize_47 |        328 |        328 |       0 |    0 |    99 |      0 |      0 |    0 |          2 |
+|       ch[15].u_rq     |                 requantize_48 |        334 |        334 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[16].u_rq     |                 requantize_49 |        341 |        341 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[17].u_rq     |                 requantize_50 |        341 |        341 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[18].u_bias   |                   bias_add_51 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[18].u_rq     |                 requantize_52 |        335 |        335 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[19].u_bias   |                   bias_add_53 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[19].u_rq     |                 requantize_54 |        332 |        332 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[1].u_rq      |                 requantize_55 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[20].u_bias   |                   bias_add_56 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[20].u_rq     |                 requantize_57 |        335 |        335 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[21].u_bias   |                   bias_add_58 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[21].u_rq     |                 requantize_59 |        332 |        332 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[22].u_bias   |                   bias_add_60 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[22].u_rq     |                 requantize_61 |        331 |        331 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[23].u_bias   |                   bias_add_62 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[23].u_rq     |                 requantize_63 |        331 |        331 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[24].u_bias   |                   bias_add_64 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[24].u_rq     |                 requantize_65 |        342 |        342 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[25].u_bias   |                   bias_add_66 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[25].u_rq     |                 requantize_67 |        338 |        338 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[26].u_bias   |                   bias_add_68 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[26].u_rq     |                 requantize_69 |        342 |        342 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[27].u_bias   |                   bias_add_70 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[27].u_rq     |                 requantize_71 |        338 |        338 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[28].u_bias   |                   bias_add_72 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[28].u_rq     |                 requantize_73 |        338 |        338 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[29].u_bias   |                   bias_add_74 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[29].u_rq     |                 requantize_75 |        338 |        338 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[2].u_rq      |                 requantize_76 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[30].u_bias   |                   bias_add_77 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[30].u_rq     |                 requantize_78 |        750 |        750 |       0 |    0 |   129 |      0 |      0 |    0 |          2 |
+|       ch[31].u_rq     |                 requantize_79 |        338 |        338 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[3].u_rq      |                 requantize_80 |        325 |        325 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[4].u_rq      |                 requantize_81 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[5].u_rq      |                 requantize_82 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[6].u_rq      |                 requantize_83 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[7].u_bias    |                   bias_add_84 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[7].u_rq      |                 requantize_85 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[8].u_bias    |                   bias_add_86 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[8].u_rq      |                 requantize_87 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|       ch[9].u_bias    |                   bias_add_88 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       ch[9].u_rq      |                 requantize_89 |        328 |        328 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|   u_pwf               |                     pw_feeder |       5138 |       5111 |       0 |   27 |  5301 |    128 |      0 |    0 |        512 |
+|     (u_pwf)           |                     pw_feeder |        102 |         78 |       0 |   24 |   155 |      0 |      0 |    0 |          0 |
+|     u_addr            |                      addr_gen |         64 |         64 |       0 |    0 |    76 |      0 |      0 |    0 |          0 |
+|     u_array           |                      pe_array |       4940 |       4937 |       0 |    3 |  5070 |      0 |      0 |    0 |        512 |
+|       (u_array)       |                      pe_array |          6 |          6 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       lane[0].u_lane  |                      mac_lane |        157 |        156 |       0 |    1 |   162 |      0 |      0 |    0 |         16 |
+|       lane[10].u_lane |                    mac_lane_7 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[11].u_lane |                    mac_lane_8 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[12].u_lane |                    mac_lane_9 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[13].u_lane |                   mac_lane_10 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[14].u_lane |                   mac_lane_11 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[15].u_lane |                   mac_lane_12 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[16].u_lane |                   mac_lane_13 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[17].u_lane |                   mac_lane_14 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[18].u_lane |                   mac_lane_15 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[19].u_lane |                   mac_lane_16 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[1].u_lane  |                   mac_lane_17 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[20].u_lane |                   mac_lane_18 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[21].u_lane |                   mac_lane_19 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[22].u_lane |                   mac_lane_20 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[23].u_lane |                   mac_lane_21 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[24].u_lane |                   mac_lane_22 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[25].u_lane |                   mac_lane_23 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[26].u_lane |                   mac_lane_24 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[27].u_lane |                   mac_lane_25 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[28].u_lane |                   mac_lane_26 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[29].u_lane |                   mac_lane_27 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[2].u_lane  |                   mac_lane_28 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[30].u_lane |                   mac_lane_29 |        157 |        155 |       0 |    2 |   168 |      0 |      0 |    0 |         16 |
+|       lane[31].u_lane |                   mac_lane_30 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[3].u_lane  |                   mac_lane_31 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[4].u_lane  |                   mac_lane_32 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[5].u_lane  |                   mac_lane_33 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[6].u_lane  |                   mac_lane_34 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[7].u_lane  |                   mac_lane_35 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[8].u_lane  |                   mac_lane_36 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|       lane[9].u_lane  |                   mac_lane_37 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|     u_wgt             |    wgt_buffer__parameterized0 |         32 |         32 |       0 |    0 |     0 |    128 |      0 |    0 |          0 |
+|   u_pwo               |                        pw_out |         21 |         21 |       0 |    0 |    41 |      0 |      0 |    0 |          0 |
+|   u_res               |                    res_feeder |        795 |        650 |       0 |  145 |   496 |      0 |      0 |    0 |          0 |
+|   u_seq               |                       top_seq |       2321 |       2001 |     320 |    0 |   248 |      0 |      0 |    0 |          0 |
+|   u_stem              |                   stem_feeder |       4922 |       3729 |    1184 |    9 |  2760 |      0 |      0 |    0 |        216 |
+|     (u_stem)          |                   stem_feeder |        803 |        795 |       0 |    8 |   376 |      0 |      0 |    0 |          0 |
+|     u_arr             |                    stem_array |       2819 |       2818 |       0 |    1 |  2167 |      0 |      0 |    0 |        216 |
+|       (u_arr)         |                    stem_array |          2 |          1 |       0 |    1 |     7 |      0 |      0 |    0 |          0 |
+|       lane[0].u_conv  |                   conv3x3_std |        373 |        373 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[1].u_conv  |                 conv3x3_std_0 |        371 |        371 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[2].u_conv  |                 conv3x3_std_1 |        368 |        368 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[3].u_conv  |                 conv3x3_std_2 |        356 |        356 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[4].u_conv  |                 conv3x3_std_3 |        354 |        354 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[5].u_conv  |                 conv3x3_std_4 |        330 |        330 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[6].u_conv  |                 conv3x3_std_5 |        328 |        328 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|       lane[7].u_conv  |                 conv3x3_std_6 |        337 |        337 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|     u_lb              |                   line_buffer |        304 |        112 |     192 |    0 |   217 |      0 |      0 |    0 |          0 |
+|     u_wgt             |                    wgt_buffer |        997 |          5 |     992 |    0 |     0 |      0 |      0 |    0 |          0 |
++-----------------------+-------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+* Note: The sum of lower-level cells may be larger than their parent cells total, due to cross-hierarchy LUT combining
+
+

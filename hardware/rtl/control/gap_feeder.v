@@ -56,7 +56,12 @@ module gap_feeder #(
     parameter PDEPTH  = 64,
     parameter AA_W    = 16,
     parameter PIX_W   = 16,
-    parameter SLW     = 8       // slice counter width (up to 80 slices)
+    parameter SLW     = 8,      // slice counter width (up to 80 slices)
+
+    // Latency of the shared out_stage: acc_valid to q_valid. A PARAMETER
+    // because the slice tag and the drain are both sized from it. L-3 took it
+    // from 2 to 5.
+    parameter OS_LAT  = 5
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -96,6 +101,17 @@ module gap_feeder #(
     output wire                      busy,
     output reg                       layer_done
 );
+
+    //  Used to size the drain counter from the drain length rather than from a
+    //  guess. Same function as in the other three feeders.
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
 
 
     // ================= stage 0 : slice-major, spatial-minor =============
@@ -208,15 +224,23 @@ module gap_feeder #(
     // ================= stage 3 : writeback ==============================
     // The output is 1x1xC, so there is no pixel index: slice s lands in entry
     // s>>1, half s&1.
-    reg [SLW-1:0] sl_d3, sl_d4;
+    //  It was sl_d3/sl_d4, two named registers, because sl_d2 is aligned with
+    //  sums_ready and OS_LAT was 2. L-3 made OS_LAT 5, so this is a shift
+    //  register of a DERIVED depth: `sl_d4` is whatever is aligned with q_valid,
+    //  at any requantize depth.
+    reg [SLW-1:0] sl_sr [0:OS_LAT-1];
+
+    integer ss;
     always @(posedge clock) begin
         if (!rst_n) begin
-            sl_d3 <= {SLW{1'b0}}; sl_d4 <= {SLW{1'b0}};
+            for (ss = 0; ss < OS_LAT; ss = ss + 1) sl_sr[ss] <= {SLW{1'b0}};
         end else begin
-            sl_d3 <= sl_d2;
-            sl_d4 <= sl_d3;
+            sl_sr[0] <= sl_d2;
+            for (ss = 1; ss < OS_LAT; ss = ss + 1) sl_sr[ss] <= sl_sr[ss-1];
         end
     end
+
+    wire [SLW-1:0] sl_d4 = sl_sr[OS_LAT-1];         // aligned with q_valid
 
     wire [31:0]     sl4_half = {{(32-SLW){1'b0}}, sl_d4} >> 1;
     wire [AA_W-1:0] out_ent  = sl4_half[AA_W-1:0];
@@ -228,12 +252,18 @@ module gap_feeder #(
     assign aw_data = q;              // already in the half wr_sel stores
 
     // ================= busy, including the drain ========================
-    reg [2:0] drain;
+    //  Derived: sums_ready is one cycle after the layer_done cycle - the avgpool
+    //  bank answers one cycle after its last sample - and the write is OS_LAT
+    //  after that.
+    localparam DRAIN_CYC = 1 + OS_LAT;              // 6
+    localparam DRAIN_W   = clog2(DRAIN_CYC + 1);
+
+    reg [DRAIN_W-1:0] drain;
     always @(posedge clock) begin
-        if (!rst_n)             drain <= 3'd0;
-        else if (start)         drain <= 3'd0;
-        else if (layer_done)    drain <= 3'd7;
-        else if (drain != 3'd0) drain <= drain - 3'd1;
+        if (!rst_n)          drain <= {DRAIN_W{1'b0}};
+        else if (start)      drain <= {DRAIN_W{1'b0}};
+        else if (layer_done) drain <= DRAIN_CYC[DRAIN_W-1:0];
+        else if (drain != {DRAIN_W{1'b0}}) drain <= drain - 1'b1;
     end
 
     // `layer_done` is in here for a reason that only shows up at the top level.
@@ -244,7 +274,7 @@ module gap_feeder #(
     // op's weight load while this one still had its whole drain to go. Found by
     // accel_tb; invisible to a standalone testbench, which waits on layer_done
     // rather than on busy falling.
-    assign busy = run || layer_done || (drain != 3'd0);
+    assign busy = run || layer_done || (drain != {DRAIN_W{1'b0}});
 
 endmodule
 

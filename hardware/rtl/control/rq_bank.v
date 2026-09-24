@@ -78,8 +78,10 @@ module rq_bank #(
 
     // ---- result --------------------------------------------------------
     output wire [TM*DATA_W-1:0]      q,            // the act_buffer word
-    output reg                       q_valid
+    output wire                      q_valid
 );
+
+    wire [TM-1:0] lane_valid;
 
     genvar m;
     generate
@@ -96,7 +98,14 @@ module rq_bank #(
                 .acc_out (biased)
             );
 
-            // registered: multiply by M0, round, shift, clamp
+            // PIPELINED since L-3: four stages, so `en` goes in and a
+            // per-lane q_valid comes out. Lane 0's is taken as the bank's, for
+            // the same reason pe_array takes lane 0's `done`: every lane sees
+            // the same `en` and none looks at its own data, so they are
+            // identical by construction - and the check below tests that rather
+            // than asserting it.
+            wire lane_qv;
+
             requantize #(
                 .ACC_W   (ACC_W),
                 .M0_W    (M0_W),
@@ -110,16 +119,32 @@ module rq_bank #(
                 .M0         (m0   [m*M0_W    +: M0_W]),
                 .shift      (shift[m*SHIFT_W +: SHIFT_W]),
                 .relu6_qmax (relu6_qmax),
-                .quantized  (q    [m*DATA_W  +: DATA_W])
+                .quantized  (q    [m*DATA_W  +: DATA_W]),
+                .q_valid    (lane_qv)
             );
+
+            assign lane_valid[m] = lane_qv;
         end
     endgenerate
 
-    // marks the cycle on which `q` holds the finished word
+    // ---- marks the cycle on which `q` holds the finished word -----------
+    //  It used to be `q_valid <= en`, a single register, because requantize was
+    //  a single register. L-3 made it four stages, so this had to move with it -
+    //  and rather than restate the depth here, it is the array's own output.
+    assign q_valid = lane_valid[0];
+
+`ifndef SYNTHESIS
+    //  The lockstep this rests on, checked instead of assumed - the same
+    //  arrangement pe_array's A-3 check uses, and it also gives the other TM-1
+    //  bits a reader so they do not trip unused-signal lint.
     always @(posedge clock) begin
-        if (!rst_n) q_valid <= 1'b0;
-        else        q_valid <= en;
+        if (rst_n && (lane_valid != {TM{lane_valid[0]}})) begin
+            $display("ERROR: %m L-3 the requantize lanes are NOT in lockstep at time %0t: lane_valid = %b. q_valid is taken from lane 0, so it is now marking a word that not every lane has finished.",
+                     $time, lane_valid);
+            $finish;
+        end
     end
+`endif
 
     // ---- L-12: bias_add truncates, so watch the full-width sum -----------
     //

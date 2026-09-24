@@ -12,8 +12,10 @@ change is a bookkeeping error in one of these rows, not an arithmetic error — 
 transformation is a reassociation or a latency change, never a change of value.
 
 Baseline measured 2026-09-23 on commit `716ea8e`, all 31 testbenches passing.
-Line references updated after Phase 1 (`6efb02a`); the VALUES are unchanged, because
-Phase 1 changed no latency.
+Line references updated after Phase 1 (`6efb02a`); the VALUES were unchanged there, because
+Phase 1 changed no latency. Phases 2a–2d changed the values, and section 6 is the before/after.
+The per-module tables cite files rather than line numbers now — four phases of edits proved the
+line numbers go stale faster than anyone updates them, and a stale reference is worse than none.
 
 ---
 
@@ -23,7 +25,9 @@ Phase 1 changed no latency.
 |:--|:--|--:|:--|
 | `MAC_LAT` | `mac_lane` | **6** (was 1) | `valid` → `acc` final and `done` high. Now `1 + clog2(TN) + 1`: one registered product stage, `clog2(TN)=4` adder-tree levels, one accumulate stage (**L-1**, Phase 2a). |
 | `DW_LAT` | `dwconv3x3` / `dw_array` | **5** (was 0) | `win`/`valid` → `acc`/`valid_out`. `1 + clog2(K*K)`: one product stage plus 4 tree levels, and **no** accumulate stage — a depthwise window completes in one pass (**L-1**, Phase 2b). |
-| `OS_LAT` | `out_stage` | **2** | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1); `rq_bank`'s `requantize` registers the result (1). **L-3 grows this to 5 in Phase 2d.** |
+| `ST_LAT` | `conv3x3_std` / `stem_array` | **6** (was 0) | `win`/`valid` → `acc`/`valid_out`. `1 + clog2(K*K*3)` = `1 + clog2(27)`: one product stage plus 5 tree levels, no accumulate stage (**L-1**, Phase 2c). |
+| `RQ_LAT` | `requantize` | **4** (was 1) | `en` → `q_valid`. Four register stages: `in_data` (absorbing `bias_add`), the M0 product, round+shift, clamp (**L-3**, Phase 2d). |
+| `OS_LAT` | `out_stage` | **5** (was 2) | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1), then `RQ_LAT` — so `1 + RQ_LAT`, and it moves whenever `requantize` does (**L-3**, Phase 2d). |
 
 Both are `localparam`s now, derived rather than written down: `MAC_LAT` from `TN` in
 `mac_lane` (and restated by the same arithmetic in `pw_feeder`, which is the only module
@@ -36,11 +40,17 @@ distance from `v_d && l_d` to `acc_valid` in simulation and fails if it is not `
 and `mac_lane_tb`, `pe_array_tb` and `pw_feeder_tb` each assert the same number as an
 equality rather than a ceiling. That is what stops the formula and the structure drifting.
 
-`conv3x3_std` and `stem_array` still have a latency of **0** and no clock port at all — Phase
-2c changes that. A-2 was the observation that a zero cannot be written down in a port list, so
-making it non-zero has no compile-time witness; `dw_array` now has `clock`, `rst_n`, `valid`
-and `valid_out`, so its latency is a wire the feeder connects rather than an equality the
-feeder asserts.
+A-2 was the observation that a zero cannot be written down in a port list, so making it
+non-zero has no compile-time witness. `dw_array` and `stem_array` both have `clock`, `rst_n`,
+`valid` and `valid_out` now, so their latency is a wire the feeder connects rather than an
+equality the feeder asserts.
+
+`OS_LAT` is the one that cannot be a wire: `out_stage` is instantiated in `accel_top`, not
+inside the feeders, so each feeder is told its depth by parameter. That is the single most
+load-bearing number in this file — **five** modules size a tag pipeline and a drain from it —
+and it is why Phase 2d touched every feeder. Every default is the true value (5) in every
+module, so a standalone testbench that omits the override cannot silently run a shallower
+pipeline than `accel_top` builds.
 
 ---
 
@@ -63,10 +73,12 @@ feeder asserts.
 |:--|:--|--:|:--|
 | `v_d`/`f_d`/`l_d` control delay | `pw_feeder.v` | 1 stage | buffer read latency (1), **not** `MAC_LAT` |
 | Tag pipeline `pix_sr[]` → `acc_pix`/`acc_oct` | `pw_feeder.v` | `TAG_LAT = 1 + MAC_LAT` = **7** (was 2) | stage 1 gated on `ag_valid` (the buffers it shadows are gated); stages 2..7 **free-running**, because `mac_lane`'s tree is |
-| `drain` | `pw_feeder.v` | `DRAIN_CYC = MAC_LAT + OS_LAT` = **8** (was a literal 7) | derived: the distance from the `layer_done` cycle to the last write. `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. |
-| `OS_LAT` parameter | `pw_feeder.v` | 2 | passed from `accel_top`; the drain is sized from it |
+| `drain` | `pw_feeder.v` | `DRAIN_CYC = MAC_LAT + OS_LAT` = **11** (was a literal 7) | derived: the distance from the `layer_done` cycle to the last write. `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. |
+| `OS_LAT` parameter | `pw_feeder.v` | **5** | passed from `accel_top`; the drain is sized from it |
 
-`ag_valid` → `acc_valid` is **7** (was 2); → `aw_en` in `pw_out` is **9** (was 4).
+`ag_valid` → `acc_valid` is **7** (was 2); → `aw_en` in `pw_out` is **12** (was 4).
+Only the second number moved in Phase 2d: `TAG_LAT` stops at `acc_valid`, and everything
+after it is `OS_LAT`.
 
 > The old header said "each tag stage advances on ITS OWN valid, never on the bare clock, or
 > a stall would slide the tags past the data". That was right for a combinational array and is
@@ -88,13 +100,13 @@ feeder asserts.
 | `dw_array` `valid` → `valid_out` | `dw_array.v` | `DW_LAT` = **5** | **A-2 fixed**: one shift register for all TC channels, depth derived from K |
 | `assign os_acc_valid = arr_valid` | `dw_feeder.v` | — | was `= win_valid`, i.e. 0. Now a **wire from the array**, so the latency cannot be asserted wrongly |
 | `v_d1`/`real_d1`/`grp_d1` | `dw_feeder.v` | 1 stage | pool read latency |
-| `grp_sr[]` group tag | `dw_feeder.v` | `GRP_WR = 2 + DW_LAT + OS_LAT` = **9** (was 4) | one shift register; `grp_arr` at `GRP_ARR = 2+DW_LAT` = 7 feeds `acc_wide` and the parameter address, `grp_wr` at 9 feeds the write |
-| `ox_sr`/`oy_sr` C-2 witness | `dw_feeder.v` | `WIT_LAT = DW_LAT + OS_LAT` = **7** (was 2) | capturing a `line_buffer` output already costs one stage |
-| `drain` | `dw_feeder.v` | `DRAIN_CYC = 1 + DW_LAT + OS_LAT` = **8** (was a literal 7) | derived: `layer_done` cycle → last write |
-| `OS_LAT` parameter | `dw_feeder.v` | 2 | passed from `accel_top` |
+| `grp_sr[]` group tag | `dw_feeder.v` | `GRP_WR = 2 + DW_LAT + OS_LAT` = **12** (was 4) | one shift register; `grp_arr` at `GRP_ARR = 2+DW_LAT` = 7 feeds `acc_wide` and the parameter address, `grp_wr` at 12 feeds the write |
+| `ox_sr`/`oy_sr` C-2 witness | `dw_feeder.v` | `WIT_LAT = DW_LAT + OS_LAT` = **10** (was 2) | capturing a `line_buffer` output already costs one stage |
+| `drain` | `dw_feeder.v` | `DRAIN_CYC = 1 + DW_LAT + OS_LAT` = **11** (was a literal 7) | derived: `layer_done` cycle → last write |
+| `OS_LAT` parameter | `dw_feeder.v` | **5** | passed from `accel_top` |
 
 `step` → `win_valid` is **2** (unchanged, that is `line_buffer`); → `arr_valid` is **7**
-(was 2); → `aw_en` is **9** (was 4).
+(was 2); → `aw_en` is **12** (was 4).
 
 > Every depth above is declared in ONE place at the top of `dw_feeder`, next to `DW_LAT`,
 > because they all move together. `dw_feeder` also **measures** the real `win_valid` →
@@ -105,16 +117,20 @@ feeder asserts.
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `stem_array` has no clock/valid ports | `stem_array.v:56-66` | 0 | same shape as A-2, one level up |
-| `v_d1`/`real_d1`/`y_d1`/`x_d1` | `stem_feeder.v:170-183` | 1 stage | image read latency |
-| `win_q` latch on `win_valid && !sweeping` | `stem_feeder.v:202-217` | 1 stage | `line_buffer` latency; sweep starts the cycle AFTER `win_valid` |
-| `wa_oct = win_valid && !sweeping ? 0 : oct+1` | `stem_feeder.v:221-222` | weights lead by 1 | `wgt_buffer` read latency (1) vs the sweep start |
-| `oct_d1`, `oct_d2` | `stem_feeder.v:263-267` | 2 stages | `OS_LAT` — `oct_d2` must align with `q_valid` |
-| `wr_go <= entry_done` | `stem_feeder.v:286-301` | 1 stage | lets the last `asm` fold land before the entry is stored |
-| `drain <= 4'd15` (4-bit counter) | `stem_feeder.v:370-376` | 15 | ≥ sweep (`n_oct`) + `OS_LAT` + 1 ≈ 7 today |
-| `busy` includes `sweeping` | `stem_feeder.v:386` | — | the sweep is the reason `run` alone is not enough |
+| `stem_array` `valid` → `valid_out` | `stem_array.v` | `ST_LAT` = **6** | **A-2 shape fixed**: `clock`, `rst_n`, `valid`, `valid_out`, one shift register for all TS channels |
+| `assign os_acc_valid = arr_valid` | `stem_feeder.v` | — | was `= sweeping`, i.e. 0. Now a **wire from the array** |
+| `v_d1`/`real_d1`/`y_d1`/`x_d1` | `stem_feeder.v` | 1 stage | image read latency |
+| `win_q` latch on `win_valid && !sweeping` | `stem_feeder.v` | 1 stage | `line_buffer` latency; sweep starts the cycle AFTER `win_valid`. **UNCHANGED by Phase 2b/2c/2d** — the review lists it as moving and measurement says it does not. |
+| `wa_oct = win_valid && !sweeping ? 0 : oct+1` | `stem_feeder.v` | weights lead by 1 | `wgt_buffer` read latency (1) vs the sweep start. Also **unchanged**. |
+| `oct_sr[]` octet tag | `stem_feeder.v` | `OCT_WR = ST_LAT + OS_LAT` = **11** (was 2) | one shift register; `oct_arr` at `OCT_ARR = ST_LAT` = 6 feeds `acc_wide` and the parameter address, `oct_wr` at 11 feeds the write |
+| `ox_live` → `ox_sr[]` → `ox_e` C-2 witness | `stem_feeder.v` | rides `oct_sr` | the witness changed **shape**, not just depth: the hold was being overwritten before `entry_done` |
+| `wr_go <= entry_done` | `stem_feeder.v` | 1 stage | lets the last `asm` fold land before the entry is stored |
+| `drain` | `stem_feeder.v` | `DRAIN_CYC = ST_LAT + OS_LAT + 1` = **12** (was a literal 15) | derived; `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. `busy` already covers the sweep via `sweeping`. |
+| `busy` includes `sweeping` | `stem_feeder.v` | — | the sweep is the reason `run` alone is not enough |
+| `OS_LAT` parameter | `stem_feeder.v` | **5** | passed from `accel_top` |
 
-`adv` → `win_valid` is **2**; → first `os_acc_valid` is **3**; → `aw_en` is **9**.
+`adv` → `win_valid` is **2**; → first `os_acc_valid` is **7**; the write is `OCT_WR` + the
+`wr_go` cycle behind the octet that produced it.
 
 > Doc drift found while building this table (not a review finding): the header's pipeline
 > sketch says "C+8 one full 32-channel entry written". `wr_go` is `entry_done` delayed one
@@ -124,56 +140,65 @@ feeder asserts.
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `sav_valid` / `sav_sl` | `res_feeder.v:197-207` | 1 stage | pool read latency |
-| `tgt0/1/2`, `wa0/1/2`, `ws0/1/2` delay line | `res_feeder.v:168-188` | **3 stages** | push is 1 cycle ahead of `sav_valid`, then `OS_LAT` → 1 + 2 |
-| `drain <= 3'd6` | `res_feeder.v:263-269` | 6 | ≥ 1 + `OS_LAT` = 3 today |
+| `sav_valid` / `sav_sl` | `res_feeder.v` | 1 stage | pool read latency |
+| `tgt_sr`/`wa_sr`/`ws_sr` delay line | `res_feeder.v` | `TGT_LAT = 1 + OS_LAT` = **6** (was 3 named registers) | push is 1 cycle ahead of `sav_valid`, then `OS_LAT`. Three names would have become six — a shift register of a derived depth instead. |
+| `drain` | `res_feeder.v` | `DRAIN_CYC = OS_LAT` = **5** (was a literal 6) | `sav_valid` is high in the SAME cycle as `layer_done`, so the last write is `OS_LAT` after it |
+| `OS_LAT` parameter | `res_feeder.v` | **5** | passed from `accel_top` |
 
-Read issued → `aw_en` is **4** (`ph=0` issue, `ph=1` target, `sav_valid`, +`OS_LAT`).
+Read issued → `aw_en` is **7** (`ph=0` issue, `ph=1` target, then `OS_LAT`).
 
 ### `gap_feeder`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `v_d1`/`first_d1`/`last_d1`/`sl_d1` | `gap_feeder.v:147-162` | 1 stage | pool read latency |
-| `sl_d2` | `gap_feeder.v:188-192` | 1 more | `avgpool` latency = `MAC_LAT` |
-| `sl_d3`, `sl_d4` | `gap_feeder.v:211-219` | 2 more | `OS_LAT` — `sl_d4` must align with `q_valid` |
-| `drain <= 3'd7` | `gap_feeder.v:231-237` | 7 | ≥ 1 + `MAC_LAT` + `OS_LAT` = 4 today |
+| `v_d1`/`first_d1`/`last_d1`/`sl_d1` | `gap_feeder.v` | 1 stage | pool read latency |
+| `sl_d2` | `gap_feeder.v` | 1 more | `avgpool` latency, which is **1** — it is a plain adder, not a MAC, and L-1 did not touch it |
+| `sl_sr[0:OS_LAT-1]` | `gap_feeder.v` | `OS_LAT` = **5** more (was 2 named registers) | `sl_sr[OS_LAT-1]` must align with `q_valid` |
+| `armed` sticky bit | `avgpool.v` | — | **L-10**, same fix as `mac_lane`: a `last` with no preceding `first` no longer announces a stale sum |
+| `drain` | `gap_feeder.v` | `DRAIN_CYC = 1 + OS_LAT` = **6** (was a literal 7) | derived: `sums_ready` is one cycle after the `layer_done` cycle, the write `OS_LAT` after that |
+| `OS_LAT` parameter | `gap_feeder.v` | **5** | passed from `accel_top` |
 
-`run` → `sums_ready` is **2**; → `aw_en` is **4**. Total slice-tag depth: **4** (`sl_d1..d4`).
+`run` → `sums_ready` is **2**; → `aw_en` is **7**. Total slice-tag depth: **7**.
 
-> **Zero margin, and it is a Phase 2 trap.** `avgpool`'s `acc` holds a channel's final sum
-> for **exactly one cycle**: the next slice's first sample arrives with `first=1` on the very
-> next cycle and clears it. `out_stage`'s stage A captures it on that one cycle. Nothing
-> between `sums_ready` and `acc_q` may gain a cycle without also holding the sum — if L-3's
-> new stage 1 is inserted *before* the capture rather than after it, every pooled channel
-> becomes the next channel's first sample. The review calls this handoff "correct (zero
-> margin)" under Part A and does not carry the consequence into Phase 2.
+> **Zero margin — the Phase 2d trap, and how it was avoided.** `avgpool`'s `acc` holds a
+> channel's final sum for **exactly one cycle**: the next slice's first sample arrives with
+> `first=1` on the very next cycle and clears it. `out_stage`'s stage A captures it on that
+> one cycle. Nothing between `sums_ready` and `acc_q` may gain a cycle without also holding
+> the sum. L-3's three new stages all land **after** that capture — stage A registers `acc_q`,
+> `bias_add` is combinational on `acc_q`, and `requantize`'s stage 1 registers *its* output —
+> so the one-cycle handoff is untouched and every added cycle is behind a register that
+> already held the value. Had stage 1 gone in front of the capture instead, every pooled
+> channel would have become the next channel's first sample. The review calls this handoff
+> "correct (zero margin)" under Part A and does not carry the consequence into Phase 2.
 
 ### `out_stage` / `rq_bank` / `param_buffer`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `acc_q` / `vA` stage A | `out_stage.v:88-98` | 1 stage | `param_buffer` read latency (1) must match it |
-| `param_buffer` registered read | `param_buffer.v:105-110` | 1 stage | fixed by the memory style |
-| `rq_bank` `q_valid <= en` | `rq_bank.v:118-122` | 1 stage | `requantize`'s output register. **L-3 grows this to 4.** |
-| `requantize` output register | `requantize.v:141-145` | 1 stage | the whole multiply→round→shift→clamp chain is in front of it |
-| `act` / `relu6_qmax` arrive combinationally | `out_stage.v:63-64`, `rq_bank.v:70-71` | 0 stages | **L-7** — per-channel params are delayed 1, these are not. Breaks the moment L-3 adds stages. |
-| `bias_add` combinational | `bias_add.v:42` | 0 stages | in `requantize`'s timing cone; L-12 folds it into L-3's new stage 1 |
+| `acc_q` / `vA` stage A | `out_stage.v` | 1 stage | `param_buffer` read latency (1) must match it |
+| `param_buffer` registered read | `param_buffer.v` | 1 stage | fixed by the memory style |
+| `requantize` pipeline | `requantize.v` | `RQ_LAT` = **4** (was 1) | stage 1 `in_data` (which is `bias_add`'s output, **L-12** absorbed), stage 2 the M0 product, stage 3 round+shift, stage 4 clamp. `en_sr` of depth `RQ_LAT` drives the new `q_valid` output. |
+| `rq_bank` `q_valid` | `rq_bank.v` | `assign q_valid = lane_valid[0]` | **taken from `requantize`'s own output**, not a local register, so the bank cannot disagree with the module about its own depth. Lockstep across the TM lanes is checked in simulation. |
+| `act` / `relu6_qmax` delayed inside `requantize` | `requantize.v` | `act_d1..d3`, `qmax_d1..d3` | **L-7 fixed** — they are consumed at stage 4 and now arrive there. `m0_d1` and `sh_d1`/`sh_d2` likewise ride to the stage that uses them. |
+| `bias_add` combinational | `bias_add.v` | 0 stages | **L-12 absorbed**: it is now in front of `requantize`'s stage 1 register rather than in front of a multiply, so it costs a register-to-register hop of its own instead of extending the M0 path |
 
 ### `logit_out`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `lv <= acc_valid` | `logit_out.v:144-149` | **1 stage** | its own `requantize` output register — **not** `OS_LAT`. This path is a second copy of the requantize datapath (T-8). |
-| `argmax_valid <= lv` | `logit_out.v:168-177` | 1 more | combinational 4-way argmax over `logits` |
+| `lv = cls_valid[0] & lv_gate` | `logit_out.v` | `RQ_LAT` = **4** (was 1) | taken from its `requantize`'s own `q_valid`, the same way `rq_bank` now does. This path is a second copy of the requantize datapath (**T-8**) and after Phase 2c it is on the critical path, so it must not be able to drift from the original. `lv_gate` keeps `start` forcing it low. |
+| `argmax_valid <= lv` | `logit_out.v` | 1 more | combinational 4-way argmax over `logits` |
 
-`logits_valid` and `argmax_valid` are one cycle apart by construction.
+`logits_valid` and `argmax_valid` are one cycle apart by construction. Note that this path
+does **not** go through `out_stage`, so it is `RQ_LAT` and not `OS_LAT`: there is no stage-A
+capture, because `pw_feeder`'s accumulators are read directly. T-8 proposes removing the
+duplicate; until then the two depths are different numbers for a real reason.
 
 ### `top_seq` / `accel_top`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `GAP_CYC = 4` | `top_seq.v:84`, `accel_top.v:117` | 4 (⇒ 5 idle cycles) | **T-10**: asserted, not derived. Nominally covers the worst feeder drain; nothing ties it to one. |
+| `GAP_CYC = OS_LAT` | `top_seq.v`, `accel_top.v` | **5** (was a literal 4) | **T-10 fixed**, and the honest derivation is that it is now *redundant*: every feeder's `busy` covers its own drain, and since Phase 2 every one of those drains is derived. Kept as a second line of defence, at one requantize pipeline's worth of cycles, and it **moves with `OS_LAT`**. `OS_LAT` must be declared above it in `accel_top`'s parameter list — Verilog-2001 resolves a parameter list strictly top to bottom, so the derived one first is a compile error. |
 | `S_FETCH` word counter `fw` | `top_seq.v:298-302` | 8 cycles | instruction width, not a datapath latency |
 | `S_WAIT` → `S_RUN` on `op_busy` rising | `top_seq.v:324` | — | a feeder cannot raise `busy` until the cycle after `op_start` |
 | `WDOG_W = 20` (T-2, Phase 1) | `top_seq.v`, `accel_top.v` | 2²⁰ cycles | **derived**: 10.4× the longest legitimate op (the stem, 100,801 cycles) and 41× the worst weight fill (25,600). Recompute if a layer gets longer, not if a latency changes. |
@@ -195,6 +220,19 @@ latency change that moves **every feeder's stage-1 delay** (`v_d`, `v_d1`) and e
 pipeline behind it. Whether it is needed is a measurement, and the 4.000 ns run is what
 answers it; it is listed here so that it is not discovered in the middle of Phase 2.
 
+> **Measured after Phase 2d: it is needed, and it is now THE critical path.** All 25 of the
+> worst post-route paths are one path, and synthesis agrees with route on it:
+>
+>     u_act/mem_reg_1_uram_13/CLK
+>       -> u_pwf/u_array/lane[10].u_lane/prod_reg[12]/DSP_OUTPUT_INST/ALU_OUT[10]
+>     6.066 ns (logic 4.179, route 1.887), 13 logic levels, WNS -2.126 at 4.000 ns
+>
+> Nothing in `requantize`, `out_stage` or `logit_out` appears in the worst-path list any
+> more — in Phase 2c both the synthesis and the post-route worst path ended in a
+> `quantized_reg`. So the review's 43 findings no longer contain the bottleneck, and this
+> row does. It is a latency change of the same kind as L-1 and L-3, which means it gets its
+> own phase and its own pass down this table rather than being folded into one.
+
 ---
 
 ## 3. What moves together — the Phase 2 checklist
@@ -206,15 +244,16 @@ Copied from the review's cross-cutting table and made concrete against the rows 
 | ~~**L-1/L-2** `mac_lane` gains `+LAT`~~ **DONE, Phase 2a** | ~~`pw_feeder` tag pipeline~~ 2 → **7**; ~~`pw_feeder` drain~~ 7 → **`MAC_LAT+OS_LAT`**; ~~`pe_array` `done` sourcing~~ (A-3 checked, unchanged until A-1); `avgpool` untouched, so `gap_feeder` `sl_d2` unchanged |
 | ~~**L-1/L-2** `dwconv3x3` gains clock + LAT~~ **DONE, Phase 2b** | ~~`dw_array` port list (A-2)~~; ~~`os_acc_valid = win_valid`~~ → a wire from the array; ~~`grp_d2..d4`~~ → one `grp_sr[]` at `GRP_WR`=9; ~~drain~~ → `1+DW_LAT+OS_LAT`; **and the C-2 witness, which the review's table does not list** |
 | ~~**L-1/L-2** `conv3x3_std` gains clock + LAT~~ **DONE, Phase 2c** | ~~`stem_array` port list~~; ~~`os_acc_valid = sweeping`~~ → a wire; ~~`oct_d1/d2`~~ → one `oct_sr[]` at `OCT_WR`=8; ~~drain~~ → `ST_LAT+OS_LAT+1`; **the C-2 witness changed shape, not just depth**. `win_q`, the sweep and the `wa_oct` weight lead are UNCHANGED — the review lists them as moving and measurement says they do not. |
-| **L-3** `requantize` +3 (`OS_LAT` 2 → 5) | `rq_bank` `q_valid` depth; L-7 `act`/`relu6_qmax` pipelined inside `requantize`; `pw_feeder` drain; `dw_feeder` `grp_d3/d4` and drain; `stem_feeder` `oct_d1/d2` and drain; `res_feeder` delay line 3 → 3+3 and drain; `gap_feeder` `sl_d3/d4` and drain; `GAP_CYC`; `logit_out` `lv` |
-| **L-12** absorbed | `bias_add` folds into L-3's new stage 1 |
+| ~~**L-3** `requantize` +3 (`OS_LAT` 2 → 5)~~ **DONE, Phase 2d** | ~~`rq_bank` `q_valid` depth~~ → `requantize`'s own output; ~~L-7 `act`/`relu6_qmax`~~ pipelined inside `requantize`; ~~`pw_feeder` drain~~ → 11; ~~`dw_feeder` `grp_d3/d4` and drain~~ → `GRP_WR`=12, `WIT_LAT`=10, drain 11; ~~`stem_feeder` `oct_d1/d2` and drain~~ → `OCT_WR`=11, drain 12; ~~`res_feeder` delay line~~ → `TGT_LAT`=6, drain 5; ~~`gap_feeder` `sl_d3/d4` and drain~~ → `sl_sr` of `OS_LAT`, drain 6; ~~`GAP_CYC`~~ → `OS_LAT`; ~~`logit_out` `lv`~~ → its `requantize`'s `q_valid` |
+| ~~**L-12** absorbed~~ **DONE, Phase 2d** | ~~`bias_add` folds into L-3's new stage 1~~ — it feeds `requantize`'s stage-1 register instead of the M0 multiply |
 | **A-1** registered broadcast | `pe_array` `done` from the last group; accumulator de-skew; `pw_feeder` tag depth grows by the group count |
 
-**Every drain in the table is a hand-set constant with slack, not a derived value.** That is
-why a too-small drain fails silently rather than at elaboration: today's values (7, 7, 15, 6, 7)
-happen to have 3–8 cycles of margin, so a `+1` or `+2` latency change may pass the golden
-vectors by luck and a `+3` may not. Phase 2 should derive each drain from the stage count it
-covers, which also settles T-10's `GAP_CYC`.
+**No drain in the table is a hand-set constant any more.** The five were `7, 7, 15, 6, 7`
+with 3–8 cycles of unexplained margin — which is why a too-small drain failed silently
+rather than at elaboration, and why a `+1` could pass the golden vectors by luck where a `+3`
+would not. They are now `11, 11, 12, 5, 6`, each derived from the stages it covers, and every
+counter width is `clog2(DRAIN_CYC + 1)` rather than a number that happened to fit. `GAP_CYC`
+went the same way, which settles T-10.
 
 ---
 
@@ -270,11 +309,24 @@ do @(negedge clock); while (busy);
 Phase 2b and 2c grow the depthwise and stem latencies, so the same trap was waiting there
 twice more.
 
-## 6. Baseline facts this table was measured against
+## 6. Where the numbers stand, Phase 0 → Phase 2d
 
-- `TM=32`, `TN=16`, `TC=16`, `TS=8`, `ACC_W=26`, `SEL_W=1`, `GAP_CYC=4`.
-- Drains: `pw_feeder` 7 (3-bit), `dw_feeder` 7 (3-bit), `stem_feeder` 15 (4-bit),
-  `res_feeder` 6 (3-bit), `gap_feeder` 7 (3-bit).
-- Feeder input-to-writeback latency: pointwise 4, depthwise 4, residual 4, pooling 4,
-  stem 9.
-- All 31 testbenches pass, including `accel_tb` at 6,895,780 elements bit-exact over 64 ops.
+| | Phase 0 (`716ea8e`) | after Phase 2d |
+|:--|--:|--:|
+| `MAC_LAT` (`mac_lane`) | 1 | **6** |
+| `DW_LAT` (`dwconv3x3`) | 0 | **5** |
+| `ST_LAT` (`conv3x3_std`) | 0 | **6** |
+| `RQ_LAT` (`requantize`) | 1 | **4** |
+| `OS_LAT` (`out_stage`) | 2 | **5** |
+| `GAP_CYC` | 4 (literal) | **`OS_LAT`** = 5 |
+| `pw_feeder` drain | 7 (literal, 3-bit) | **11** (derived, 4-bit) |
+| `dw_feeder` drain | 7 (literal, 3-bit) | **11** (derived, 4-bit) |
+| `stem_feeder` drain | 15 (literal, 4-bit) | **12** (derived, 4-bit) |
+| `res_feeder` drain | 6 (literal, 3-bit) | **5** (derived) |
+| `gap_feeder` drain | 7 (literal, 3-bit) | **6** (derived) |
+| Feeder input → writeback | pw 4, dw 4, res 4, gap 4, stem 9 | pw **12**, dw **12**, res **7**, gap **7**, stem `OCT_WR`+1 |
+
+Unchanged throughout: `TM=32`, `TN=16`, `TC=16`, `TS=8`, `ACC_W=26`, `SEL_W=1`, and every
+golden vector. All 31 testbenches pass at each phase boundary, including `accel_tb` at
+6,895,780 elements bit-exact over 64 ops — which is the only reason the table above is
+believable: not one of these numbers changed a value, only when it arrives.

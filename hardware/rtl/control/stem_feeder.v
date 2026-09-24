@@ -87,7 +87,13 @@ module stem_feeder #(
     // Latency of the shared out_stage, which lives in accel_top: acc_valid to
     // q_valid. A PARAMETER because this module's oc_tile tag and drain are both
     // sized from it and out_stage is not instantiated here.
-    parameter OS_LAT  = 2
+    // Default is the REAL value, not a placeholder. It was 2 while requantize
+    // was one register; L-3 made it 5, and the standalone testbenches
+    // instantiate this module directly and take the default - so a stale
+    // default is not a cosmetic issue, it silently desynchronises this feeder
+    // from the out_stage sitting next to it. dw_datapath_tb caught exactly that
+    // via the C-2 witness: a 3-cycle gap showed up as a 3-pixel shift.
+    parameter OS_LAT  = 5
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -156,7 +162,7 @@ module stem_feeder #(
     //  layer_done can coincide with the end of a sweep but never its middle.
     //  After `sweeping` drops, the longest anything is still in flight is the
     //  array, the requantize stage, and the one cycle wr_go adds.
-    localparam DRAIN_CYC = ST_LAT + OS_LAT + 1;     // 9
+    localparam DRAIN_CYC = ST_LAT + OS_LAT + 1;     // 12 at OS_LAT=5
     localparam DRAIN_W   = clog2(DRAIN_CYC + 1);    // 4
 
     // ================= stage 0 : the raster walk ========================
