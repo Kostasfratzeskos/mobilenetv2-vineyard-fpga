@@ -792,3 +792,126 @@ argmax over the 4 int16 logits is the predicted class.
   enough pipeline registers after wide multiplier. Recommended levels of pipeline registers
   is 2` note appears once per requantize lane today, and L-3 adds exactly those registers -
   so the requantize DSP count may move on its own).
+
+
+### DD-022 - A-1/A-3: where to put the register that breaks the activation broadcast
+- Status: **PROPOSED** - awaiting approval, nothing implemented
+- Date: 2026-09-24
+- Context: A-1 says `pe_array`/`dw_array`/`stem_array` have "no pipeline stage and no port to
+  add one", that the 128-bit broadcast has "fanout 32 per bit, unregistered, across ~30% of
+  the device's DSP columns", and that post-route route delay grew 1.892 -> 5.144 ns. Its
+  recommendation is to "split lanes into groups with a registered broadcast chain (a and
+  controls delayed one cycle per group), then de-skew accumulators on the way out", and it
+  notes this contradicts `pe_array`'s "structural wiring only" constraint - an architecture
+  decision. A-3 is the consequence: lane 0 would finish G-1 cycles early, so `done` must come
+  from the last group.
+
+- **The measurement A-1 predates.** After Phase 2d the worst post-route path at 4.000 ns is
+  the activation read feeding a MAC product, WNS -2.126, and all 25 reported worst paths are
+  that one path. Decomposed from the routed timing report:
+
+  | segment | delay | share |
+  |:--|--:|--:|
+  | `act_buffer` URAM cascade, 8 x URAM288 (1.318 launch + 7 x 0.194 `CAS_OUT_DOUT_A`) | 2.682 ns | 44% |
+  | `sel_q` half-entry mux (one LUT5) + the route into it | 0.700 ns | 12% |
+  | **activation broadcast - ONE net, fanout 115, pure route** | **1.279 ns** | **21%** |
+  | DSP48E2 multiply, A pin -> ALU_OUT, AREG transparent | 1.405 ns | 23% |
+  | | **6.066 ns** | (= the report's Data Path Delay) |
+
+  Required time is 4.023 ns, so 2.126 ns has to come out.
+
+- **A-1's diagnosis is confirmed; its arithmetic no longer is.** The broadcast is real and it
+  is on the critical path - 1.279 ns of pure route on a single net at fanout 115, which is the
+  second-largest term. But it is not the largest: the URAM cascade is. Removing the broadcast
+  delay ENTIRELY would leave 4.79 ns and still miss 4.000 ns. A-1 is necessary and not
+  sufficient, and the sufficient part is not among the review's 43 findings (see DD-023).
+
+  Also worth correcting for the record: the fanout is 115 on this net, not the "32 per bit"
+  the finding describes. `a` is signed int8 sign-extended into a 27-bit DSP A port, so the
+  high bits of one activation byte drive many A-port bits per lane as well as many lanes.
+
+- **Three places the register could go**, with the measured budget for each. Every option adds
+  exactly one cycle to the `a` path, so `MAC_LAT` goes 6 -> 7 and `TAG_LAT` and `DRAIN_CYC`
+  follow from it - one `localparam`, per docs/latency_map.md's rule.
+
+  | | where the register goes | stage 1 | stage 2 | closes 4.023? |
+  |:--|:--|--:|--:|:--|
+  | **A** | G groups down a chain, per A-1 | URAM+mux+bcast/G | ... | needs G tuning |
+  | **B** | ONE 128-bit register on `a` at `pe_array`'s input | 3.382 ns | 2.684 ns | **yes, both** |
+  | **C** | per-lane, absorbed into the DSP's own AREG/BREG | 4.661 ns | 1.405 ns | no |
+
+  - **B** splits the path exactly where the delay is: URAM cascade + mux on one side (3.382 ns),
+    broadcast route + DSP multiply on the other (2.684 ns). Both sides fit under 4.023 ns with
+    margin. Cost is 128 flip-flops plus the three control bits, and `pe_array` stops being
+    "structural wiring only" by one register rather than by a grouped chain.
+  - **C** looks attractive because DD-020 made reset synchronous precisely so the DSPs could
+    absorb registers, and DPIR-2 is 0 - so a lane-input register should cost zero fabric. But
+    it puts the register on the WRONG SIDE of the broadcast: the 1.279 ns route stays with the
+    URAM cascade and stage 1 is 4.661 ns. It fails on this path.
+  - **A** is B generalised to G groups. It only buys something if, after B, the broadcast route
+    ALONE still does not fit - and after B the broadcast shares its stage only with the DSP
+    multiply, at 2.684 ns total. There is no measured need for it today.
+
+- **Recommendation: implement B, and treat A as contingent.** B satisfies A-1's intent - the
+  broadcast is registered and no longer shares a stage with the memory read - at one register
+  instead of a grouped chain with accumulator de-skew.
+
+  **A-3 then does not fire at all.** Every lane still sees the same `valid`/`first`/`last` one
+  cycle later, so the lockstep invariant behind lane-0 `done` holds unchanged, and the Phase 2a
+  lockstep check will confirm it rather than fail. A-3 reduces to the header paragraph in
+  `pe_array.v` that currently says "A-1 will deliberately BREAK this invariant" - which, under
+  B, becomes wrong and needs rewriting. That is the whole of A-3 under this option.
+
+- **What this proposal does NOT claim.** The budget above is one path. Fixing it makes something
+  else critical - most likely the weight path into the DSP B port, which has the same shape
+  (`wgt_buffer` read -> per-lane B pins) but was never the worst path and so has never been
+  decomposed. The estimate for stage 1 and stage 2 assumes routing no worse than today's for
+  segments that are not moving, which is an assumption about the placer, not arithmetic. The
+  only honest claim is: B is the cheapest change that removes the measured 1.279 ns broadcast
+  from the memory-read stage, and whether the design then reaches 250 MHz is the next
+  measurement.
+
+- Consequences if accepted: `pe_array` gains `clock`, `rst_n` and a registered `a`/control
+  input (A-2's shape, one level up, and the same argument - a latency that is a wire the
+  feeder connects rather than a number it asserts); `MAC_LAT` 6 -> 7 with `TAG_LAT` 8 and
+  `pw_feeder`'s `DRAIN_CYC` 12, all derived; `dw_array` and `stem_array` get the same
+  treatment only if measurement says their broadcasts are critical, which today it does not;
+  `pe_array.v`'s A-1/A-3 header paragraph is rewritten to describe what was built.
+
+### DD-023 - The `act_buffer` URAM cascade, which is the largest term and is not in the review
+- Status: **PROPOSED** - awaiting approval; conditional on DD-022's outcome
+- Date: 2026-09-24
+- Context: not one of the 43 findings. It entered the project as a synthesis warning noted in
+  docs/latency_map.md before Phase 2 started, on the grounds that it might have to change and
+  should not be discovered mid-phase:
+
+      WARNING: [Synth 8-6057] Memory: "mem_reg" defined in module: "u_act" implemented as
+      Ultra-Ram has no pipeline registers. It is recommended to use pipeline registers to
+      achieve high performance.
+
+  It is still emitted, twice, after Phase 2d.
+
+- Measured: it is now the single largest contributor to the worst path - 2.682 ns of 6.066 ns
+  (44%). `act_buffer` is a 256-bit x 65,536-entry array with `ram_style = "ultra"` and one
+  output register (`dout <= mem[rd_addr]`). Vivado builds the depth as a `CAS_OUT_DOUT_A`
+  cascade and the worst path walks EIGHT URAM288 tiles: one 1.318 ns launch plus seven 0.194 ns
+  cascade hops, all inside one clock cycle.
+
+- The fix is the URAM output pipeline register the warning asks for, i.e. read latency 1 -> 2.
+  That is a latency change of the same class as L-1 and L-3: it moves **every feeder's stage-1
+  delay** (`v_d`, `v_d1`) and every tag pipeline behind it, in five feeders. It is not a
+  one-module edit.
+
+- **Why this is PROPOSED and not scheduled.** Under DD-022 option B the URAM cascade plus the
+  `sel_q` mux becomes a stage of its own at 3.382 ns, which fits under the 4.023 ns
+  requirement. If that holds when measured, this change is NOT needed for 250 MHz and its cost
+  - a latency change across five feeders - buys only margin. The correct order is therefore:
+  implement DD-022 B, measure, and open this only if stage 1 does not close or if the margin
+  is judged too thin. Doing both at once would also make it impossible to attribute whichever
+  result comes back.
+
+- Consequences if accepted: `act_buffer` read latency 1 -> 2; `v_d`/`v_d1` and every tag
+  pipeline in `pw_feeder`, `dw_feeder`, `stem_feeder`, `res_feeder` and `gap_feeder` grow by
+  one, all derived from one parameter the way `OS_LAT` is; `line_buffer`'s and `wgt_buffer`'s
+  alignment against the activation path must be re-checked, since only ONE of the two operands
+  would get slower.
