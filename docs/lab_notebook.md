@@ -1348,3 +1348,45 @@ wrote quant_scales.json  (53 layers)
     top_seq non-serial, and op_busy, ld_done, ld_pchan and C-3 were ALL fixed in this review on
     the assumption of serial execution. It would test every one of them at once.
 - Blocked on: DD-027, DD-028, DD-029 approval. Nothing else.
+
+### 2026-09-24 (final) - the measured end state
+- Final post-route at 4.000 ns, after Phase 5:
+
+      baseline    -18.821    43.8 MHz   34,834 LUT       -      944 DSP   DPIR-2 10,940
+      Phase 1     -18.463    44.5 MHz   34,957 LUT       -      944 DSP   DPIR-2 10,940
+      DD-020      -18.282    44.8 MHz   32,919 LUT       -      976 DSP   DPIR-2 0
+      2a          -16.411    49.0 MHz   29,935 LUT       -      944 DSP
+      2b          -16.569    49.3 MHz   31,348 LUT       -      944 DSP
+      2c           -2.701   149.2 MHz   41,264 LUT  13,992 FF   944 DSP
+      2d           -2.126   163.2 MHz   34,062 LUT  18,243 FF   944 DSP
+      3            -1.587   179.0 MHz   34,168 LUT  19,716 FF   944 DSP
+      4            -0.951   202.0 MHz   34,491 LUT  19,750 FF   944 DSP
+      5 (final)    -1.044   198.3 MHz   35,181 LUT  20,004 FF   944 DSP   DPIR-2 0
+
+  Also final: 178/312 BRAM (57%), 52/96 URAM (54%), 944/1728 DSP (54.6%).
+- **4.5x the Fmax this review started from**, for +347 LUTs over the Phase 0 baseline and the
+  SAME 944 DSPs at every measured point after DD-021.
+- Phase 5 reads 3.7 MHz BELOW Phase 4, and that difference means nothing: both runs have the
+  identical worst path (the act_buffer URAM cascade), and Phase 3 -> 4 swung +23 MHz on placement
+  alone with no timing-directed change in it. The band this design sits in is ~198-202 MHz; the
+  honest statement is that Phases 4 and 5 were timing-neutral, which is what correctness work
+  should be.
+- Final worst path, unchanged in character since Phase 3:
+
+      u_act/mem_reg_1_uram_13/CLK -> u_pwf/u_array/lane[24].u_lane/prod_reg[12]/.../A[23]
+      4.683 ns (logic 2.711, route 1.972), 8 logic levels
+
+  Still `act_buffer`'s URAM read. DD-023 is the analysis and it is Deferred by decision.
+- One claim I cannot support from the data: C-7's narrowed decoders. stem_feeder is 5,204 LUTs
+  now against 4,922 at Phase 3 and 8,968 at review time - it went UP slightly this phase, because
+  C-3's shape latches and C-8's guards landed in the same module. The big reduction happened in
+  2c/2d as a side effect of pipelining, not from C-7. C-7 is still right about the index being
+  four times wider than reachable; I just cannot show a saving for it here.
+- Where the review stands: 34 fixed, 2 closed as documented deviations (L-6, L-13), 1 closed by
+  decision with nothing deleted (L-11), 3 awaiting approval (T-6, T-8, C-11 - DD-027/028/029,
+  all three recommended AGAINST what the review suggests), and 1 deferred by decision (the
+  clock, DD-023).
+- Three things were found that the review does not contain: the act_buffer URAM cascade, the
+  Python-vs-implementations intermediate clamp in the residual path, and the stale
+  software/golden/image_1 set whose MISSING checkpoint hash walked past the guard written to
+  catch exactly that. The third is the one I would fix first in any future review.
