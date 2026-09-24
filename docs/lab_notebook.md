@@ -1059,3 +1059,54 @@ wrote quant_scales.json  (53 layers)
 - Next: Phase 2c - conv3x3_std, stem_array, stem_feeder. This is the one that matters for the
   clock: the worst path has been `u_stem/.../acc26` -> `u_os/acc_q` in every run since Phase
   0, 27 unregistered DSP_ALU levels and 19.2 of the 20.4 ns.
+
+### 2026-09-24 (later) - Phase 2c: conv3x3_std pipelined, and 43.8 -> 149.2 MHz
+- Did: L-1, L-2, L-9 in `conv3x3_std`, ports on `stem_array`, and everything in `stem_feeder`
+  that encoded the old zero latency. The last of the three MAC kernels and the one that has
+  been the worst path in every run of this project.
+- Tests: all 31 pass. `accel_tb` bit-exact at 6,895,780 elements, `stem_datapath` at 405,568,
+  `stem_layer` 17,920, `conv3x3_std` 25 cases, `stem_array` 304 lane-checks.
+- **The number the whole review was built toward**, post-route at 4.000 ns:
+
+      baseline    -18.821   43.8 MHz   34,834 LUT   944 DSP   DPIR-2 10,940
+      Phase 1     -18.463   44.5 MHz   34,957 LUT   944 DSP   DPIR-2 10,940
+      DD-020      -18.282   44.8 MHz   32,919 LUT   976 DSP   DPIR-2 0
+      2a          -16.411   49.0 MHz   29,935 LUT   944 DSP
+      2b          -16.569   49.3 MHz   31,348 LUT   944 DSP
+      2c           -2.701  149.2 MHz   41,264 LUT   944 DSP   DPIR-2 0
+
+  3.4x the Fmax the project started this review with, for 6,430 LUTs and 7,129 flip-flops
+  over the baseline, and the SAME 944 DSPs. Area went UP only in 2c, and only because the
+  stem's 8 lanes of 32-leaf tree are real logic - 2a actually reduced LUTs below the
+  unpipelined baseline.
+- **The critical path has left the MAC kernels**, which is the structural result rather than
+  the number. At synthesis it is `u_os/u_param/.../dout_reg` -> `u_os/u_rq/.../quantized_reg`,
+  and post-route `u_pwf/u_array/lane[2].u_lane/acc_reg` -> `u_log/cls[2].u_r/quantized_reg`.
+  Both are the REQUANTIZE datapath. L-3 said exactly this - "becomes critical once L-1 is
+  fixed" - and it is now measured rather than predicted. Of the ten worst synthesis paths,
+  none is a MAC cascade any more.
+- And T-8 is now load-bearing rather than tidy. The post-route worst path ends in
+  `logit_out`'s requantize, not out_stage's: the finding's complaint is that logit_out
+  duplicates the requantize datapath out_stage exists to eliminate, "inherits L-3's timing
+  problem", and that no shared testbench covers it. It is on the critical path, so L-3 has to
+  fix it in both copies or fix it in one and delete the other.
+- Two deviations from the review's cross-cutting table, both by measurement:
+  - **`win_q`, the sweep timing and `wa_oct`'s weight lead did NOT move.** The table lists all
+    three. The weights have to meet the window at the array's INPUT, which nothing behind the
+    input moves; and the sweep is still n_oct cycles because the array accepts one oc_tile per
+    cycle, so pipelining it moved the results further away without slowing the stall. Phase
+    1's C-1 assertion would have fired if the stall timing had slipped.
+  - **The C-2 witness needed a change of SHAPE, not depth.** Phase 1 held the coordinates from
+    the win_q latch and copied them at entry_done, which worked while that distance was
+    n_oct + OS_LAT = 6 cycles. At ST_LAT = 6 it is 12, while the next window can be latched 3
+    cycles after the sweep ends - so the hold is wrong, not merely short. The coordinates now
+    ride the same shift register as the oc_tile tag, which makes them correct by construction
+    at any array latency. A hold that happens to be long enough is the exact class of thing
+    this phase is about.
+- The stem drain got SMALLER, 15 -> 9, where every other drain grew: the old value was a
+  guess with slack, and `busy` already covers the sweep through `sweeping`.
+- Blocked on: nothing.
+- Next: Phase 2d - L-3 and L-7 in requantize, which is now the critical path, plus rq_bank's
+  q_valid depth, every feeder's tag depths and drains, GAP_CYC derived, logit_out's lv, and
+  L-10 in avgpool. The last latency sub-step, and the one aimed at the module that is now the
+  bottleneck.
