@@ -2,9 +2,16 @@
 //============================================================================
 //  dwconv3x3_tb.sv  -  self-checking testbench for rtl/kernels/dwconv3x3.v
 //
-//  dwconv3x3 is a pure combinational 9-tap MAC, so no clock: build a 3x3
-//  window + 3x3 kernel, pack them into the flat port vectors, and compare the
-//  accumulator against an independent reference sum.
+//  dwconv3x3 is a PIPELINED 9-tap MAC since L-1: one registered product stage
+//  plus clog2(9) = 4 adder-tree levels, so DW_LAT = 5 and it has a clock. Build a
+//  3x3 window + 3x3 kernel, pack them into the flat port vectors, hold them for
+//  the pipeline to fill, and compare the accumulator against an independent
+//  reference sum.
+//
+//  The window is HELD while the pipeline drains, which is what the real feeder
+//  does too: line_buffer only updates its output when it is fed, so a held
+//  window propagating through a free-running tree is the normal case, not a
+//  special one.
 //
 //  Coverage:
 //    - directed: zero, all max +/-, single tap, known small
@@ -21,14 +28,26 @@ module dwconv3x3_tb;
     localparam NT     = K*K;      // 9 taps
     localparam ACC_W  = 26;
 
+    // L-1: one registered product stage + clog2(NT) tree levels. Derived here
+    // the same way the DUT derives it, so a change to one shows up as a
+    // mismatch rather than as a wrong number.
+    localparam LEVELS = $clog2(NT);          // 4
+    localparam DW_LAT = 1 + LEVELS;          // 5
+
+    logic                     clock, rst_n;
     logic [NT*DATA_W-1:0]     win_v, wk_v;
     wire  signed [ACC_W-1:0]  acc;
 
     dwconv3x3 #(.DATA_W(DATA_W), .K(K), .ACC_W(ACC_W)) dut (
-        .win (win_v),
-        .wk  (wk_v),
-        .acc (acc)
+        .clock (clock),
+        .rst_n (rst_n),
+        .win   (win_v),
+        .wk    (wk_v),
+        .acc   (acc)
     );
+
+    initial clock = 1'b0;
+    always #5 clock = ~clock;
 
     integer total = 0;
     integer fails = 0;
@@ -48,7 +67,9 @@ module dwconv3x3_tb;
                 wk_v [i*DATA_W +: DATA_W] = g[i];
                 expected += longint'(a[i]) * longint'(g[i]);
             end
-            #1;                                  // settle combinational logic
+            // hold the window while the pipeline fills: DW_LAT edges, then read
+            repeat (DW_LAT) @(posedge clock);
+            @(negedge clock);
             total++;
             if (acc !== ACC_W'(expected)) begin
                 fails++;
@@ -69,6 +90,12 @@ module dwconv3x3_tb;
 
     integer i, n;
     initial begin
+        win_v = '0; wk_v = '0;
+        rst_n = 1'b0;
+        repeat (2) @(negedge clock);
+        rst_n = 1'b1;
+        @(negedge clock);
+
         $display("directed cases:");
 
         fill_win(0);  fill_ker(0);              run_case("all zero");

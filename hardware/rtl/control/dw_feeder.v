@@ -90,7 +90,12 @@ module dw_feeder #(
     parameter BANK_W  = 4,      // clog2(TC), for the weight banks
     parameter POOL_BANK_W = 5,  // clog2(POOL_TM), for the shared param banks
     parameter WDEPTH  = 64,
-    parameter PDEPTH  = 64
+    parameter PDEPTH  = 64,
+
+    // Latency of the shared out_stage, which lives in accel_top: acc_valid to
+    // q_valid. A PARAMETER because this module's writeback tag and drain are
+    // both sized from it and out_stage is not instantiated here.
+    parameter OS_LAT  = 2
 )(
     input  wire                      clock,
     input  wire                      rst_n,
@@ -140,6 +145,33 @@ module dw_feeder #(
 );
 
     localparam NT = K*K;
+
+    // ---- the latencies this module is defined against -------------------
+    //  DW_LAT is dw_array's, restated from the same inputs it derives it from -
+    //  one registered product stage plus clog2(K*K) adder-tree levels, and no
+    //  accumulate stage, because a depthwise window completes in one pass. The
+    //  simulation check at the bottom MEASURES the real distance from win_valid
+    //  to the array's valid_out and fails if the two disagree, which is what
+    //  makes restating it safe rather than a second opinion.
+    function integer clog2;
+        input integer value;
+        integer v;
+        begin
+            v = value - 1;
+            for (clog2 = 0; v > 0; clog2 = clog2 + 1) v = v >> 1;
+        end
+    endfunction
+
+    localparam DW_LAT = 1 + clog2(NT);          // 5 at K=3
+
+    //  Every depth in this module, in one place and all derived from DW_LAT and
+    //  OS_LAT. They are declared together because they move together - that is
+    //  the whole content of docs/latency_map.md's checklist for this feeder.
+    localparam GRP_ARR   = 2 + DW_LAT;              // counters -> array output
+    localparam GRP_WR    = GRP_ARR + OS_LAT;        //          -> q_valid
+    localparam WIT_LAT   = DW_LAT + OS_LAT;         // C-2 witness, win_valid ->
+    localparam DRAIN_CYC = 1 + DW_LAT + OS_LAT;     // layer_done -> last write
+    localparam DRAIN_W   = clog2(DRAIN_CYC + 1);
 
     // ================= stage C : the three counters =====================
     reg [GRPW-1:0] grp;
@@ -245,58 +277,79 @@ module dw_feeder #(
         .rd_en(v_d1), .rd_addr(grp_d1[WA_W-1:0]), .rd_data(wk)
     );
 
-    // ================= stage C+2 : the array and requantize =============
-    reg [GRPW-1:0] grp_d2;
-    always @(posedge clock)
-        if (!rst_n) grp_d2 <= {GRPW{1'b0}};
-        else        grp_d2 <= grp_d1;
+    // ================= the array, and the group tag beside it ============
+    //
+    //  The group index used to be three named registers - grp_d2 aligned with a
+    //  COMBINATIONAL array, grp_d3 and grp_d4 walking it out to the writeback.
+    //  dw_array is a DW_LAT-stage pipeline now (L-1), so the two points that
+    //  need a tag are further away and further apart:
+    //
+    //      grp_sr[GRP_ARR-1]  aligned with the array's `valid_out`, which is
+    //                         what selects the accumulator half and addresses
+    //                         the parameter banks
+    //      grp_sr[GRP_WR-1]   aligned with out_stage's q_valid, which is the
+    //                         write
+    //
+    //  Both indices are DERIVED from DW_LAT and OS_LAT, so they move when the
+    //  array or the requantize stage does. That is the whole point of
+    //  docs/latency_map.md: grp_d4 was a name, GRP_WR is an expression.
+    reg [GRPW-1:0] grp_sr [0:GRP_WR-1];
+
+    integer gs;
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            for (gs = 0; gs < GRP_WR; gs = gs + 1) grp_sr[gs] <= {GRPW{1'b0}};
+        end else begin
+            grp_sr[0] <= grp_d1;
+            for (gs = 1; gs < GRP_WR; gs = gs + 1) grp_sr[gs] <= grp_sr[gs-1];
+        end
+    end
+
+    wire [GRPW-1:0] grp_arr = grp_sr[GRP_ARR-2];   // grp_sr[0] is already 2 deep
+    wire [GRPW-1:0] grp_wr  = grp_sr[GRP_WR-2];
 
     wire [TC*ACC_W-1:0] acc;
+    wire                arr_valid;
 
     dw_array #(.DATA_W(DATA_W), .TC(TC), .K(K), .ACC_W(ACC_W)) u_arr (
-        .win(win), .wk(wk), .acc(acc)
+        .clock(clock), .rst_n(rst_n),
+        .valid(win_valid),
+        .win(win), .wk(wk),
+        .acc(acc), .valid_out(arr_valid)
     );
 
     // Place the TC accumulators in the half of the 32-lane bus that matches this
     // group, so the parameter banks and the half write line up without any
     // rotation - see the header.
     wire [POOL_TM*ACC_W-1:0] acc_wide =
-        grp_d2[0] ? {acc, {TC*ACC_W{1'b0}}} : {{TC*ACC_W{1'b0}}, acc};
+        grp_arr[0] ? {acc, {TC*ACC_W{1'b0}}} : {{TC*ACC_W{1'b0}}, acc};
 
     // Size the parameter address EXACTLY to the port. A narrower expression on
     // a wider input port leaves the top bits undriven in xsim, and mem[X] reads
     // X - which is what a whole word of xxxx turned out to be.
     wire [PA_W-1:0] param_addr_w =
-        {{(PA_W-GRPW+1){1'b0}}, grp_d2[GRPW-1:1]};
+        {{(PA_W-GRPW+1){1'b0}}, grp_arr[GRPW-1:1]};
 
     // The requantize stage itself is in accel_top; this drives it.
     assign os_acc        = acc_wide;
-    assign os_acc_valid  = win_valid;
+    // A-2, and this is the line the finding is about. It used to be
+    // `assign os_acc_valid = win_valid;` - correct only while dw_array was
+    // combinational, and wrong by DW_LAT cycles the moment it was not, with no
+    // width mismatch and no elaboration error to say so. It is a WIRE from the
+    // array's own valid output now, so the latency cannot be asserted wrongly:
+    // it is whatever the array says it is.
+    assign os_acc_valid  = arr_valid;
     assign os_param_addr = param_addr_w;
 
     wire [POOL_TM*DATA_W-1:0] q       = os_q;
     wire                      q_valid = os_q_valid;
 
-    // ================= stage C+4 : writeback ============================
-    // out_stage registers the accumulators before requantizing, so the result
-    // lands one cycle later than a private rq_bank would have produced it, and
-    // the group index needs one more stage to stay with it.
-    reg [GRPW-1:0] grp_d3, grp_d4;
-    always @(posedge clock) begin
-        if (!rst_n) begin
-            grp_d3 <= {GRPW{1'b0}};
-            grp_d4 <= {GRPW{1'b0}};
-        end else begin
-            grp_d3 <= grp_d2;
-            grp_d4 <= grp_d3;
-        end
-    end
-
+    // ================= writeback =========================================
     reg [AA_W-1:0] opix_off;
     reg [GRPW-1:0] grp_wr_prev;
     reg            wrote_any;
 
-    wire new_grp_wr = !wrote_any || (grp_d4 != grp_wr_prev);
+    wire new_grp_wr = !wrote_any || (grp_wr != grp_wr_prev);
     wire [AA_W-1:0] cur_off = new_grp_wr ? {AA_W{1'b0}} : opix_off;
 
     always @(posedge clock) begin
@@ -306,15 +359,15 @@ module dw_feeder #(
             opix_off <= {AA_W{1'b0}}; wrote_any <= 1'b0;
         end else if (q_valid) begin
             opix_off    <= cur_off + n_ent;
-            grp_wr_prev <= grp_d4;
+            grp_wr_prev <= grp_wr;
             wrote_any   <= 1'b1;
         end
     end
 
     assign aw_en   = q_valid;
     assign aw_full = (TC == POOL_TM);           // constant: 0 for TC=16
-    assign aw_sel  = grp_d4[SEL_W-1:0];
-    assign aw_addr = base_out + {{(AA_W-GRPW+1){1'b0}}, grp_d4[GRPW-1:1]} + cur_off;
+    assign aw_sel  = grp_wr[SEL_W-1:0];
+    assign aw_addr = base_out + {{(AA_W-GRPW+1){1'b0}}, grp_wr[GRPW-1:1]} + cur_off;
     // q already carries the results in the half wr_sel will store, so it goes
     // straight through - the replication convention is not needed here.
     assign aw_data = q;
@@ -339,6 +392,42 @@ module dw_feeder #(
     //  walks img_w+1 input columns and line_buffer emits a window on every
     //  second centre at stride 2.
 `ifndef SYNTHESIS
+    // ---- DW_LAT is restated here, so MEASURE it (L-1, A-2) --------------
+    //  This module computes DW_LAT from K with the same arithmetic dw_array
+    //  uses, and its group tag, its witness depth and its drain are all sized
+    //  from the result. A-2's whole point is that a wrong answer here has no
+    //  width mismatch and no elaboration error, so time the real thing: the
+    //  distance from `win_valid` going into the array to `arr_valid` coming out.
+    //  One measurement per layer, then stop.
+    reg [7:0] lat_cnt;
+    reg       lat_arm, lat_seen;
+    always @(posedge clock) begin
+        if (!rst_n || start) begin
+            lat_arm  <= 1'b0;
+            lat_seen <= 1'b0;
+            lat_cnt  <= 8'd0;
+        end else if (!lat_seen) begin
+            if (!lat_arm) begin
+                if (win_valid) begin
+                    lat_arm <= 1'b1;
+                    lat_cnt <= 8'd1;
+                end
+            end else if (arr_valid) begin
+                lat_seen <= 1'b1;
+            end else begin
+                lat_cnt <= lat_cnt + 8'd1;
+            end
+        end
+    end
+
+    always @(posedge clock) begin
+        if (rst_n && lat_arm && !lat_seen && arr_valid && (lat_cnt != DW_LAT[7:0])) begin
+            $display("ERROR: %m L-1/A-2 dw_array answered %0d cycles after the window entered it, but this module's DW_LAT says %0d at time %0t. The group tag (arr %0d, wr %0d), the C-2 witness (%0d) and the drain (%0d) are all sized from DW_LAT, so they are wrong too.",
+                     lat_cnt, DW_LAT, $time, GRP_ARR, GRP_WR, WIT_LAT, DRAIN_CYC);
+            $finish;
+        end
+    end
+
     //  Alignment, which is the whole difficulty and worth writing down because
     //  Phase 2 will have to redo it: out_x/out_y are line_buffer OUTPUTS, valid
     //  in the same cycle as win_valid. grp_d2 is a delayed copy of a signal from
@@ -348,16 +437,31 @@ module dw_feeder #(
     //  counting from grp. Getting this wrong is what the check itself caught on
     //  its first run: it reported the counter at pixel 1 against a witness at
     //  pixel 0, which is a lagging witness, not a wrong address.
-    reg [XW-1:0] ox_q, oy_q, ox_w, oy_w;
+    //  The witness depth moves with the array, exactly like the group tag: it
+    //  was two registers when dw_array was combinational and is DW_LAT + OS_LAT
+    //  now. Capturing a line_buffer OUTPUT already costs one of them, which is
+    //  the off-by-one this check caught on its first run in Phase 1.
+    reg [XW-1:0] ox_sr [0:WIT_LAT-1];
+    reg [XW-1:0] oy_sr [0:WIT_LAT-1];
+
+    integer ws;
     always @(posedge clock) begin
         if (!rst_n) begin
-            ox_q <= {XW{1'b0}}; oy_q <= {XW{1'b0}};
-            ox_w <= {XW{1'b0}}; oy_w <= {XW{1'b0}};
+            for (ws = 0; ws < WIT_LAT; ws = ws + 1) begin
+                ox_sr[ws] <= {XW{1'b0}};
+                oy_sr[ws] <= {XW{1'b0}};
+            end
         end else begin
-            if (win_valid) begin ox_q <= out_x; oy_q <= out_y; end
-            ox_w <= ox_q; oy_w <= oy_q;      // now aligned with q_valid
+            if (win_valid) begin ox_sr[0] <= out_x; oy_sr[0] <= out_y; end
+            for (ws = 1; ws < WIT_LAT; ws = ws + 1) begin
+                ox_sr[ws] <= ox_sr[ws-1];
+                oy_sr[ws] <= oy_sr[ws-1];
+            end
         end
     end
+
+    wire [XW-1:0] ox_w = ox_sr[WIT_LAT-1];   // aligned with q_valid
+    wire [XW-1:0] oy_w = oy_sr[WIT_LAT-1];
 
     // output geometry, from the input shape and the stride
     wire [XW-1:0] out_w_e = stride2 ? ((img_w + 1'b1) >> 1) : img_w;
@@ -396,12 +500,23 @@ module dw_feeder #(
     // The counters finish three stages before the last result is written, so
     // `busy` has to outlive them or the caller would start the next layer on
     // top of results still in flight - the same constraint pw_feeder documents.
-    reg [2:0] drain;
+    //  ---- the drain is DERIVED now (L-1) -----------------------------
+    //  It used to be the literal 3'd7, chosen with slack while dw_array was
+    //  combinational. Counting from the cycle `layer_done` is high, which is one
+    //  cycle after the last counter step:
+    //
+    //      +1          ... line_buffer emits that pixel's window (win_valid)
+    //      +DW_LAT     ... dw_array's valid_out for it
+    //      +OS_LAT     ... out_stage's q_valid, i.e. the write
+    //
+    //  `busy` is high during the layer_done cycle and for `drain` cycles after
+    //  it, so DRAIN_CYC = 1 + DW_LAT + OS_LAT covers exactly to the last write.
+    reg [DRAIN_W-1:0] drain;
     always @(posedge clock) begin
-        if (!rst_n)              drain <= 3'd0;
-        else if (start)          drain <= 3'd0;
-        else if (layer_done)     drain <= 3'd7;
-        else if (drain != 3'd0)  drain <= drain - 3'd1;
+        if (!rst_n)          drain <= {DRAIN_W{1'b0}};
+        else if (start)      drain <= {DRAIN_W{1'b0}};
+        else if (layer_done) drain <= DRAIN_CYC[DRAIN_W-1:0];
+        else if (drain != {DRAIN_W{1'b0}}) drain <= drain - 1'b1;
     end
 
     // `layer_done` is in here for a reason that only shows up at the top level.
@@ -412,7 +527,7 @@ module dw_feeder #(
     // op's weight load while this one still had its whole drain to go. Found by
     // accel_tb; invisible to a standalone testbench, which waits on layer_done
     // rather than on busy falling.
-    assign busy = run || layer_done || (drain != 3'd0);
+    assign busy = run || layer_done || (drain != {DRAIN_W{1'b0}});
 
 endmodule
 

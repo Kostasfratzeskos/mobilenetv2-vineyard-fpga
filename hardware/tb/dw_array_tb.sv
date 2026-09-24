@@ -32,13 +32,27 @@ module dw_array_tb;
     localparam NT     = K*K;
     localparam ACC_W  = 26;
 
+    // L-1 / A-2: the array is a DW_LAT-stage pipeline now and says so in its
+    // port list. Derived here the same way it derives it, then MEASURED via
+    // valid_out below - which is the whole point of A-2, since a wrong latency
+    // used to have no width mismatch and no elaboration error.
+    localparam LEVELS = $clog2(NT);          // 4
+    localparam DW_LAT = 1 + LEVELS;          // 5
+
+    logic clock, rst_n;
+    initial clock = 1'b0;
+    always #5 clock = ~clock;
+
     // ---- DUT ---------------------------------------------------------------
+    logic                    valid;
     logic [NT*TC*DATA_W-1:0] win;
     logic [TC*NT*DATA_W-1:0] wk;
-    wire  [TC*ACC_W-1:0]     acc;
+    wire  signed [TC*ACC_W-1:0] acc;
+    wire                     valid_out;
 
     dw_array #(.DATA_W(DATA_W), .TC(TC), .K(K), .ACC_W(ACC_W)) u_dut (
-        .win(win), .wk(wk), .acc(acc)
+        .clock(clock), .rst_n(rst_n), .valid(valid),
+        .win(win), .wk(wk), .acc(acc), .valid_out(valid_out)
     );
 
     // ---- oracle 2: one dwconv3x3, driven channel by channel ---------------
@@ -46,6 +60,7 @@ module dw_array_tb;
     wire  signed [ACC_W-1:0] s_acc;
 
     dwconv3x3 #(.DATA_W(DATA_W), .K(K), .ACC_W(ACC_W)) u_single (
+        .clock(clock), .rst_n(rst_n),
         .win(s_win), .wk(s_wk), .acc(s_acc)
     );
 
@@ -69,13 +84,32 @@ module dw_array_tb;
     endtask
 
     task automatic run_case(input string tag);
-        integer c, i, bad_ref, bad_ora;
+        integer c, i, bad_ref, bad_ora, lat;
         longint expd;
         logic signed [ACC_W-1:0] got;
         begin
             bad_ref = 0; bad_ora = 0;
             pack;
-            #1;                                  // settle the combinational net
+            // Pulse `valid` with the window and hold the data while the pipeline
+            // fills, then check that valid_out came back after exactly DW_LAT.
+            @(negedge clock);
+            valid = 1'b1;
+            @(posedge clock);
+            @(negedge clock);
+            valid = 1'b0;
+            lat = 1;
+            while (valid_out !== 1'b1 && lat < 64) begin
+                @(posedge clock); @(negedge clock);
+                lat++;
+            end
+            if (valid_out !== 1'b1) begin
+                fails++;
+                $display("  [ERR] %-18s valid_out never came back", tag);
+            end else if (lat !== DW_LAT) begin
+                fails++;
+                $display("  [ERR] %-18s valid_out came %0d cycles after the window, DW_LAT says %0d",
+                         tag, lat, DW_LAT);
+            end
 
             for (c = 0; c < TC; c++) begin
                 // oracle 1: independent reference
@@ -95,7 +129,9 @@ module dw_array_tb;
                     s_win[i*DATA_W +: DATA_W] = a[c][i];
                     s_wk [i*DATA_W +: DATA_W] = w[c][i];
                 end
-                #1;
+                // the single engine is pipelined too, so hold and wait
+                repeat (DW_LAT) @(posedge clock);
+                @(negedge clock);
                 if (s_acc !== got) begin
                     bad_ora++;
                     if (bad_ora <= 4)
@@ -117,7 +153,11 @@ module dw_array_tb;
 
     integer c, i, n;
     initial begin
-        win = 0; wk = 0; s_win = 0; s_wk = 0;
+        win = 0; wk = 0; s_win = 0; s_wk = 0; valid = 0;
+        rst_n = 1'b0;
+        repeat (2) @(negedge clock);
+        rst_n = 1'b1;
+        @(negedge clock);
 
         $display("dw_array: %0d channels x %0d taps = %0d MACs, ACC_W=%0d",
                  TC, NT, TC*NT, ACC_W);

@@ -22,6 +22,7 @@ Phase 1 changed no latency.
 | Name | Where | Value | What it is |
 |:--|:--|--:|:--|
 | `MAC_LAT` | `mac_lane` | **6** (was 1) | `valid` → `acc` final and `done` high. Now `1 + clog2(TN) + 1`: one registered product stage, `clog2(TN)=4` adder-tree levels, one accumulate stage (**L-1**, Phase 2a). |
+| `DW_LAT` | `dwconv3x3` / `dw_array` | **5** (was 0) | `win`/`valid` → `acc`/`valid_out`. `1 + clog2(K*K)`: one product stage plus 4 tree levels, and **no** accumulate stage — a depthwise window completes in one pass (**L-1**, Phase 2b). |
 | `OS_LAT` | `out_stage` | **2** | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1); `rq_bank`'s `requantize` registers the result (1). **L-3 grows this to 5 in Phase 2d.** |
 
 Both are `localparam`s now, derived rather than written down: `MAC_LAT` from `TN` in
@@ -35,9 +36,11 @@ distance from `v_d && l_d` to `acc_valid` in simulation and fails if it is not `
 and `mac_lane_tb`, `pe_array_tb` and `pw_feeder_tb` each assert the same number as an
 equality rather than a ceiling. That is what stops the formula and the structure drifting.
 
-`dwconv3x3`, `conv3x3_std`, `dw_array` and `stem_array` still have a latency of **0** and no
-clock port at all — Phase 2b and 2c change that. A-2 is the observation that a zero cannot be
-written down in a port list, so making it non-zero has no compile-time witness.
+`conv3x3_std` and `stem_array` still have a latency of **0** and no clock port at all — Phase
+2c changes that. A-2 was the observation that a zero cannot be written down in a port list, so
+making it non-zero has no compile-time witness; `dw_array` now has `clock`, `rst_n`, `valid`
+and `valid_out`, so its latency is a wire the feeder connects rather than an equality the
+feeder asserts.
 
 ---
 
@@ -82,14 +85,21 @@ written down in a port list, so making it non-zero has no compile-time witness.
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
-| `dw_array` has no clock/valid ports | `dw_array.v:47-56` | 0 | **A-2** — the latency is expressed as the *absence* of ports |
-| `assign os_acc_valid = win_valid` | `dw_feeder.v:274` | 0 | `dw_array` latency. One line, no width mismatch if it goes wrong. |
-| `v_d1`/`real_d1`/`grp_d1` | `dw_feeder.v:201-217` | 1 stage | pool read latency |
-| `grp_d2` | `dw_feeder.v:249-252` | 1 more | `line_buffer` window latency (1) |
-| `grp_d3`, `grp_d4` | `dw_feeder.v:284-293` | 2 more | `OS_LAT` — `grp_d4` must be aligned with `q_valid` |
-| `drain <= 3'd7` | `dw_feeder.v:399-405` | 7 | ≥ 1 + 1 + `OS_LAT` = 3 today |
+| `dw_array` `valid` → `valid_out` | `dw_array.v` | `DW_LAT` = **5** | **A-2 fixed**: one shift register for all TC channels, depth derived from K |
+| `assign os_acc_valid = arr_valid` | `dw_feeder.v` | — | was `= win_valid`, i.e. 0. Now a **wire from the array**, so the latency cannot be asserted wrongly |
+| `v_d1`/`real_d1`/`grp_d1` | `dw_feeder.v` | 1 stage | pool read latency |
+| `grp_sr[]` group tag | `dw_feeder.v` | `GRP_WR = 2 + DW_LAT + OS_LAT` = **9** (was 4) | one shift register; `grp_arr` at `GRP_ARR = 2+DW_LAT` = 7 feeds `acc_wide` and the parameter address, `grp_wr` at 9 feeds the write |
+| `ox_sr`/`oy_sr` C-2 witness | `dw_feeder.v` | `WIT_LAT = DW_LAT + OS_LAT` = **7** (was 2) | capturing a `line_buffer` output already costs one stage |
+| `drain` | `dw_feeder.v` | `DRAIN_CYC = 1 + DW_LAT + OS_LAT` = **8** (was a literal 7) | derived: `layer_done` cycle → last write |
+| `OS_LAT` parameter | `dw_feeder.v` | 2 | passed from `accel_top` |
 
-`step` → `win_valid` is **2**; → `aw_en` is **4**. Total group-tag depth: **4** (`grp_d1..d4`).
+`step` → `win_valid` is **2** (unchanged, that is `line_buffer`); → `arr_valid` is **7**
+(was 2); → `aw_en` is **9** (was 4).
+
+> Every depth above is declared in ONE place at the top of `dw_feeder`, next to `DW_LAT`,
+> because they all move together. `dw_feeder` also **measures** the real `win_valid` →
+> `arr_valid` distance in simulation and names all four derived constants in the failure
+> message if it is not `DW_LAT` — which is what makes restating `DW_LAT` there safe.
 
 ### `stem_array` / `stem_feeder`
 
@@ -194,7 +204,7 @@ Copied from the review's cross-cutting table and made concrete against the rows 
 | Trigger | Rows that change in the SAME commit |
 |:--|:--|
 | ~~**L-1/L-2** `mac_lane` gains `+LAT`~~ **DONE, Phase 2a** | ~~`pw_feeder` tag pipeline~~ 2 → **7**; ~~`pw_feeder` drain~~ 7 → **`MAC_LAT+OS_LAT`**; ~~`pe_array` `done` sourcing~~ (A-3 checked, unchanged until A-1); `avgpool` untouched, so `gap_feeder` `sl_d2` unchanged |
-| **L-1/L-2** `dwconv3x3` gains clock + LAT | `dw_array` port list (A-2); `dw_feeder` `os_acc_valid = win_valid` → delayed by LAT; `grp_d2..d4` → +LAT stages; `dw_feeder` drain |
+| ~~**L-1/L-2** `dwconv3x3` gains clock + LAT~~ **DONE, Phase 2b** | ~~`dw_array` port list (A-2)~~; ~~`os_acc_valid = win_valid`~~ → a wire from the array; ~~`grp_d2..d4`~~ → one `grp_sr[]` at `GRP_WR`=9; ~~drain~~ → `1+DW_LAT+OS_LAT`; **and the C-2 witness, which the review's table does not list** |
 | **L-1/L-2** `conv3x3_std` gains clock + LAT | `stem_array` port list; `stem_feeder` `win_q` latch and sweep timing; `wa_oct` weight lead; `oct_d1/d2` → +LAT; `stem_feeder` drain |
 | **L-3** `requantize` +3 (`OS_LAT` 2 → 5) | `rq_bank` `q_valid` depth; L-7 `act`/`relu6_qmax` pipelined inside `requantize`; `pw_feeder` drain; `dw_feeder` `grp_d3/d4` and drain; `stem_feeder` `oct_d1/d2` and drain; `res_feeder` delay line 3 → 3+3 and drain; `gap_feeder` `sl_d3/d4` and drain; `GAP_CYC`; `logit_out` `lv` |
 | **L-12** absorbed | `bias_add` folds into L-3's new stage 1 |

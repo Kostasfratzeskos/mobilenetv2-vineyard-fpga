@@ -32,6 +32,10 @@ module dwconv_layer_tb;
     localparam S  = 1;                 // stride
     localparam NT = K*K;               // 9 taps
 
+    // L-1: dwconv3x3 is one registered product stage + clog2(NT) tree levels.
+    localparam LEVELS = $clog2(NT);
+    localparam DW_LAT = 1 + LEVELS;          // 5
+
     localparam ACT_RELU6 = 1'b1;
     localparam RELU6_QMAX = 8'sd127;
 
@@ -62,6 +66,7 @@ module dwconv_layer_tb;
     wire  signed [7:0]   q_w;
 
     dwconv3x3 #(.DATA_W(8), .K(K), .ACC_W(21)) u_dw (
+        .clock(clock), .rst_n(rst_n),
         .win(win_v), .wk(wk_v), .acc(acc_w)
     );
 
@@ -103,7 +108,12 @@ module dwconv_layer_tb;
                 end
             end
 
-            // dwconv/bias are combinational; drive per-channel requantize params
+            // dwconv3x3 is PIPELINED since L-1: hold the window for DW_LAT
+            // edges so the tree fills before bias_add and requantize see the
+            // sum. bias_add is still combinational.
+            repeat (DW_LAT) @(posedge clock);
+            @(negedge clock);
+
             bias_r = b_mem[c];
             m0_r   = m0_mem[c];
             sh_r   = sh_mem[c];

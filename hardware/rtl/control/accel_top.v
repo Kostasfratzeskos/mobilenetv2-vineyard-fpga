@@ -518,7 +518,8 @@ module accel_top #(
         .M0_W(M0_W), .SHIFT_W(SHIFT_W), .POOL_TM(TM), .SEL_W(SEL_W),
         .XW(XW_DW), .MAX_W(112), .GRPW(GRPW), .AA_W(AA_W), .WA_W(DW_WA_W),
         .PA_W(PA_W), .BANK_W(DW_BANK_W), .POOL_BANK_W(BANK_W),
-        .WDEPTH(DW_WDEPTH), .PDEPTH(PDEPTH)
+        .WDEPTH(DW_WDEPTH), .PDEPTH(PDEPTH),
+        .OS_LAT(OS_LAT)
     ) u_dw (
         .clock(clock), .rst_n(rst_n_i),
         .start(dw_start), .img_w(op_img_w), .img_h(op_img_h),
