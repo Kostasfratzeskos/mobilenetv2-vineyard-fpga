@@ -795,8 +795,10 @@ argmax over the 4 int16 logits is the predicted class.
 
 
 ### DD-022 - A-1/A-3: where to put the register that breaks the activation broadcast
-- Status: **PROPOSED** - awaiting approval, nothing implemented
+- Status: **Accepted** - option B implemented; option A not needed, A-3 does not fire
 - Date: 2026-09-24
+- Approved: 2026-09-24. One amendment made during implementation, recorded at the end:
+  `w` is registered alongside `a`, not left to arrive fresh.
 - Context: A-1 says `pe_array`/`dw_array`/`stem_array` have "no pipeline stage and no port to
   add one", that the 128-bit broadcast has "fanout 32 per bit, unregistered, across ~30% of
   the device's DSP columns", and that post-route route delay grew 1.892 -> 5.144 ns. Its
@@ -878,8 +880,54 @@ argmax over the 4 int16 logits is the predicted class.
   treatment only if measurement says their broadcasts are critical, which today it does not;
   `pe_array.v`'s A-1/A-3 header paragraph is rewritten to describe what was built.
 
+- **MEASURED after implementation.** Post-route at 4.000 ns, against Phase 2d:
+
+  | | Phase 2d | Phase 3 (A-1 option B) |
+  |:--|--:|--:|
+  | WNS | -2.126 ns | **-1.587 ns** |
+  | Fmax | 163.2 MHz | **179.0 MHz** |
+  | CLB LUTs | 34,062 | 34,168 (+106) |
+  | CLB Registers | 18,243 | 19,716 (+1,473) |
+  | DSPs | 944 | 944 |
+  | DPIR-2 | 0 | 0 |
+
+  All 31 testbenches pass, `accel_tb` bit-exact at 6,895,780 elements. `pe_array_tb` asserts
+  `ARR_LAT` = 7 as an EQUALITY, `pw_feeder_tb` measures the drain at 7, and `pw_feeder`'s own
+  runtime check times the real array latency - three independent witnesses on the one number
+  that moved.
+
+- **The broadcast is gone from the worst path, which is what B was for.** Phase 2d's worst
+  path ended at a MAC product register with 1.279 ns of fanout-115 route in it. No path like
+  that appears now. A-1 is resolved and option A - the grouped chain with accumulator de-skew -
+  was never needed. **A-3 never fired**: the input register feeds every lane the same controls
+  on the same cycle, so the lockstep check passed unchanged, and A-3 reduced to rewriting the
+  `pe_array.v` header paragraph that predicted the opposite.
+
+- **The register cost about a third of what this DD predicted, and the reason is DD-020.**
+  Predicted +4,224 flip-flops (128 for `a_q`, 4,096 for `w_q`, 3 controls). Measured +1,473,
+  and by hierarchy `pe_array`'s OWN level carries **zero** flip-flops - the whole stage was
+  absorbed or retimed:
+  - `w_q`'s 4,096 bits went into the DSP48E2 B-side input registers at zero fabric cost, with
+    the DSP count unchanged at 944 and DPIR-2 still 0. That is precisely the merge DD-020 made
+    reset synchronous to enable, and this is the first change to collect on it.
+  - The remainder was retimed backwards into `act_buffer`'s hierarchy (`u_act` flip-flops
+    5 -> 1,525). The tool chose where to place the stage boundary; the LOGICAL pipeline is what
+    the RTL says, which is what the golden vectors confirm.
+
+  So the DD-022 amendment - registering `w` here rather than re-timing the feeder's weight read
+  to save 4,096 flip-flops - cost almost nothing in the end. It was argued on robustness and
+  happened to be nearly free.
+
+- **What it did NOT fix.** 179.0 MHz is not 250 MHz. The new worst path is
+  `u_act/mem_reg_0_uram_0/CLK` -> `u_dw/u_lb/...psdsp/D`: the same `act_buffer` URAM read, now
+  feeding the DEPTHWISE line buffer instead of the pointwise array. The URAM cascade is
+  unchanged at 2.673 ns and is now 48% of a 5.514 ns path, the rest being 2.085 ns of pure
+  route through two LUTs into `u_dw/u_lb` (route 2.778 ns exceeds logic 2.736 ns - this one is
+  a placement problem as much as a logic one). See DD-023, whose condition this resolves.
+
 ### DD-023 - The `act_buffer` URAM cascade, which is the largest term and is not in the review
-- Status: **PROPOSED** - awaiting approval; conditional on DD-022's outcome
+- Status: **PROPOSED** - the condition below has now RESOLVED IN FAVOUR of doing it; awaiting
+  approval to implement
 - Date: 2026-09-24
 - Context: not one of the 43 findings. It entered the project as a synthesis warning noted in
   docs/latency_map.md before Phase 2 started, on the grounds that it might have to change and
@@ -902,13 +950,32 @@ argmax over the 4 int16 logits is the predicted class.
   delay** (`v_d`, `v_d1`) and every tag pipeline behind it, in five feeders. It is not a
   one-module edit.
 
-- **Why this is PROPOSED and not scheduled.** Under DD-022 option B the URAM cascade plus the
-  `sel_q` mux becomes a stage of its own at 3.382 ns, which fits under the 4.023 ns
-  requirement. If that holds when measured, this change is NOT needed for 250 MHz and its cost
-  - a latency change across five feeders - buys only margin. The correct order is therefore:
-  implement DD-022 B, measure, and open this only if stage 1 does not close or if the margin
-  is judged too thin. Doing both at once would also make it impossible to attribute whichever
-  result comes back.
+- **Why this was PROPOSED and not scheduled, and how it resolved.** The condition was: under
+  DD-022 option B the URAM cascade plus the `sel_q` mux becomes a stage of its own at 3.382 ns,
+  which fits under the requirement - so if that held, this change would buy only margin and not
+  be needed for 250 MHz.
+
+  **It did not hold, and the estimate was wrong in an instructive way.** DD-022 B shipped and
+  measured 179.0 MHz, WNS -1.587. The new worst path is the same URAM read, but its consumer is
+  the DEPTHWISE line buffer rather than the pointwise array:
+
+      u_act URAM cascade, 8 tiles     2.673 ns   (48%)
+      route + sel mux (LUT5)          0.721 ns
+      route to u_dw/u_lb + LUT6       1.140 ns
+      route to the line-buffer FF     0.980 ns
+                                      -------
+                                      5.514 ns   against a 4.010 ns requirement
+
+  The 3.382 ns figure costed the stage against ONE consumer - the pointwise broadcast, at
+  1.279 ns. But `act_buffer`'s output feeds all five feeders, and the depthwise path after the
+  mux is 2.12 ns, not 1.28. Costing a shared resource against its cheapest consumer is the
+  mistake; the cascade has to fit alongside the WORST of them.
+
+  So the URAM cascade is the shared root of the remaining worst paths - 44% of Phase 2d's and
+  48% of Phase 3's - and it is the next thing to fix. Note also that this path is
+  route-dominated (2.778 ns route vs 2.736 ns logic), so `act_buffer` and the depthwise line
+  buffer are placed far apart; a pipeline register helps that directly, by giving the router a
+  cycle to cross the die in.
 
 - Consequences if accepted: `act_buffer` read latency 1 -> 2; `v_d`/`v_d1` and every tag
   pipeline in `pw_feeder`, `dw_feeder`, `stem_feeder`, `res_feeder` and `gap_feeder` grow by

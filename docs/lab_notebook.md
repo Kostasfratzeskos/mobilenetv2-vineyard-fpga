@@ -1188,3 +1188,73 @@ wrote quant_scales.json  (53 layers)
 - Next: Phase 3 - A-1/A-3 registered broadcast, which needs a DD proposal and approval first.
   L-8 is already settled by DD-021. Worth saying plainly that Phase 3 is no longer a timing
   fix: the broadcast is not on the critical path, the URAM read is.
+
+### 2026-09-24 (later still) - Phase 3: A-1 as ONE register, 163.2 -> 179.0 MHz
+- Did: A-1 per DD-022 option B - `pe_array` registers `a`, `w`, `valid`, `first` and `last` at
+  its input, so the array answers `ARR_LAT = 1 + MAC_LAT = 7` instead of 6. `pw_feeder`'s
+  `TAG_LAT` 7 -> 8 and `DRAIN_CYC` 11 -> 12, both derived from `ARR_LAT`. A-3 needed no fix.
+- **The measurement came before the code, and changed it.** A-1's recommendation was a grouped
+  registered broadcast chain with accumulator de-skew, on the evidence that route delay had
+  grown 1.892 -> 5.144 ns. Decomposing the actual Phase 2d worst path first:
+
+      act_buffer URAM cascade    2.682 ns   (44%)
+      sel_q half-entry mux       0.700 ns   (12%)
+      the broadcast itself       1.279 ns   (21%)   ONE net, fanout 115
+      DSP48E2 multiply           1.405 ns   (23%)
+
+  The broadcast was real and on the path, and it was the SECOND term. A grouped chain would
+  have been an architecture change aimed at 21% of a path whose 44% sits somewhere else. What
+  the budget actually asked for was a register between the memory read and the broadcast - and
+  one is enough.
+- Tests: all 31 pass, `accel_tb` bit-exact at 6,895,780 elements. Three independent witnesses
+  on the one number that moved: `pe_array_tb` asserts ARR_LAT = 7 as an equality,
+  `pw_feeder_tb` measures the drain at 7, and `pw_feeder`'s own runtime check times the real
+  array latency and names every constant sized from it.
+- Post-route at 4.000 ns:
+
+      2c           -2.701   149.2 MHz   41,264 LUT   13,992 FF   944 DSP
+      2d           -2.126   163.2 MHz   34,062 LUT   18,243 FF   944 DSP
+      3            -1.587   179.0 MHz   34,168 LUT   19,716 FF   944 DSP   DPIR-2 0
+
+  4.1x the 43.8 MHz this review started from. +106 LUTs for the phase.
+- **A-3 never fired, and that was the point of putting the register where it went.** The input
+  stage is in front of ALL the lanes, so every lane still sees the same controls on the same
+  cycle. The lockstep invariant behind `done = lane_done[0]` held, the Phase 2a check passed
+  unchanged, and there was no accumulator de-skew to do. A-3 reduced to rewriting
+  `pe_array.v`'s header paragraph, which until today predicted the opposite outcome in detail.
+  Rewriting a comment that confidently describes something that did not happen is worth as much
+  as the RTL change.
+- **The register cost a third of what I predicted, and DD-020 is why.** Predicted +4,224 FFs
+  (128 `a_q` + 4,096 `w_q` + 3 controls). Measured +1,473, and `pe_array`'s own hierarchy level
+  carries ZERO flip-flops:
+  - `w_q`'s 4,096 bits were absorbed into the DSP48E2 B-side input registers. Zero fabric, DSP
+    count still 944, DPIR-2 still 0. That is exactly the merge DD-020 made reset synchronous to
+    enable, and this is the first change to collect on it - four phases after the decision.
+  - The rest was retimed backwards into `act_buffer` (u_act FFs 5 -> 1,525). The tool picked the
+    physical boundary; the logical pipeline is what the RTL says, which is what the golden
+    vectors check.
+  So the DD-022 amendment - registering `w` here instead of re-timing the feeder's weight read
+  to save those 4,096 FFs - turned out nearly free. I argued it on robustness and it cost
+  nothing, but I should be clear that was luck in the sense that I did not predict the
+  absorption; I predicted the expensive version and accepted it.
+- **What Phase 3 did not fix, and my own wrong estimate.** 179.0 MHz is not 250 MHz. The new
+  worst path is the SAME URAM read, now feeding the depthwise line buffer:
+
+      u_act/mem_reg_0_uram_0/CLK -> u_dw/u_lb/lb0_reg_0_63_0_0__41_i_1_psdsp/D
+      5.514 ns (logic 2.736, route 2.778), 9 logic levels
+      URAM cascade 2.673 (48%) | mux + route 0.721 | route+LUT6 1.140 | route 0.980
+
+  DD-023 predicted that after option B the URAM cascade plus the mux would be a 3.382 ns stage
+  and would FIT, making the URAM fix unnecessary. It does not fit, and the reason is a real
+  mistake worth recording: I costed a SHARED resource against its cheapest consumer. The
+  activation read feeds all five feeders; the pointwise broadcast after the mux is 1.279 ns, but
+  the depthwise line-buffer path is 2.12 ns. A shared stage has to fit alongside the WORST
+  consumer, not the one that happened to be critical last time.
+- The remaining path is also route-dominated - 2.778 ns route against 2.736 ns logic - so
+  `act_buffer` and the depthwise line buffer are simply far apart on the die. A pipeline
+  register helps that directly by giving the router a whole cycle to cross in, which is a second
+  independent argument for DD-023 beyond splitting the cascade.
+- Blocked on: DD-023 approval. It is now PROPOSED with its condition resolved in favour.
+- Next: DD-023 if approved - `act_buffer` read latency 1 -> 2, which moves every feeder's
+  stage-1 delay and every tag pipeline behind it, in five feeders. Then Phase 4 (L-6, L-13,
+  L-11/L-14, C-5, C-12, L-15, the T-10 remainder), which is correctness work, not timing.

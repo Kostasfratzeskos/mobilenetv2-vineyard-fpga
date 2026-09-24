@@ -150,6 +150,14 @@ module pw_feeder #(
     //  the same arithmetic, not a second opinion. The simulation check at the
     //  bottom of this file MEASURES the real latency and fails if the two ever
     //  disagree, which is the only thing that makes restating it safe.
+    //
+    //  ARR_LAT is what this module actually cares about, and the distinction is
+    //  new with A-1: pe_array registers `a`, `w` and the controls at its input
+    //  before the lanes see them (DD-022 option B), so the ARRAY answers one
+    //  cycle later than the LANE does. Everything downstream - the tag pipeline,
+    //  the drain, the measurement check - is sized from ARR_LAT. MAC_LAT is kept
+    //  as the intermediate it is derived from rather than folded away, because
+    //  the two numbers now have different owners and will move separately.
     function integer clog2;
         input integer value;
         integer v;
@@ -160,6 +168,7 @@ module pw_feeder #(
     endfunction
 
     localparam MAC_LAT = 1 + clog2(TN) + 1;             // 6 at TN=16
+    localparam ARR_LAT = 1 + MAC_LAT;                   // 7, incl. A-1's input reg
 
     // ================= stage 0 : sequence and addresses =================
     wire [PIX_W-1:0] pix;
@@ -194,15 +203,16 @@ module pw_feeder #(
     //  retrain. Counting from the cycle `layer_done` is high:
     //
     //      +1              ... the last tile reaches pe_array (v_d)
-    //      +MAC_LAT        ... pe_array's acc_valid for it
+    //      +ARR_LAT        ... pe_array's acc_valid for it
     //      +OS_LAT         ... out_stage's q_valid, i.e. the write
     //
     //  layer_done is itself one cycle after the tile was consumed, so the
     //  distance from the layer_done cycle to the last write is exactly
-    //  MAC_LAT + OS_LAT. `busy` is high during the layer_done cycle and for
-    //  `drain` cycles after it, so DRAIN_CYC = MAC_LAT + OS_LAT covers it with
-    //  nothing to spare and nothing wasted.
-    localparam DRAIN_CYC = MAC_LAT + OS_LAT;            // 11 at OS_LAT=5
+    //  ARR_LAT + OS_LAT. `busy` is high during the layer_done cycle and for
+    //  `drain` cycles after it, so DRAIN_CYC = ARR_LAT + OS_LAT covers it with
+    //  nothing to spare and nothing wasted. It was MAC_LAT + OS_LAT until A-1
+    //  put a register in front of the lanes.
+    localparam DRAIN_CYC = ARR_LAT + OS_LAT;            // 12 at OS_LAT=5
     localparam DRAIN_W   = clog2(DRAIN_CYC + 1);        // 4
 
     reg [DRAIN_W-1:0] drain;
@@ -267,10 +277,11 @@ module pw_feeder #(
 
     // ---- tag pipeline --------------------------------------------------
     //
-    //  TAG_LAT = 1 + MAC_LAT, because the tag has to travel from the cycle
+    //  TAG_LAT = 1 + ARR_LAT, because the tag has to travel from the cycle
     //  addr_gen emitted it to the cycle pe_array's `done` presents the result:
-    //  one cycle for the buffer read, then mac_lane's whole pipeline. It was
-    //  two stages when mac_lane answered in one cycle.
+    //  one cycle for the buffer read, then the whole ARRAY pipeline - A-1's
+    //  input register plus mac_lane. It was two stages when mac_lane answered in
+    //  one cycle, seven before A-1 added its register.
     //
     //  ---- why only the FIRST stage is gated ---------------------------
     //
@@ -295,8 +306,8 @@ module pw_feeder #(
     //      pix_sr[0]           valid in C+1   (the buffer-read stage)
     //      pix_sr[k]           valid in C+1+k
     //      pix_sr[TAG_LAT-2]   valid in C+TAG_LAT-1
-    //      acc_pix             valid in C+TAG_LAT  = C+7, with acc_valid
-    localparam TAG_LAT = 1 + MAC_LAT;                 // 7
+    //      acc_pix             valid in C+TAG_LAT  = C+8, with acc_valid
+    localparam TAG_LAT = 1 + ARR_LAT;                 // 8
 
     reg [PIX_W-1:0] pix_sr [0:TAG_LAT-2];
     reg [OCT_W-1:0] oct_sr [0:TAG_LAT-2];
@@ -343,17 +354,22 @@ module pw_feeder #(
     //  covers a mis-parameterised instance. This one covers the runtime shape,
     //  which neither of those sees.
 `ifndef SYNTHESIS
-    // ---- MAC_LAT is restated here, so MEASURE it (L-1, L-2) -------------
+    // ---- ARR_LAT is restated here, so MEASURE it (L-1, L-2, A-1) --------
     //  This module computes MAC_LAT from TN with the same arithmetic mac_lane
-    //  uses, and its tag depth and drain counter are both defined against the
-    //  result. If mac_lane's pipeline ever changes and this does not, the
-    //  symptom is a shifted output tensor that still looks like activations.
-    //  So: time the real thing. Time from the LAST tile of a dot product
-    //  entering pe_array (`v_d && l_d`) to `acc_valid` coming back, because
-    //  `done` only fires on a last tile - timing from the FIRST tile instead
-    //  measures MAC_LAT plus the dot product's own length, which is what the
-    //  first version of this check did and why it reported 7 for a two-tile
-    //  shape.
+    //  uses, adds pe_array's own input register to get ARR_LAT, and sizes its
+    //  tag depth and drain counter against the result. If either pipeline ever
+    //  changes and this does not, the symptom is a shifted output tensor that
+    //  still looks like activations. So: time the real thing. Time from the LAST
+    //  tile of a dot product entering pe_array (`v_d && l_d`) to `acc_valid`
+    //  coming back, because `done` only fires on a last tile - timing from the
+    //  FIRST tile instead measures the latency plus the dot product's own
+    //  length, which is what the first version of this check did and why it
+    //  reported 7 for a two-tile shape.
+    //
+    //  This check is ALSO the witness for A-1. pe_array's register is invisible
+    //  from here except as one extra cycle, so if the register were added and
+    //  ARR_LAT were not, or the reverse, nothing about the wiring would look
+    //  wrong - the tags would just be off by one for every pixel in the network.
     //  One measurement per layer, then stop: `lat_arm` left permanently set
     //  re-checked on every later acc_valid against a counter that had kept
     //  running, which reported 7 for a latency that was 6.
@@ -380,9 +396,9 @@ module pw_feeder #(
     end
 
     always @(posedge clock) begin
-        if (rst_n && lat_arm && !lat_seen && acc_valid && (lat_cnt != MAC_LAT[7:0])) begin
-            $display("ERROR: %m L-1 pe_array answered %0d cycles after the tile entered it, but this module's MAC_LAT says %0d at time %0t. The tag pipeline (%0d deep) and the drain (%0d) are both sized from MAC_LAT, so they are now wrong too.",
-                     lat_cnt, MAC_LAT, $time, TAG_LAT, DRAIN_CYC);
+        if (rst_n && lat_arm && !lat_seen && acc_valid && (lat_cnt != ARR_LAT[7:0])) begin
+            $display("ERROR: %m L-1/A-1 pe_array answered %0d cycles after the tile entered it, but this module's ARR_LAT says %0d at time %0t (MAC_LAT %0d + pe_array's A-1 input register). The tag pipeline (%0d deep) and the drain (%0d) are both sized from ARR_LAT, so they are now wrong too.",
+                     lat_cnt, ARR_LAT, $time, MAC_LAT, TAG_LAT, DRAIN_CYC);
             $finish;
         end
     end

@@ -26,6 +26,7 @@ line numbers go stale faster than anyone updates them, and a stale reference is 
 | `MAC_LAT` | `mac_lane` | **6** (was 1) | `valid` → `acc` final and `done` high. Now `1 + clog2(TN) + 1`: one registered product stage, `clog2(TN)=4` adder-tree levels, one accumulate stage (**L-1**, Phase 2a). |
 | `DW_LAT` | `dwconv3x3` / `dw_array` | **5** (was 0) | `win`/`valid` → `acc`/`valid_out`. `1 + clog2(K*K)`: one product stage plus 4 tree levels, and **no** accumulate stage — a depthwise window completes in one pass (**L-1**, Phase 2b). |
 | `ST_LAT` | `conv3x3_std` / `stem_array` | **6** (was 0) | `win`/`valid` → `acc`/`valid_out`. `1 + clog2(K*K*3)` = `1 + clog2(27)`: one product stage plus 5 tree levels, no accumulate stage (**L-1**, Phase 2c). |
+| `ARR_LAT` | `pe_array` | **7** (was = `MAC_LAT`) | `valid` → `done`/`acc` for the ARRAY, as opposed to the lane. A-1 registers `a`, `w` and the controls at the array input, so `ARR_LAT = 1 + MAC_LAT` (**A-1**, DD-022, Phase 3). This is the number every `pw_feeder` constant is sized from now; `MAC_LAT` is the intermediate it derives from. |
 | `RQ_LAT` | `requantize` | **4** (was 1) | `en` → `q_valid`. Four register stages: `in_data` (absorbing `bias_add`), the M0 product, round+shift, clamp (**L-3**, Phase 2d). |
 | `OS_LAT` | `out_stage` | **5** (was 2) | `acc_valid` → `q_valid`. Stage A registers `acc_q`/`vA` and issues the parameter read (1), then `RQ_LAT` — so `1 + RQ_LAT`, and it moves whenever `requantize` does (**L-3**, Phase 2d). |
 
@@ -65,20 +66,21 @@ pipeline than `accel_top` builds.
 | `acc` accumulate | `mac_lane.v` | 1 stage | the only stage `valid` gates |
 | `v_sr`/`f_sr`/`l_sr` control shift register | `mac_lane.v` | `CTRL_LAT = 1 + LEVELS` = 5 | **free-running**, because the tree is (**L-2**) |
 | `armed` sticky bit | `mac_lane.v` | — | **L-10**: a `last` with no preceding `first` no longer announces a stale sum |
-| `assign done = lane_done[0]` | `pe_array.v` | lane 0 | all lanes in lockstep (**A-3**), now *checked* in simulation against all TM bits — which also gives the other TM−1 bits a reader (**A-6**) |
+| `a_q`/`w_q`/`v_q`/`f_q`/`l_q` input register | `pe_array.v` | 1 stage | **A-1 (DD-022 option B)**: the one register that separates the activation read from the fanout-115 broadcast. `a` and `w` move together or the lanes pair operands from different tiles — a wrong VALUE, not a wrong time. |
+| `assign done = lane_done[0]` | `pe_array.v` | lane 0 | all lanes in lockstep (**A-3**), *checked* in simulation against all TM bits — which also gives the other TM−1 bits a reader (**A-6**). **A-1 did not break this**: the input register is in front of ALL lanes, so they still see the same controls on the same cycle. The grouped-broadcast de-skew A-3 was written for never became necessary. |
 
 ### `pw_feeder`
 
 | Constant / structure | File:line | Value | Depends on |
 |:--|:--|--:|:--|
 | `v_d`/`f_d`/`l_d` control delay | `pw_feeder.v` | 1 stage | buffer read latency (1), **not** `MAC_LAT` |
-| Tag pipeline `pix_sr[]` → `acc_pix`/`acc_oct` | `pw_feeder.v` | `TAG_LAT = 1 + MAC_LAT` = **7** (was 2) | stage 1 gated on `ag_valid` (the buffers it shadows are gated); stages 2..7 **free-running**, because `mac_lane`'s tree is |
-| `drain` | `pw_feeder.v` | `DRAIN_CYC = MAC_LAT + OS_LAT` = **11** (was a literal 7) | derived: the distance from the `layer_done` cycle to the last write. `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. |
+| Tag pipeline `pix_sr[]` → `acc_pix`/`acc_oct` | `pw_feeder.v` | `TAG_LAT = 1 + ARR_LAT` = **8** (was 2) | stage 1 gated on `ag_valid` (the buffers it shadows are gated); stages 2..8 **free-running**, because `mac_lane`'s tree is |
+| `drain` | `pw_feeder.v` | `DRAIN_CYC = ARR_LAT + OS_LAT` = **12** (was a literal 7) | derived: the distance from the `layer_done` cycle to the last write. `DRAIN_W = clog2(DRAIN_CYC+1)` = 4 bits. |
 | `OS_LAT` parameter | `pw_feeder.v` | **5** | passed from `accel_top`; the drain is sized from it |
 
-`ag_valid` → `acc_valid` is **7** (was 2); → `aw_en` in `pw_out` is **12** (was 4).
-Only the second number moved in Phase 2d: `TAG_LAT` stops at `acc_valid`, and everything
-after it is `OS_LAT`.
+`ag_valid` → `acc_valid` is **8** (was 2); → `aw_en` in `pw_out` is **13** (was 4).
+Phase 2d moved only the second (→ 12): `TAG_LAT` stops at `acc_valid`, and everything after it
+is `OS_LAT`. Phase 3 moved both by one more, because A-1's register is in front of everything.
 
 > The old header said "each tag stage advances on ITS OWN valid, never on the bare clock, or
 > a stall would slide the tags past the data". That was right for a combinational array and is
@@ -246,7 +248,7 @@ Copied from the review's cross-cutting table and made concrete against the rows 
 | ~~**L-1/L-2** `conv3x3_std` gains clock + LAT~~ **DONE, Phase 2c** | ~~`stem_array` port list~~; ~~`os_acc_valid = sweeping`~~ → a wire; ~~`oct_d1/d2`~~ → one `oct_sr[]` at `OCT_WR`=8; ~~drain~~ → `ST_LAT+OS_LAT+1`; **the C-2 witness changed shape, not just depth**. `win_q`, the sweep and the `wa_oct` weight lead are UNCHANGED — the review lists them as moving and measurement says they do not. |
 | ~~**L-3** `requantize` +3 (`OS_LAT` 2 → 5)~~ **DONE, Phase 2d** | ~~`rq_bank` `q_valid` depth~~ → `requantize`'s own output; ~~L-7 `act`/`relu6_qmax`~~ pipelined inside `requantize`; ~~`pw_feeder` drain~~ → 11; ~~`dw_feeder` `grp_d3/d4` and drain~~ → `GRP_WR`=12, `WIT_LAT`=10, drain 11; ~~`stem_feeder` `oct_d1/d2` and drain~~ → `OCT_WR`=11, drain 12; ~~`res_feeder` delay line~~ → `TGT_LAT`=6, drain 5; ~~`gap_feeder` `sl_d3/d4` and drain~~ → `sl_sr` of `OS_LAT`, drain 6; ~~`GAP_CYC`~~ → `OS_LAT`; ~~`logit_out` `lv`~~ → its `requantize`'s `q_valid` |
 | ~~**L-12** absorbed~~ **DONE, Phase 2d** | ~~`bias_add` folds into L-3's new stage 1~~ — it feeds `requantize`'s stage-1 register instead of the M0 multiply |
-| **A-1** registered broadcast | `pe_array` `done` from the last group; accumulator de-skew; `pw_feeder` tag depth grows by the group count |
+| ~~**A-1** registered broadcast~~ **DONE, Phase 3** | Not what this row predicted. DD-022 measured the path first and put ONE register at `pe_array`'s input instead of a grouped chain, so: `done` stays on lane 0, there is **no accumulator de-skew**, and `pw_feeder`'s tag depth grew by exactly **1** (`TAG_LAT` 7 → 8, `DRAIN_CYC` 11 → 12) rather than by a group count. ~~`pe_array` `done` from the last group~~; ~~accumulator de-skew~~ — both dropped as unnecessary, see DD-022. |
 
 **No drain in the table is a hand-set constant any more.** The five were `7, 7, 15, 6, 7`
 with 3–8 cycles of unexplained margin — which is why a too-small drain failed silently

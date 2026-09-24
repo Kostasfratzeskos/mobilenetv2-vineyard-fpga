@@ -36,6 +36,11 @@ module pe_array_tb;
     // Derived the same way pe_array and mac_lane derive it, then MEASURED.
     localparam LEVELS  = $clog2(TN);
     localparam MAC_LAT = 1 + LEVELS + 1;
+    // A-1 (DD-022): pe_array registers a, w and the controls at its input before
+    // the lanes see them, so the ARRAY answers one cycle after the LANE. This
+    // testbench drives pe_array, so ARR_LAT is what it must expect - mac_lane_tb
+    // is the one that still checks MAC_LAT.
+    localparam ARR_LAT = 1 + MAC_LAT;
 
     logic clock, rst_n;
 
@@ -124,10 +129,11 @@ module pe_array_tb;
                     expected[m] += longint'(av[i]) * longint'(wv[m][i]);
             end
 
-            // The array is PIPELINED now (L-1): mac_lane registers the
-            // products, runs a clog2(TN)-level adder tree and then
-            // accumulates, so `done` and `acc` arrive MAC_LAT cycles after the
-            // last tile rather than in the next cycle. Wait for `done` and
+            // The array is PIPELINED now (L-1, A-1): pe_array registers its
+            // inputs, then mac_lane registers the products, runs a
+            // clog2(TN)-level adder tree and accumulates, so `done` and `acc`
+            // arrive ARR_LAT cycles after the last tile rather than in the next
+            // cycle. Wait for `done` and
             // count while waiting, in docs/latency_map.md's convention: how
             // many cycles after the one carrying `valid` the result is
             // OBSERVABLE, so a registered output is 1. drive_array already
@@ -145,10 +151,10 @@ module pe_array_tb;
             if (arr_done !== 1'b1) begin
                 fails++;
                 $display("  [ERR] %-16s tiles=%0d : done not asserted", tag, tiles);
-            end else if (lat !== MAC_LAT) begin
+            end else if (lat !== ARR_LAT) begin
                 fails++;
-                $display("  [ERR] %-16s tiles=%0d : done came %0d cycles after the last tile, MAC_LAT says %0d",
-                         tag, tiles, lat, MAC_LAT);
+                $display("  [ERR] %-16s tiles=%0d : done came %0d cycles after the last tile, ARR_LAT says %0d (MAC_LAT %0d + pe_array's A-1 input register)",
+                         tag, tiles, lat, ARR_LAT, MAC_LAT);
             end
 
             // oracle 1: independent reference, every lane

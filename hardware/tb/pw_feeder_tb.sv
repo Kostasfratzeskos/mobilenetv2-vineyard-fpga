@@ -55,11 +55,16 @@ module pw_feeder_tb;
     localparam LEVELS  = $clog2(TN);
     localparam MAC_LAT = 1 + LEVELS + 1;          // 6 at TN=16
 
+    // A-1 (DD-022): pe_array registers a, w and the controls at its input, so
+    // the ARRAY answers one cycle after the LANE. This testbench drives
+    // pw_feeder, which contains a pe_array, so every number below is ARR_LAT.
+    localparam ARR_LAT = 1 + MAC_LAT;             // 7
+
     // layer_done pulses one cycle after the last tile is CONSUMED, and that
-    // tile's result appears MAC_LAT cycles after it entered pe_array - which is
+    // tile's result appears ARR_LAT cycles after it entered pe_array - which is
     // the same cycle layer_done is high. So results keep arriving for exactly
-    // MAC_LAT cycles after layer_done, and the sequencer's gap has to cover it.
-    localparam DRAIN_EXP = MAC_LAT;               // 6
+    // ARR_LAT cycles after layer_done, and the sequencer's gap has to cover it.
+    localparam DRAIN_EXP = ARR_LAT;               // 7
     localparam ADEPTH = 2048;
 
     localparam MAXP = 16;      // pixels used by the testbench
@@ -342,14 +347,14 @@ module pw_feeder_tb;
         //  An EQUALITY, not a ceiling. The old check was `> 4` against a
         //  1-cycle pipeline, which would have passed silently for any latency
         //  from 0 to 4 - so it could not have caught this change, in either
-        //  direction. pw_feeder's drain counter is sized as MAC_LAT + OS_LAT,
-        //  so if this number is not MAC_LAT the counter is wrong too.
+        //  direction. pw_feeder's drain counter is sized as ARR_LAT + OS_LAT,
+        //  so if this number is not ARR_LAT the counter is wrong too.
         if (drain_max !== DRAIN_EXP) begin
             fails++;
-            $display("  [ERR] drain latency is %0d cycles after layer_done, MAC_LAT=%0d says it should be %0d",
-                     drain_max, MAC_LAT, DRAIN_EXP);
+            $display("  [ERR] drain latency is %0d cycles after layer_done, ARR_LAT=%0d says it should be %0d",
+                     drain_max, ARR_LAT, DRAIN_EXP);
         end else
-            $display("  [ok ] drain latency is exactly MAC_LAT = %0d, as pw_feeder's drain counter assumes",
+            $display("  [ok ] drain latency is exactly ARR_LAT = %0d, as pw_feeder's drain counter assumes",
                      DRAIN_EXP);
         $display("");
         if (fails == 0) $display("ALL PASS  (%0d layers)", total);
