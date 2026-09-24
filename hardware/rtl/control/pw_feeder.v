@@ -115,6 +115,25 @@ module pw_feeder #(
 
     // ---- layer control -------------------------------------------------
     input  wire                   start,
+    //  ---- C-9 : `stall` is tied off by every caller, and that is a promise --
+    //
+    //  accel_top wires this to 1'b0, so the whole stall path - including the
+    //  ag_valid gating that makes it safe - has never been exercised in any
+    //  simulation or any synthesis run. The first time it runs will be the first
+    //  time it is needed, which is the worst possible schedule for a path this
+    //  deep in the address generator.
+    //
+    //  Tying it off is a CONTRACT, so here it is stated: every consumer
+    //  downstream of this feeder must absorb a result every cycle,
+    //  unconditionally. That holds today because R = TM = 32 requantize lanes
+    //  drain a whole result in one cycle (DD-015), so nothing behind out_stage
+    //  can ever be the reason to pause. Change that - fewer requantize lanes, a
+    //  shared narrower writeback, a pool port that can be busy - and this port
+    //  has to be wired to something real before the change lands, not after.
+    //
+    //  The simulation check at the bottom of this file reports if it is ever
+    //  driven high, because an untested path being exercised for the first time
+    //  should be a loud event rather than a quiet one.
     input  wire                   stall,
     input  wire [PIX_W-1:0]       n_pix,     // H*W
     input  wire [OCT_W-1:0]       n_oc,      // ceil(OC/TM)
@@ -227,7 +246,41 @@ module pw_feeder #(
 
     // end of one dot product, and end of all the dot products of this pixel
     wire tile_last = ag_valid & ag_last;
-    wire pix_last  = tile_last & (oct == n_oc - 1'b1);
+    // ================= C-3 : shape and bases latched at start ===========
+    //  `addr_gen` deliberately latches its shape at `start` so the caller may
+    //  change the inputs while a layer runs - that is what makes prefetching the
+    //  next instruction possible, and its header says so. No feeder honoured it:
+    //  all five read the raw ports for the whole layer. Masked today only because
+    //  `top_seq` does not refetch `w[]` until `!op_busy`, so the inputs happen to
+    //  be stable - i.e. implementing the advertised prefetch would have broken all
+    //  five feeders SILENTLY, as wrong addresses rather than as an error.
+    //
+    //  `base_out` is the worst of them: it is consumed during the DRAIN, after
+    //  `run` has dropped, so it has to outlive the layer by more than the rest.
+    //
+    //  Same shape as addr_gen: the RAW ports are read only in the `start` branch,
+    //  which is the cycle the caller presents them, and every other reader -
+    //  including the simulation checks - uses the latched copy.
+    reg [OCT_W-1:0] n_oc_q;
+    reg [ICT_W-1:0] n_ic_q;
+    reg [AA_W-1:0]  n_ent_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            n_oc_q <= {OCT_W{1'b0}};  n_ic_q <= {ICT_W{1'b0}};
+            n_ent_q <= {AA_W{1'b0}};
+        end else if (start) begin
+            n_oc_q <= n_oc;  n_ic_q <= n_ic;  n_ent_q <= n_ent;
+        end
+    end
+
+    //  n_pix/n_oc/n_ic also feed addr_gen, which latches them itself - so those
+    //  three were already safe INSIDE the generator and unsafe everywhere else in
+    //  this module, which is the most confusing possible split and exactly what
+    //  C-3 is about. base_in needed no new register: `pix_base <= base_in` in the
+    //  start branch below was already latching it, which is the pattern the rest
+    //  of the module should have followed.
+    wire pix_last  = tile_last & (oct == n_oc_q - 1'b1);
 
     reg [WA_W-1:0] w_addr;      // walks 0 .. n_oc*n_ic-1, restarts per pixel
     reg [AA_W-1:0] pix_base;    // base_in + pix*n_ent, kept by accumulation
@@ -241,7 +294,7 @@ module pw_feeder #(
             pix_base <= base_in;
         end else if (ag_valid) begin
             w_addr <= pix_last ? {WA_W{1'b0}} : (w_addr + 1'b1);
-            if (pix_last) pix_base <= pix_base + n_ent;
+            if (pix_last) pix_base <= pix_base + n_ent_q;
         end
     end
 
@@ -370,6 +423,18 @@ module pw_feeder #(
     //  covers a mis-parameterised instance. This one covers the runtime shape,
     //  which neither of those sees.
 `ifndef SYNTHESIS
+    // ---- C-9: the stall path has never run ------------------------------
+    //  Reported, not fatal: a real stall is legal by this module's own design,
+    //  so there IS a correct continuation. What there is not is any evidence it
+    //  works, and this line is what turns "never exercised" into something a log
+    //  shows. If it ever appears, the ag_valid gating and the tag pipeline's
+    //  stage-1 hold are the two things to check first.
+    always @(posedge clock) begin
+        if (rst_n && stall)
+            $display("[FAULT] %m C-9 `stall` asserted at time %0t. This path has never been exercised - accel_top ties it to 0 - so the single-cycle-drain contract in the port comment no longer holds and the tag pipeline's gating needs verifying.",
+                     $time);
+    end
+
     // ---- ARR_LAT is restated here, so MEASURE it (L-1, L-2, A-1) --------
     //  This module computes MAC_LAT from TN with the same arithmetic mac_lane
     //  uses, adds pe_array's own input register to get ARR_LAT, and sizes its
@@ -423,9 +488,9 @@ module pw_feeder #(
     // product itself cannot be the thing that overflows.
     always @(posedge clock) begin
         if (rst_n && start) begin
-            if ((n_oc * n_ic) > WDEPTH) begin
+            if ((n_oc_q * n_ic_q) > WDEPTH) begin
                 $display("ERROR: %m C-6 layer needs n_oc*n_ic = %0d weight entries, the buffer holds WDEPTH = %0d (WA_W = %0d) at time %0t. w_addr would wrap and re-read the start of the rectangle.",
-                         n_oc * n_ic, WDEPTH, WA_W, $time);
+                         n_oc_q * n_ic_q, WDEPTH, WA_W, $time);
                 $finish;
             end
         end

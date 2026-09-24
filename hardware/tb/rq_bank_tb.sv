@@ -55,7 +55,7 @@ module rq_bank_tb;
 
     rq_bank #(.TM(TM), .ACC_W(ACC_W), .BIAS_W(BIAS_W), .M0_W(M0_W),
               .SHIFT_W(SHIFT_W), .DATA_W(DATA_W)) u_dut (
-        .clock(clock), .rst_n(rst_n), .en(en),
+        .clock(clock), .rst_n(rst_n), .en(en), .flush(1'b0),
         .act(act), .relu6_qmax(qmax),
         .acc(acc_bus), .bias(bias_bus), .m0(m0_bus), .shift(sh_bus),
         .q(q_bus), .q_valid(q_valid)
@@ -74,7 +74,7 @@ module rq_bank_tb;
         .acc_in(s_acc), .bias(s_bias), .acc_out(s_biased)
     );
     requantize #(.ACC_W(ACC_W), .M0_W(M0_W), .SHIFT_W(SHIFT_W)) u_sr (
-        .clock(clock), .rst_n(rst_n), .en(s_en),
+        .clock(clock), .rst_n(rst_n), .en(s_en), .flush(1'b0),
         .act(act), .in_data(s_biased), .M0(s_m0), .shift(s_sh),
         .relu6_qmax(qmax), .quantized(s_q)
     );

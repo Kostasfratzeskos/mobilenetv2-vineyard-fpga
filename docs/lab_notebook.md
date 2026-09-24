@@ -1258,3 +1258,93 @@ wrote quant_scales.json  (53 layers)
 - Next: DD-023 if approved - `act_buffer` read latency 1 -> 2, which moves every feeder's
   stage-1 delay and every tag pipeline behind it, in five feeders. Then Phase 4 (L-6, L-13,
   L-11/L-14, C-5, C-12, L-15, the T-10 remainder), which is correctness work, not timing.
+
+### 2026-09-24 (later) - Phase 4: correctness, and a stale golden set
+- Decision taken first: clock work STOPS at 179.0 MHz. DD-023 (the act_buffer URAM cascade) is
+  Deferred, not rejected - the analysis stays because it is the reason 250 MHz was not reached.
+- Did: C-5, C-12, L-6, L-13, L-14, L-15 and the six remaining T-10 items, plus DD-024/025/026.
+- Tests: all 31 pass, accel_tb bit-exact at 6,895,780 elements. C model 66/66 layers on three
+  golden sets, C unit tests pass, clean -Wall -Wextra build.
+- Post-route at 4.000 ns: WNS -0.951, **202.0 MHz**, 34,491 LUT, 19,750 FF, 944 DSP, DPIR-2 0.
+  **I am not claiming those 23 MHz over Phase 3.** The worst path is the SAME act_buffer URAM
+  cascade into the depthwise line buffer (7 of 10 logic levels are URAM288), and the gain is
+  almost entirely route: 2.778 -> 1.970 ns while logic went slightly UP, 2.736 -> 2.825. On a
+  route-dominated path that is the placer doing better because the logic around it moved. The
+  honest claim is that correctness work did not regress timing.
+- C-5 was the one with a real bug in it. Nine sites across four feeders paired a SEL_W-derived
+  half-select with a literal divide-by-two. Both happen to be right because POOL_TM/TN is 2. At
+  ratio 4 the `*_sel` port would widen correctly and every address would still divide by 2, so
+  three quarters of the reads would land on the wrong entry - no width mismatch, no elaboration
+  error, a plausible feature map.
+- L-13 turned out to be a different finding than the one written down. The review says "pick the
+  authoritative semantics". They were already picked: Python clamps (export.py:303), the RTL
+  clamps, and the C was the ONLY one that wrapped - by C's implicit-narrowing rules, not by a
+  decision. 100+100 gave -56 against 127. And **no golden regeneration was needed**, which I had
+  predicted wrongly in DD-025: the vectors are written by export.py from the Python executor, not
+  by the C, so they already encoded clamping. The C now agrees by construction instead of by luck.
+- A SECOND divergence, mine to find rather than the review's: Python does not clamp the
+  INTERMEDIATE rescaled skip value and both the C and the RTL do. The RTL cannot match Python
+  there - that value leaves the shared out_stage as int8 by construction - so the implementable
+  semantics are the C's and the RTL's. Unreachable only while residual M <= 1; measured worst is
+  0.909 at features.10.add. Now a build-time assert in gen_program.py, because M <= 1 is a
+  property of this checkpoint's scales and not of the architecture.
+- **The worst thing found in this phase was not in the review.** software/golden/image_1 is a
+  stale pre-retrain golden set: no ckpt_sha256, and an `image` path from the old directory
+  layout. The C model scores 1/66 layers against it and 66/66 against every set with the current
+  hash. gen_program.py already HAD a checkpoint-mismatch guard - added, its own comment says,
+  after an afternoon lost to exactly this - but it only fired on a MISMATCH and treated a MISSING
+  hash as a printed note. And image_1 was the default for both gen_program.py and the C model.
+  So the guard written after losing an afternoon could be walked past by running with no
+  arguments. Missing is now fatal and the default is healthy_hl6025, the set the RTL tests
+  already use. Verified the guard refuses image_1 and that every generated artifact and
+  program_ops.svh is byte-identical afterwards. image_1 left in place - deleting golden data is
+  not mine to decide.
+- One self-inflicted error: I first gated logit_out's `logits` on the bare `stale` register,
+  which is still high during the very cycle logits_valid asserts - so the logits read zero
+  exactly when the contract says they are good. lin_datapath_tb caught it in one run. The gate is
+  `stale && !lv`, which closes the start-to-first-result window T-10 names and deliberately does
+  NOT latch the output, because that would move logits_valid by a cycle.
+- Blocked on: nothing. Next: Phase 5.
+
+### 2026-09-24 (last) - Phase 5: C-3, and three findings whose premises had moved
+- Did: C-3 (all five feeders), C-1, C-7, C-8, C-9, C-10, T-7, T-9. Proposed DD-027 (T-6),
+  DD-028 (T-8), DD-029 (C-11) and recommended NOT doing what the review suggests in all three.
+- Tests: all 31 pass, accel_tb bit-exact at 6,895,780 elements.
+- C-3 is the one with teeth. addr_gen's header advertises that the caller may change the inputs
+  while a layer runs - that is what makes instruction prefetch possible - and not one of the five
+  feeders honoured it. Masked only because top_seq does not refetch w[] until !op_busy, so
+  implementing the advertised prefetch would have broken all five SILENTLY, as wrong addresses.
+  base_out was the worst: consumed during the DRAIN, after `run` has already dropped, so it has
+  to outlive the layer by longer than the rest. Latched at start everywhere now, raw ports read
+  only in the start branch, exactly addr_gen's shape.
+- C-10 is the only fix this phase that I could prove by making it fail. requantize gained a
+  `flush` that clears its valid pipeline, wired through rq_bank, out_stage and logit_out (where
+  `start` IS the flush, which also finishes T-10's logit clearing). I added a directed case to
+  requantize_tb, then removed the one line of the fix and re-ran: "flush did NOT drop the
+  in-flight result", suite fails. Restored: passes, and the pipeline still works afterwards. A
+  test for a defect that cannot fail without the defect present is not a test.
+- T-7: the stem's oc-tile count no longer comes from a LOAD field at all. It was
+  (ld_pchan + TS-1) >> TSLOG truncated to OCTW bits, which gave ld_pchan a third meaning and
+  truncated silently above pchan=128 - (128+7)>>3 = 16 wraps to 0 and the stem sweeps nothing
+  while reporting busy. The real derivation needs no field: stem_feeder tiles TS-channel quarters
+  into a POOL_TM-channel entry, so the count is TM/TS, checked at elaboration, cross-checked
+  against ld_pchan in simulation.
+- C-7 was measurable: stem_feeder was 8,968 LUTs against pw_feeder's 724, for a path with no
+  DSPs against one carrying 512, largely because a 4-bit counter that reaches 3 was used as a
+  variable index and built 16-position decoders. The bound is structural (C-12's equality), so
+  narrowing the index to clog2(TM/TS) = 2 bits is not an optimisation, it is saying what the
+  counter is.
+- **Three findings whose premises had moved under them**, which is worth recording as a pattern:
+  - T-6 ("detect but neither correct nor stop is the one combination with no benefit") - that
+    combination stopped existing when Phase 1 implemented T-3. The design detects AND stops now.
+    Deriving the write address from the tag would make latency-bookkeeping errors HARMLESS rather
+    than fatal, and those errors were the entire failure mode of Phase 2, caught four times by
+    exactly this kind of witness. Recommended keeping the counter.
+  - T-8 - its timing half is gone. At Phase 2c the post-route worst path ENDED in
+    u_log/cls[2].u_r/quantized_reg; after L-3 and A-1 nothing in logit_out is on the list.
+    And the drift risk is now structural: both copies take q_valid and flush from the module.
+    Recommended accepting the split plus a cross-verification test.
+  - C-11 - recommended header fix only. The decisive argument is that double buffering makes
+    top_seq non-serial, and op_busy, ld_done, ld_pchan and C-3 were ALL fixed in this review on
+    the assumption of serial execution. It would test every one of them at once.
+- Blocked on: DD-027, DD-028, DD-029 approval. Nothing else.

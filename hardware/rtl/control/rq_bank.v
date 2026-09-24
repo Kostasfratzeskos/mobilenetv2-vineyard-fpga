@@ -65,6 +65,7 @@ module rq_bank #(
     input  wire                      clock,
     input  wire                      rst_n,
     input  wire                      en,           // latch this result
+    input  wire                      flush,        // C-10: drop what is in flight
 
     // ---- per-layer -----------------------------------------------------
     input  wire                      act,          // 0 = NONE, 1 = RELU6
@@ -114,6 +115,7 @@ module rq_bank #(
                 .clock      (clock),
                 .rst_n      (rst_n),
                 .en         (en),
+                .flush      (flush),
                 .act        (act),
                 .in_data    (biased),
                 .M0         (m0   [m*M0_W    +: M0_W]),

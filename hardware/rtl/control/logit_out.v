@@ -155,6 +155,12 @@ module logit_out #(
                 .clock      (clock),
                 .rst_n      (rst_n),
                 .en         (acc_valid),
+                //  C-10: `start` is this module's flush. The classifier's
+                //  requantize copy has the same in-flight problem out_stage's
+                //  had, and the same answer - and it finishes T-10's "clear the
+                //  logit outputs on start": the `stale` gate hides the old
+                //  value, this stops a half-finished new one from arriving.
+                .flush      (start),
                 .act        (ACT_NONE),      // logits never take an activation
                 .in_data    (biased),
                 .M0         (p_m0[c]),

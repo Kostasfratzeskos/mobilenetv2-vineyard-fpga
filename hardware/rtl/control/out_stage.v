@@ -139,6 +139,13 @@ module out_stage #(
         .clock      (clock),
         .rst_n      (rst_n),
         .en         (vA),
+        //  C-10: the flush reaches stage B now. It used to clear `vA` and
+        //  nothing else, so a flush raised while a result was latched still
+        //  produced a q_valid RQ_LAT cycles later - and by then a different
+        //  feeder was selected, so the write landed at another op's address
+        //  with another op's data. os_q_valid is broadcast to all five feeders
+        //  (T-9), which is what let a stale valid reach further than it looks.
+        .flush      (flush),
         .act        (act),
         .relu6_qmax (relu6_qmax),
         .acc        (acc_q),

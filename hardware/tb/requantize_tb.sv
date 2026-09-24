@@ -30,6 +30,7 @@ module requantize_tb;
     logic                      clock;
     logic                      rst_n;
     logic                      en;
+    logic                      flush;
     logic                      act;
     logic signed [25:0]        in_data;      // ACC_W = 26
     logic signed [31:0]        M0;           // M0_W  = 32
@@ -55,6 +56,7 @@ module requantize_tb;
         .clock      (clock),
         .rst_n      (rst_n),
         .en         (en),
+        .flush      (flush),
         .act        (act),
         .in_data    (in_data),
         .M0         (M0),
@@ -80,7 +82,7 @@ module requantize_tb;
 
     requantize #(.ACC_W(G_ACC_W), .M0_W(32), .SHIFT_W(6),
                  .CHECKS_ARE_FATAL(0)) g_dut (
-        .clock(clock), .rst_n(rst_n), .en(1'b1), .act(ACT_NONE),
+        .clock(clock), .rst_n(rst_n), .en(1'b1), .flush(1'b0), .act(ACT_NONE),
         .in_data(g_acc), .M0(g_m0), .shift(g_shift), .relu6_qmax(8'sd0),
         .quantized(g_q), .q_valid()
     );
@@ -166,7 +168,7 @@ module requantize_tb;
     // ---- stimulus -----------------------------------------------------
     initial begin
         // init + reset
-        en = 0; act = ACT_NONE; in_data = 0; M0 = 0; shift = 6'd1; relu6_qmax = 0;
+        en = 0; flush = 0; act = ACT_NONE; in_data = 0; M0 = 0; shift = 6'd1; relu6_qmax = 0;
         g_acc = 0; g_m0 = 0; g_shift = 6'd1;
         rst_n = 0;
         repeat (2) @(negedge clock);
@@ -235,6 +237,52 @@ module requantize_tb;
         g_case(-21'sd3,  M0_HALF, 6'd31,        -8'sd1, "shift=31 negative tie unchanged");
         g_case(21'sd1,   M0_HALF, 6'd1,          8'sd127,
                "shift=1 (smallest legal) unchanged");
+
+        // ---- C-10: a flush must kill a result already in flight ----------
+        //
+        //  This is the defect C-10 named: out_stage's flush cleared its own stage
+        //  A and nothing behind it, so a result already latched still produced a
+        //  q_valid RQ_LAT cycles later - into whichever feeder had since been
+        //  selected. Now `flush` clears requantize's whole valid pipeline, and
+        //  this is the test that says so. Without the fix, q_valid arrives and
+        //  this reports a failure.
+        $display("");
+        $display("C-10, the flush:");
+        begin
+            integer k;
+            logic   saw_qv;
+
+            @(negedge clock);
+            in_data = 21'sd100; M0 = M0_HALF; shift = 6'd31;
+            act = ACT_NONE; relu6_qmax = 8'sd0;
+            en = 1'b1;
+            @(posedge clock);            // stage 1 loads
+            @(negedge clock);
+            en = 1'b0;
+            // one more stage, so there is definitely something in flight
+            @(posedge clock); @(negedge clock);
+
+            flush = 1'b1;
+            @(posedge clock); @(negedge clock);
+            flush = 1'b0;
+
+            // give it more than the whole pipeline to (not) come out
+            saw_qv = 1'b0;
+            for (k = 0; k < RQ_LAT + 4; k = k + 1) begin
+                if (q_valid === 1'b1) saw_qv = 1'b1;
+                @(posedge clock); @(negedge clock);
+            end
+
+            total++;
+            if (saw_qv) begin
+                fails++;
+                $display("  [ERR] flush did NOT drop the in-flight result: q_valid still came");
+            end else
+                $display("  [ok ] flush dropped the in-flight result (no q_valid)");
+        end
+
+        // and the pipeline still works afterwards - a flush must not wedge it
+        run_case(ACT_NONE, 3, M0_HALF, 31, 8'sd0, 8'sd2, "works after flush");
 
         $display("");
         if (fails == 0)

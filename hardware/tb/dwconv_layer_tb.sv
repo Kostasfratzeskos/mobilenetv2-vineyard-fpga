@@ -80,7 +80,7 @@ module dwconv_layer_tb;
     );
 
     requantize #(.ACC_W(21), .M0_W(32), .SHIFT_W(6)) u_rq (
-        .clock(clock), .rst_n(rst_n), .en(rq_en),
+        .clock(clock), .rst_n(rst_n), .en(rq_en), .flush(1'b0),
         .act(act_r), .in_data(biased_w), .M0(m0_r),
         .shift(sh_r[5:0]), .relu6_qmax(qmax_r), .quantized(q_w)
     );

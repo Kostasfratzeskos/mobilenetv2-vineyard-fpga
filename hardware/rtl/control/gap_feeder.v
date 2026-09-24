@@ -114,14 +114,44 @@ module gap_feeder #(
     endfunction
 
 
+    // ================= C-3 : shape and bases latched at start ===========
+    //  `addr_gen` deliberately latches its shape at `start` so the caller may
+    //  change the inputs while a layer runs - that is what makes prefetching the
+    //  next instruction possible, and its header says so. No feeder honoured it:
+    //  all five read the raw ports for the whole layer. That is masked today only
+    //  because `top_seq` does not refetch `w[]` until `!op_busy`, so the inputs
+    //  happen to be stable - i.e. the advertised prefetch would break all five
+    //  feeders SILENTLY, as wrong addresses rather than as an error.
+    //
+    //  `base_out` is the worst of them: it is consumed during the DRAIN, after
+    //  `run` has already dropped, so it must stay valid even later than the rest.
+    //
+    //  Same shape as addr_gen: the RAW ports are read only in the `start` branch
+    //  - which is the cycle the caller presents them - and everything else reads
+    //  the latched copy.
+    reg [PIX_W-1:0] n_pix_q;
+    reg [SLW-1:0]   n_sl_q;
+    reg [AA_W-1:0]  n_ent_q, base_in_q, base_out_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            n_pix_q <= {PIX_W{1'b0}};  n_sl_q <= {SLW{1'b0}};
+            n_ent_q <= {AA_W{1'b0}};
+            base_in_q <= {AA_W{1'b0}}; base_out_q <= {AA_W{1'b0}};
+        end else if (start) begin
+            n_pix_q <= n_pix;  n_sl_q <= n_sl;  n_ent_q <= n_ent;
+            base_in_q <= base_in;  base_out_q <= base_out;
+        end
+    end
+
     // ================= stage 0 : slice-major, spatial-minor =============
     reg [SLW-1:0]   sl;
     reg [PIX_W-1:0] pp;
     reg [AA_W-1:0]  p_off;        // pp * n_ent, kept by accumulation
     reg             run;
 
-    wire last_p  = (pp == n_pix - 1'b1);
-    wire last_sl = last_p && (sl == n_sl - 1'b1);
+    wire last_p  = (pp == n_pix_q - 1'b1);
+    wire last_sl = last_p && (sl == n_sl_q - 1'b1);
 
     always @(posedge clock) begin
         if (!rst_n) begin
@@ -144,7 +174,7 @@ module gap_feeder #(
                     p_off <= {AA_W{1'b0}};        // next slice restarts the sweep
                 end else begin
                     pp    <= pp + 1'b1;
-                    p_off <= p_off + n_ent;
+                    p_off <= p_off + n_ent_q;
                 end
             end
         end
@@ -168,7 +198,7 @@ module gap_feeder #(
     wire [AA_W-1:0] sl_ent    = sl_half_w[AA_W-1:0];
 
     assign a_rd_en = run;
-    assign a_addr  = base_in + p_off + sl_ent;
+    assign a_addr  = base_in_q + p_off + sl_ent;
     assign a_sel   = sl[SEL_W-1:0];
 
     // ================= stage 1 : the 16 accumulators ====================
@@ -260,7 +290,7 @@ module gap_feeder #(
     assign aw_en   = q_valid;
     assign aw_full = (TN == POOL_TM);
     assign aw_sel  = sl_d4[SEL_W-1:0];
-    assign aw_addr = base_out + out_ent;
+    assign aw_addr = base_out_q + out_ent;
     assign aw_data = q;              // already in the half wr_sel stores
 
     // ================= busy, including the drain ========================

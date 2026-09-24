@@ -332,3 +332,21 @@ Unchanged throughout: `TM=32`, `TN=16`, `TC=16`, `TS=8`, `ACC_W=26`, `SEL_W=1`, 
 golden vector. All 31 testbenches pass at each phase boundary, including `accel_tb` at
 6,895,780 elements bit-exact over 64 ops — which is the only reason the table above is
 believable: not one of these numbers changed a value, only when it arrives.
+
+## 7. What Phases 4 and 5 changed in this inventory
+
+Neither phase changed a latency. What they changed is who is allowed to still be in flight, and
+that belongs here because it is the other half of the same bookkeeping.
+
+| Change | Effect on this table |
+|:--|:--|
+| **C-10** `flush` reaches stage B | `requantize` gained a `flush` that clears `en_sr`, so a flush now drops all `RQ_LAT` = 4 stages instead of only `out_stage`'s stage A. Before, a flush with a result latched produced a `q_valid` `RQ_LAT` cycles later - into whichever feeder had since been selected. The depths are unchanged; what changed is that `OS_LAT`'s worth of pipeline can now be emptied on demand. |
+| **T-9** `q_valid` gated per feeder | `os_q_valid` no longer advances all five feeders' output pipelines on every result. The tag depths are unchanged, but an idle feeder's pipeline no longer moves at all, which is what the C-2 witnesses were relying on `busy` to compensate for. |
+| **C-3** shape/base latched at start | No depth changes. It does mean every feeder's addresses are now stable for the whole layer INCLUDING the drain, which is what `base_out` needed - it is consumed `DRAIN_CYC` cycles after `run` drops. |
+| **T-7** stem tile count derived | `st_n_oct` is `TM/TS` (a constant), not a load field. No latency, but it removes a runtime input from the sweep length, which `DRAIN_CYC = ST_LAT + OS_LAT + 1` is sized against. |
+
+The one thing to carry forward: **C-10's flush and the drain counters do the same job from
+opposite ends.** A drain keeps `busy` high until the pipeline empties itself; a flush empties it
+immediately. If a future change makes them disagree - a flush shorter than the pipeline, or a
+drain that stops before it - the symptom is a write from one op landing during another, which is
+exactly what C-10 was.

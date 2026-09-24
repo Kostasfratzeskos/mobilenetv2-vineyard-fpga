@@ -74,6 +74,17 @@ module requantize #(
     input  wire                      clock,
     input  wire                      rst_n,       // SYNCHRONOUS (DD-020)
     input  wire                      en,          // in_data is a real element
+    //  C-10: drop everything IN FLIGHT. `rst_n` is too blunt - it is the whole
+    //  chip - and `en` going low only stops NEW work: the RQ_LAT stages already
+    //  loaded keep advancing and still raise q_valid. out_stage's flush cleared
+    //  its own stage A and nothing behind it, so a flush with a result latched
+    //  produced a q_valid RQ_LAT cycles later, into whichever feeder had since
+    //  been selected - one op's data written at another op's address.
+    //
+    //  Only the VALID shift register is cleared, not the datapath. The data is
+    //  harmless once no valid marks it, and clearing 59-bit vectors would cost
+    //  real fabric for nothing.
+    input  wire                      flush,       // C-10
     input  wire                      act,         // 0 = ACT_NONE, 1 = ACT_RELU6
     input  wire signed [ACC_W-1:0]   in_data,     // accumulator element, biased
     input  wire signed [M0_W-1:0]    M0,          // fixed-point multiplier
@@ -106,8 +117,9 @@ module requantize #(
     reg [RQ_LAT-1:0] en_sr;
 
     always @(posedge clock) begin
-        if (!rst_n) en_sr <= {RQ_LAT{1'b0}};
-        else        en_sr <= {en_sr[RQ_LAT-2:0], en};
+        if (!rst_n)     en_sr <= {RQ_LAT{1'b0}};
+        else if (flush) en_sr <= {RQ_LAT{1'b0}};     // C-10
+        else            en_sr <= {en_sr[RQ_LAT-2:0], en};
     end
 
     assign q_valid = en_sr[RQ_LAT-1];

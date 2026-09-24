@@ -133,8 +133,39 @@ module res_feeder #(
     reg             ph;           // 0 = issue target read, 1 = issue saved
     reg             run;
 
-    wire last_sl  = (sl  == n_sl  - 1'b1);
-    wire last_pix = last_sl && (pix == n_pix - 1'b1);
+    // ================= C-3 : shape and bases latched at start ===========
+    //  `addr_gen` deliberately latches its shape at `start` so the caller may
+    //  change the inputs while a layer runs - that is what makes prefetching the
+    //  next instruction possible, and its header says so. No feeder honoured it:
+    //  all five read the raw ports for the whole layer. Masked today only because
+    //  `top_seq` does not refetch `w[]` until `!op_busy`, so the inputs happen to
+    //  be stable - i.e. implementing the advertised prefetch would have broken all
+    //  five feeders SILENTLY, as wrong addresses rather than as an error.
+    //
+    //  `base_out` is the worst of them: it is consumed during the DRAIN, after
+    //  `run` has dropped, so it has to outlive the layer by more than the rest.
+    //
+    //  Same shape as addr_gen: the RAW ports are read only in the `start` branch,
+    //  which is the cycle the caller presents them, and every other reader -
+    //  including the simulation checks - uses the latched copy.
+    reg [PIX_W-1:0] n_pix_q;
+    reg [SLW-1:0]   n_sl_q;
+    reg [AA_W-1:0]  n_ent_q, base_in_q, base_saved_q, base_out_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            n_pix_q <= {PIX_W{1'b0}};  n_sl_q <= {SLW{1'b0}};
+            n_ent_q <= {AA_W{1'b0}};   base_in_q <= {AA_W{1'b0}};
+            base_saved_q <= {AA_W{1'b0}};  base_out_q <= {AA_W{1'b0}};
+        end else if (start) begin
+            n_pix_q <= n_pix;  n_sl_q <= n_sl;  n_ent_q <= n_ent;
+            base_in_q <= base_in;  base_saved_q <= base_saved;
+            base_out_q <= base_out;
+        end
+    end
+
+    wire last_sl  = (sl  == n_sl_q  - 1'b1);
+    wire last_pix = last_sl && (pix == n_pix_q - 1'b1);
     wire slice_hi = ph;                       // second phase of this slice
 
     always @(posedge clock) begin
@@ -162,7 +193,7 @@ module res_feeder #(
                     end else if (last_sl) begin
                         sl  <= {SLW{1'b0}};
                         pix <= pix + 1'b1;
-                        pix_off <= pix_off + n_ent;
+                        pix_off <= pix_off + n_ent_q;
                     end else begin
                         sl <= sl + 1'b1;
                     end
@@ -190,7 +221,7 @@ module res_feeder #(
     wire [AA_W-1:0] slice_off = pix_off + sl_ent;
 
     assign a_rd_en = run;
-    assign a_addr  = (ph ? base_saved : base_in) + slice_off;
+    assign a_addr  = (ph ? base_saved_q : base_in_q) + slice_off;
     assign a_sel   = sl[SEL_W-1:0];
 
     // ================= the target delay line ============================
@@ -220,7 +251,7 @@ module res_feeder #(
                 // the target word issued last cycle is on the bus now, and the
                 // counters still hold this slice's indices
                 tgt_sr[0] <= a_word;
-                wa_sr [0] <= base_out + slice_off;
+                wa_sr [0] <= base_out_q + slice_off;
                 ws_sr [0] <= sl[SEL_W-1:0];
             end
             for (ts = 1; ts < TGT_LAT; ts = ts + 1) begin

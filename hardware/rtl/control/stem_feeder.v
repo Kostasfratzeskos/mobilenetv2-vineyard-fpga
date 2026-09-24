@@ -154,6 +154,22 @@ module stem_feeder #(
         end
     endfunction
 
+    // ---- C-7 : the oc_tile index, constrained to its ACTUAL range -------
+    //  `oct` is OCTW = 4 bits but only ever reaches 3, and it is used as a
+    //  VARIABLE index into acc_wide and asm - so the tool built a 16-position
+    //  decoder for each, four times wider than anything that can happen. C-7
+    //  measured the cost: stem_feeder was the largest feeder at 8,968 LUTs
+    //  against pw_feeder's 724, for a path carrying no DSPs at all against one
+    //  carrying 512.
+    //
+    //  The bound is STRUCTURAL, not a shape field. The assembly of `asm` needs
+    //  the TS-channel quarters to tile a POOL_TM-channel entry exactly - that is
+    //  C-12's equality, n_oct*TS == POOL_TM - so the number of oc_tiles the stem
+    //  can ever sweep is POOL_TM/TS, full stop. Indexing with that many bits is
+    //  not an optimisation, it is saying what the counter actually is.
+    localparam N_OCT_MAX = POOL_TM / TS;            // 4
+    localparam OCT_IDX_W = clog2(N_OCT_MAX);        // 2
+
     localparam ST_LAT    = 1 + clog2(NT);           // 6
     localparam OCT_ARR   = ST_LAT;                  // oct -> array output
     localparam OCT_WR    = ST_LAT + OS_LAT;         // oct -> q_valid
@@ -170,15 +186,63 @@ module stem_feeder #(
     reg [IA_W-1:0] img_off;                 // y*img_w + x, by accumulation
     reg            run;
 
-    wire is_real = (cy < img_h) && (cx < img_w);
-    wire last_x  = (cx == img_w);
-    wire last_y  = last_x && (cy == img_h);
+    // ================= C-3 : shape and bases latched at start ===========
+    //  `addr_gen` deliberately latches its shape at `start` so the caller may
+    //  change the inputs while a layer runs - that is what makes prefetching the
+    //  next instruction possible, and its header says so. No feeder honoured it:
+    //  all five read the raw ports for the whole layer. Masked today only because
+    //  `top_seq` does not refetch `w[]` until `!op_busy`, so the inputs happen to
+    //  be stable - i.e. implementing the advertised prefetch would have broken all
+    //  five feeders SILENTLY, as wrong addresses rather than as an error.
+    //
+    //  `base_out` is the worst of them: it is consumed during the DRAIN, after
+    //  `run` has dropped, so it has to outlive the layer by more than the rest.
+    //
+    //  Same shape as addr_gen: the RAW ports are read only in the `start` branch,
+    //  which is the cycle the caller presents them, and every other reader -
+    //  including the simulation checks - uses the latched copy.
+    reg [XW-1:0]   img_w_q, img_h_q;
+    reg [OCTW-1:0] n_oct_q;
+    reg [AA_W-1:0] base_out_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            img_w_q <= {XW{1'b0}};  img_h_q <= {XW{1'b0}};
+            n_oct_q <= {OCTW{1'b0}};  base_out_q <= {AA_W{1'b0}};
+        end else if (start) begin
+            img_w_q <= img_w;  img_h_q <= img_h;
+            n_oct_q <= n_oct;  base_out_q <= base_out;
+        end
+    end
+
+    wire is_real = (cy < img_h_q) && (cx < img_w_q);
+    wire last_x  = (cx == img_w_q);
+    wire last_y  = last_x && (cy == img_h_q);
 
     // the stall: no advance while a window is being swept
     reg              sweeping;
     reg [OCTW-1:0]   oct;
-    wire             last_sweep = sweeping && (oct == n_oct - 1'b1);
+    wire             last_sweep = sweeping && (oct == n_oct_q - 1'b1);
     wire             win_valid;
+    //  ---- C-1 : there is NO back-pressure path, and that is load-bearing --
+    //
+    //  A `win_valid` arriving while `sweeping` is high hits the `!sweeping`
+    //  guard below and is DISCARDED - no latch, no stall back into line_buffer,
+    //  no error. Nothing anywhere in this module can push back on the window
+    //  generator.
+    //
+    //  That is correct today for one reason only: the stem is always stride 2,
+    //  so line_buffer emits a window every OTHER column and the sweep of
+    //  n_oct = 4 tiles always finishes inside that gap. The dependency is on
+    //  `stride2` being tied to 1'b1 three lines from here, in a different
+    //  module, with nothing connecting the two facts.
+    //
+    //  If the stem ever becomes stride 1, windows arrive every cycle, the sweep
+    //  cannot keep up, and windows are dropped silently - a decimated feature
+    //  map, not an error. The check below is what says so. A REAL fix needs a
+    //  stall output back into line_buffer, which is an architecture change and
+    //  is not in scope here; what is in scope is that the assumption stops being
+    //  invisible.
     wire             adv = run && ((!sweeping && !win_valid) || last_sweep);
 
     always @(posedge clock) begin
@@ -187,7 +251,14 @@ module stem_feeder #(
             run <= 1'b0; layer_done <= 1'b0;
         end else if (start) begin
             cy <= {XW{1'b0}}; cx <= {XW{1'b0}}; img_off <= {IA_W{1'b0}};
-            run <= (img_w != {XW{1'b0}}) && (img_h != {XW{1'b0}});
+            //  C-8: n_oct is guarded too now. addr_gen, res_feeder and
+            //  gap_feeder refuse a zero-sized layer; this module checked img_w
+            //  and img_h but not n_oct, so n_oct = 0 made `last_sweep` compare
+            //  against -1, the sweep never ended, and the feeder wrote garbage
+            //  into the pool with `busy` asserted - no hang, no error, a
+            //  plausible feature map. The upper bound is C-7's structural one.
+            run <= (img_w != {XW{1'b0}}) && (img_h != {XW{1'b0}}) &&
+                   (n_oct != {OCTW{1'b0}}) && (n_oct <= N_OCT_MAX[OCTW-1:0]);
             layer_done <= 1'b0;
         end else begin
             layer_done <= 1'b0;
@@ -285,7 +356,7 @@ module stem_feeder #(
             sweeping <= 1'b1;
             oct      <= {OCTW{1'b0}};
         end else if (sweeping) begin
-            if (oct == n_oct - 1'b1) sweeping <= 1'b0;
+            if (oct == n_oct_q - 1'b1) sweeping <= 1'b0;
             else                     oct      <= oct + 1'b1;
         end
     end
@@ -348,7 +419,7 @@ module stem_feeder #(
     always @* begin
         acc_wide = {POOL_TM*ACC_W{1'b0}};
         for (L = 0; L < TS; L = L + 1)
-            acc_wide[(oct_arr*TS + L)*ACC_W +: ACC_W] = acc[L*ACC_W +: ACC_W];
+            acc_wide[(oct_arr[OCT_IDX_W-1:0]*TS + L)*ACC_W +: ACC_W] = acc[L*ACC_W +: ACC_W];
     end
 
     // OC <= POOL_TM for the stem, so every oc_tile shares parameter entry 0
@@ -364,6 +435,25 @@ module stem_feeder #(
     wire [POOL_TM*DATA_W-1:0] q       = os_q;
     wire                      q_valid = os_q_valid;
 
+`ifndef SYNTHESIS
+    // ---- C-1: a dropped window, reported by name -------------------------
+    //  Fires when line_buffer presents a window the sweep cannot accept. Fatal:
+    //  there is no correct continuation - the window is gone and the output map
+    //  is short a pixel, so continuing would produce a shifted tensor that looks
+    //  like activations. Compare C-12's asm check, which is also fatal, against
+    //  L-13's residual report, which is not.
+    //
+    //  Unreachable while the stem is stride 2. That is the point: this is the
+    //  witness for an assumption held three lines away in another module.
+    always @(posedge clock) begin
+        if (rst_n && win_valid && sweeping) begin
+            $display("ERROR: %m C-1 line_buffer presented a window at time %0t while the oc_tile sweep was still running (oct=%0d of n_oct=%0d). There is no back-pressure path, so this window is DISCARDED and the output feature map loses a pixel. This is unreachable at stride 2; if the stem is now stride 1 the sweep needs a real stall back into line_buffer.",
+                     $time, oct, n_oct_q);
+            $finish;
+        end
+    end
+`endif
+
     // ================= assemble four quarters into one entry ============
     // Every quarter folds into the same register; the write is delayed one
     // cycle so the last fold has landed before the entry is stored.
@@ -373,11 +463,11 @@ module stem_feeder #(
         if (!rst_n) asm <= {POOL_TM*DATA_W{1'b0}};
         else if (q_valid)
             for (B = 0; B < TS; B = B + 1)
-                asm[(oct_wr*TS + B)*DATA_W +: DATA_W] <=
-                    q[(oct_wr*TS + B)*DATA_W +: DATA_W];
+                asm[(oct_wr[OCT_IDX_W-1:0]*TS + B)*DATA_W +: DATA_W] <=
+                    q[(oct_wr[OCT_IDX_W-1:0]*TS + B)*DATA_W +: DATA_W];
     end
 
-    wire entry_done = q_valid && (oct_wr == n_oct - 1'b1);
+    wire entry_done = q_valid && (oct_wr == n_oct_q - 1'b1);
 
 `ifndef SYNTHESIS
     //  C-12: `asm` is never cleared between entries - each quarter overwrites its
@@ -392,9 +482,9 @@ module stem_feeder #(
     //  which looks like a plausible feature map, not like a bug. Checked once per
     //  entry, where it is cheap and where the value being stored is the evidence.
     always @(posedge clock) begin
-        if (rst_n && entry_done && ((n_oct * TS) != POOL_TM)) begin
+        if (rst_n && entry_done && ((n_oct_q * TS) != POOL_TM)) begin
             $display("ERROR: %m C-12 n_oct*TS = %0d but POOL_TM = %0d at time %0t. `asm` is only ever partially written and is stored whole, so %0d bytes of this entry are left over from the previous pixel. Either clear asm on the first quarter or fix the shape.",
-                     n_oct * TS, POOL_TM, $time, POOL_TM - (n_oct * TS));
+                     n_oct_q * TS, POOL_TM, $time, POOL_TM - (n_oct_q * TS));
             $finish;
         end
     end
@@ -416,7 +506,7 @@ module stem_feeder #(
 
     assign aw_en   = wr_go;
     assign aw_full = 1'b1;                  // one output pixel = one entry
-    assign aw_addr = base_out + out_cnt;
+    assign aw_addr = base_out_q + out_cnt;
     assign aw_data = asm;
 
     // ---- C-2: the witness that was being thrown away ---------------------
@@ -528,7 +618,7 @@ module stem_feeder #(
         end
     end
 
-    wire [XW-1:0] out_w_e = (img_w + 1'b1) >> 1;    // the stem is always stride 2
+    wire [XW-1:0] out_w_e = (img_w_q + 1'b1) >> 1;  // the stem is always stride 2
     wire [31:0]   wit_cnt = (oy_e * out_w_e) + ox_e;
 
     //  Qualified by `busy` for the reason dw_feeder's copy documents: os_q_valid

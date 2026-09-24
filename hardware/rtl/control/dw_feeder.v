@@ -184,14 +184,45 @@ module dw_feeder #(
     reg [XW-1:0]   cy, cx;
     reg            run;
 
-    wire last_x   = (cx == img_w);
-    wire last_y   = last_x && (cy == img_h);
-    wire last_grp = last_y && (grp == n_grp - 1'b1);
+    // ================= C-3 : shape and bases latched at start ===========
+    //  `addr_gen` deliberately latches its shape at `start` so the caller may
+    //  change the inputs while a layer runs - that is what makes prefetching the
+    //  next instruction possible, and its header says so. No feeder honoured it:
+    //  all five read the raw ports for the whole layer. Masked today only because
+    //  `top_seq` does not refetch `w[]` until `!op_busy`, so the inputs happen to
+    //  be stable - i.e. implementing the advertised prefetch would have broken all
+    //  five feeders SILENTLY, as wrong addresses rather than as an error.
+    //
+    //  `base_out` is the worst of them: it is consumed during the DRAIN, after
+    //  `run` has dropped, so it has to outlive the layer by more than the rest.
+    //
+    //  Same shape as addr_gen: the RAW ports are read only in the `start` branch,
+    //  which is the cycle the caller presents them, and every other reader -
+    //  including the simulation checks - uses the latched copy.
+    reg [XW-1:0]   img_w_q, img_h_q;
+    reg [GRPW-1:0] n_grp_q;
+    reg [AA_W-1:0] n_ent_q, base_in_q, base_out_q;
+
+    always @(posedge clock) begin
+        if (!rst_n) begin
+            img_w_q <= {XW{1'b0}};  img_h_q <= {XW{1'b0}};
+            n_grp_q <= {GRPW{1'b0}};  n_ent_q <= {AA_W{1'b0}};
+            base_in_q <= {AA_W{1'b0}};  base_out_q <= {AA_W{1'b0}};
+        end else if (start) begin
+            img_w_q <= img_w;  img_h_q <= img_h;
+            n_grp_q <= n_grp;  n_ent_q <= n_ent;
+            base_in_q <= base_in;  base_out_q <= base_out;
+        end
+    end
+
+    wire last_x   = (cx == img_w_q);
+    wire last_y   = last_x && (cy == img_h_q);
+    wire last_grp = last_y && (grp == n_grp_q - 1'b1);
     wire step     = run;
 
     // a real pixel exists only inside the image; the extra row and column are
     // the virtual edge line_buffer needs
-    wire is_real  = (cy < img_h) && (cx < img_w);
+    wire is_real  = (cy < img_h_q) && (cx < img_w_q);
 
     always @(posedge clock) begin
         if (!rst_n) begin
@@ -199,7 +230,15 @@ module dw_feeder #(
             run <= 1'b0; layer_done <= 1'b0;
         end else if (start) begin
             grp <= {GRPW{1'b0}}; cy <= {XW{1'b0}}; cx <= {XW{1'b0}};
-            run <= (n_grp != {GRPW{1'b0}});
+            //  C-8: img_w and img_h are guarded too now. addr_gen,
+            //  res_feeder and gap_feeder refuse a zero-sized layer; this module
+            //  checked n_grp only, so img_w = 0 or img_h = 0 walked the raster
+            //  with `last_x`/`last_y` comparing against a wrapped value and wrote
+            //  garbage into the pool with `busy` asserted. No hang, no error -
+            //  and T-2 is the record of what the guards that DO exist cost when
+            //  they fire, so the ones that are missing are the expensive half.
+            run <= (n_grp != {GRPW{1'b0}}) &&
+                   (img_w != {XW{1'b0}}) && (img_h != {XW{1'b0}});
             layer_done <= 1'b0;
         end else begin
             layer_done <= 1'b0;
@@ -227,7 +266,7 @@ module dw_feeder #(
         else if (start)      pix_off <= {AA_W{1'b0}};
         else if (step) begin
             if (last_y)      pix_off <= {AA_W{1'b0}};   // next group restarts
-            else if (is_real) pix_off <= pix_off + n_ent;
+            else if (is_real) pix_off <= pix_off + n_ent_q;
         end
     end
 
@@ -247,7 +286,7 @@ module dw_feeder #(
     wire [31:0]     grp_wide = {{(32-GRPW){1'b0}}, grp} >> SEL_W;
     wire [AA_W-1:0] grp_ent  = grp_wide[AA_W-1:0];
 
-    assign a_addr  = base_in + grp_ent + pix_off;
+    assign a_addr  = base_in_q + grp_ent + pix_off;
     assign a_sel   = grp[SEL_W-1:0];
     assign a_rd_en = step && is_real;
 
@@ -381,7 +420,7 @@ module dw_feeder #(
         end else if (start) begin
             opix_off <= {AA_W{1'b0}}; wrote_any <= 1'b0;
         end else if (q_valid) begin
-            opix_off    <= cur_off + n_ent;
+            opix_off    <= cur_off + n_ent_q;
             grp_wr_prev <= grp_wr;
             wrote_any   <= 1'b1;
         end
@@ -394,7 +433,7 @@ module dw_feeder #(
     wire [AA_W-1:0] grp_wr_ent  = grp_wr_wide[AA_W-1:0];
 
     assign aw_sel  = grp_wr[SEL_W-1:0];
-    assign aw_addr = base_out + grp_wr_ent + cur_off;
+    assign aw_addr = base_out_q + grp_wr_ent + cur_off;
     // q already carries the results in the half wr_sel will store, so it goes
     // straight through - the replication convention is not needed here.
     assign aw_data = q;
@@ -491,10 +530,10 @@ module dw_feeder #(
     wire [XW-1:0] oy_w = oy_sr[WIT_LAT-1];
 
     // output geometry, from the input shape and the stride
-    wire [XW-1:0] out_w_e = stride2 ? ((img_w + 1'b1) >> 1) : img_w;
+    wire [XW-1:0] out_w_e = stride2 ? ((img_w_q + 1'b1) >> 1) : img_w_q;
 
     // what the counter says, and what the witness says
-    wire [31:0] cnt_pix  = (n_ent == {AA_W{1'b0}}) ? 32'd0 : (cur_off / n_ent);
+    wire [31:0] cnt_pix  = (n_ent_q == {AA_W{1'b0}}) ? 32'd0 : (cur_off / n_ent_q);
     wire [31:0] wit_pix  = (oy_w * out_w_e) + ox_w;
 
     //  The check is qualified by `busy`, and finding out why was worth more than
@@ -508,15 +547,15 @@ module dw_feeder #(
     //  the finding. `busy` is exactly "I am in my own op", which is the window
     //  in which this feeder's addresses mean anything.
     always @(posedge clock) begin
-        if (rst_n && busy && q_valid && (n_ent != {AA_W{1'b0}})) begin
+        if (rst_n && busy && q_valid && (n_ent_q != {AA_W{1'b0}})) begin
             if (cnt_pix != wit_pix) begin
                 $display("ERROR: %m C-2 writeback address disagrees with line_buffer's own coordinates at time %0t: the q_valid counter says output pixel %0d (cur_off=%0d, n_ent=%0d), the window says (y=%0d, x=%0d) = pixel %0d with out_w=%0d. The whole feature map is shifted from here on.",
-                         $time, cnt_pix, cur_off, n_ent, oy_w, ox_w, wit_pix, out_w_e);
+                         $time, cnt_pix, cur_off, n_ent_q, oy_w, ox_w, wit_pix, out_w_e);
                 $finish;
             end
-            if (cur_off % n_ent != {AA_W{1'b0}}) begin
+            if (cur_off % n_ent_q != {AA_W{1'b0}}) begin
                 $display("ERROR: %m C-2 cur_off = %0d is not a whole multiple of n_ent = %0d at time %0t: the writeback offset has slipped off the pixel grid.",
-                         cur_off, n_ent, $time);
+                         cur_off, n_ent_q, $time);
                 $finish;
             end
         end

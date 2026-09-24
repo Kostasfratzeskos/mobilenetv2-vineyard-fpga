@@ -1143,3 +1143,153 @@ argmax over the 4 int16 logits is the predicted class.
   stays at 31. If "delete" is chosen instead: both `.v` files and both `_tb.sv` files go, the
   `Run:` lines that name them are corrected, L-14 closes as "removed with the file", and
   DD-025's `residual_add.v` header rewrite becomes unnecessary.
+
+
+### DD-027 - T-6: the pointwise write address is a counter, and the tag is only watched
+- Status: **PROPOSED** - awaiting approval, nothing implemented
+- Date: 2026-09-24
+- Context: T-6 says `pw_out`'s write address is a pulse counter while the tag is checked and not
+  used to form it; that `acc_pix`/`acc_oct` arrive exactly the pipeline's depth ahead of
+  `q_valid`; and that with T-3 already terminating the run on a tag mismatch, "detect but
+  neither correct nor stop" is the one combination with no benefit. Its recommendation is to
+  derive `aw_addr` from the tag, or act on `tag_error`.
+
+- **The premise moved under this finding during Phase 1.** T-6 was written when the tag
+  comparator reported and continued. T-3 was implemented in Phase 1: `pw_out` now terminates on
+  a mismatch (`op_error` into `top_seq`, which faults). So the "no benefit" combination the
+  finding describes no longer exists - the design currently DETECTS AND STOPS, which is one of
+  the two dispositions T-6 asks for. T-6 is therefore not a live defect; it is a choice between
+  two defensible designs, which is why it needs a decision rather than a patch.
+
+- **The two designs.**
+
+  **A - counter plus terminating check (what exists).** `aw_addr` counts `q_valid` pulses;
+  `exp_pix`/`exp_oct` predict the tag independently and a disagreement stops the run. A drift is
+  caught and the inference is abandoned.
+
+  **B - tag-derived address (T-6's suggestion).** `aw_addr` is computed from `acc_pix`/`acc_oct`,
+  delayed to `q_valid`. A drift becomes HARMLESS rather than fatal: the write still lands where
+  the data belongs, because the address and the data travel together.
+
+- **Recommendation: keep A, and do not implement B.** Three reasons, in order of weight.
+
+  1. **B makes a class of bug invisible instead of fatal.** If the tag pipeline's depth is wrong,
+     A stops and names the mismatch; B writes to whatever the tag says and produces a correct
+     tensor from a broken pipeline - until the tag pipeline is wrong in a way that is NOT a pure
+     delay error, at which point there is no check left, because the check has become the
+     address. The whole content of Phase 2 was that latency bookkeeping errors are the failure
+     mode of this design, and A is the thing that catches them. Four times this review a
+     `*_LAT` was wrong and a witness said so by name; that is not a capability to trade away.
+  2. **B costs an adder and a multiply on the writeback path.** `aw_addr` is
+     `base_out + pix*n_ent + oct_half`, which is a multiply A gets for free by accumulating.
+     The pointwise writeback is not on the critical path today, and I would rather not put
+     arithmetic there while the design is at 202 MHz against a 250 MHz target.
+  3. **A is already verified end to end.** `pw_out`'s comparator, `accel_tb`'s 6,895,780
+     elements and the C-2 witnesses in the other feeders all exercise A. B would be new logic on
+     the one path where a mistake writes to the wrong pool address, for no measured gain.
+
+- What I propose INSTEAD, and it is small: `pw_out`'s header should state that the counter is
+  deliberate and that the tag is a checker rather than a source, so the next reader does not
+  re-raise T-6. The finding is closed as "considered, rejected with reasons" rather than fixed.
+
+- Consequences if this recommendation is accepted: a header paragraph in `pw_out.v`; T-6 marked
+  rejected-with-reasons in the final report. If B is chosen instead: `aw_addr` derived from the
+  delayed tag, `n_ent` needed in `pw_out` (it is not there today), the drift check keeps its
+  terminating behaviour anyway because it costs nothing to keep, and a new implementation run to
+  confirm the writeback path still closes.
+
+### DD-028 - T-8: the classifier's duplicate requantize datapath
+- Status: **PROPOSED** - awaiting approval, nothing implemented
+- Date: 2026-09-24
+- Context: T-8 says `logit_out` duplicates the requantize datapath that `out_stage` exists to
+  eliminate - the consolidation DD-015 justified as "634 -> 442 DSPs, one block to verify instead
+  of five" - as 4 lanes / 8 DSPs with its own parameter registers; that it is a second copy which
+  must stay bit-exact and which no shared testbench covers; and that it inherits L-3's timing
+  problem plus a combinational 4-way argmax. Recommendation: parameterize `rq_bank`'s OUT_W and
+  route LINEAR through `out_stage`, or accept the split and add explicit cross-verification.
+
+- **What has changed since the finding was written**, both halves measured:
+  * **The timing half is gone.** At Phase 2c the post-route worst path ENDED in
+    `u_log/cls[2].u_r/quantized_reg` - the classifier's own requantize - which is what made T-8
+    load-bearing rather than tidy. After L-3 (Phase 2d) and A-1 (Phase 3) nothing in `logit_out`
+    appears in the worst-path list at all; the path is the `act_buffer` URAM cascade. So routing
+    LINEAR through `out_stage` would buy no clock frequency.
+  * **The bit-exactness half is now structurally handled.** L-3 gave `requantize` its own
+    `q_valid` and Phase 5's C-10 gave it a `flush`; `logit_out` takes both from the module rather
+    than re-deriving them, so the two copies cannot drift on depth or on flush behaviour - which
+    is where a duplicate actually diverges. `lin_datapath_tb` covers the classifier path
+    end to end (accumulators, logits and the predicted class, all bit-exact), and `accel_tb`
+    covers it as op 63.
+
+- **Recommendation: accept the split, and record why, rather than route LINEAR through
+  out_stage.**
+
+  The reason is OUT_W. `out_stage` produces `TM*DATA_W` = 32 int8 activations destined for the
+  activation pool; the classifier produces `NLOG*LOG_W` = 4 int16 logits destined for a register
+  the PS reads. Parameterizing `rq_bank` on OUT_W is easy; making `out_stage` carry a 512-bit
+  int8 word AND a 64-bit int16 word, with two different writeback destinations and two different
+  valid meanings, is not a consolidation - it is a multiplexer in the one block DD-015 created to
+  avoid having five of them. The saving would be 8 DSPs out of 944 and four parameter registers,
+  against making the shared block conditional on opcode.
+
+  What T-8's second option asks for - "explicit cross-verification" - is the part worth having,
+  and two thirds of it now exists: the shared `q_valid`, the shared `flush`, and
+  `lin_datapath_tb`. What is missing is a test that the two copies agree on the SAME input, which
+  is the actual risk. I propose adding that to `rq_bank_tb`: instantiate a `requantize` at
+  OUT_W=16 beside the bank's OUT_W=8 lanes, drive both with identical (acc, m0, shift) and assert
+  that the int16 result equals the int8 result wherever the int8 does not saturate. That is a
+  direct test of "the second copy computes the same arithmetic", which no existing test makes.
+
+- Consequences if accepted: a cross-verification test in `rq_bank_tb`; a header paragraph in
+  `logit_out.v` recording that the split is deliberate, what makes it safe (shared q_valid,
+  shared flush, the cross-check) and what would change the decision (a second int16 consumer, or
+  the classifier returning to the critical path). T-8 closes as "accepted split, cross-verified".
+  If instead LINEAR is routed through `out_stage`: `rq_bank` gains OUT_W, `out_stage` gains a
+  second output word and a second valid, `accel_top`'s writeback mux grows a case, `logit_out`
+  reduces to argmax plus the logit register, and every layer testbench needs re-checking because
+  the shared block's behaviour becomes opcode-dependent.
+
+### DD-029 - C-11: the weight buffer has no second bank, and the header says it does
+- Status: **PROPOSED** - proposal only, per the review's own scoping. Not recommended for this
+  review.
+- Date: 2026-09-24
+- Context: C-11 says `wgt_buffer`'s header claims the fill "is meant to be overlapped with the
+  previous layer's compute (double buffer)"; there is no second bank and `top_seq` is strictly
+  serial; `features.18.0` spends 25,600 fill cycles against 39,200 compute, 65% overhead with
+  none of it hidden. It also notes the fix "requires C-3", which Phase 5 has now done.
+
+- **The cost, computed over the whole network rather than the worst layer.** From
+  `gen_program.py`'s own numbers: the weight blob is 2,194,880 bytes and the buffer holds 800 of
+  1024 entries worst case. Fill cycles are the blob divided by the load width; compute cycles are
+  what `analyze_workload.py` reports per layer. The worst single layer is the one C-11 names, but
+  the network total matters more for a thesis claim about throughput, and that number is not in
+  the review. It should be measured before anyone builds a second bank.
+
+- **Why this is proposal-only and not recommended now.** Three things, and the third is the
+  decisive one.
+  1. It is a THROUGHPUT change, not a correctness one, and this review's remaining budget went to
+     correctness by decision (DD-023 records the same call for the clock).
+  2. It needs a second physical bank: `wgt_buffer` is 800/1024 entries at TM banks of TN width,
+     so a second bank is close to doubling the largest BRAM structure in the design. Current
+     utilization is 178 of 312 BRAM tiles (57%). A second full bank may not fit, and "may not
+     fit" has to be answered by synthesis before any RTL is written.
+  3. **It changes what `busy` means, and that is where this design has been bitten repeatedly.**
+     Prefetching the next layer's weights while the current one computes means `top_seq` issues a
+     load for op N+1 while op N is still running - so the sequencer stops being strictly serial,
+     and `op_busy`, `ld_req`/`ld_done` and the parameter banks all become concurrent with compute.
+     DD-017 exists because `busy` meaning the wrong thing cost the last two pixels of every
+     pointwise layer. T-10's `ld_done` edge case, T-7's triple-meaning `ld_pchan` and C-3's
+     shape latching are all in the same area, and all three were fixed in this review on the
+     assumption of serial execution. Double buffering is the change that tests every one of them
+     at once.
+
+- **Recommendation: do not implement in this review.** If it is picked up, the order should be:
+  measure the network-wide overhead first; then synthesize a second bank alone to see whether it
+  fits; then implement the prefetch, with C-3's shape latching (now done) as the precondition the
+  finding names. Correcting the header is worth doing NOW and independently - it currently
+  describes a double buffer that does not exist, which is the kind of comment that makes a reader
+  trust a capability they do not have.
+
+- Consequences if the header fix alone is accepted: one paragraph in `wgt_buffer.v` stating that
+  the fill is serial, what it costs on the worst layer, and that C-11/DD-029 is the record of why.
+  C-11 closes as "documented, deferred with a plan".

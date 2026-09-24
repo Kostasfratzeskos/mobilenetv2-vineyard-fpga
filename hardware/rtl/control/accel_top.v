@@ -344,12 +344,60 @@ module accel_top #(
     wire [XW_ST-1:0] st_img_w = {{(XW_ST-8){1'b0}}, op_img_w};
     wire [XW_ST-1:0] st_img_h = {{(XW_ST-8){1'b0}}, op_img_h};
 
-    // The stem's tile count is ceil(OC/TS), which is not a field: the program
-    // carries n_oc = ceil(OC/TM) because that is what every other op means by
-    // it. TS is a datapath choice (DD-016), so deriving it here from the
-    // channel count keeps the compiled program independent of it.
-    wire [15:0]      st_noct_full = (ld_pchan + (TS - 1)) >> TSLOG;
-    wire [OCTW-1:0]  st_n_oct     = st_noct_full[OCTW-1:0];
+    // ---- T-7 : the stem's tile count is STRUCTURAL, not a load field -----
+    //
+    //  This used to be `(ld_pchan + TS-1) >> TSLOG`, truncated to OCTW bits, and
+    //  T-7 is about what that made `ld_pchan` mean. Three things at once:
+    //    (1) the DMA's parameter count,
+    //    (2) top_seq's `no_load` decision,
+    //    (3) the stem's oc-tile count, here.
+    //  gen_program.py already carries a comment about meaning (2) biting once.
+    //  Meaning (3) was the same hazard, still live: a stem whose parameter count
+    //  was written for the DMA's convenience would silently change how far the
+    //  sweep ran. And `st_noct_full[OCTW-1:0]` truncated without a word above
+    //  pchan = 128, where (128+7)>>3 = 16 wraps to 0 and the stem would sweep
+    //  nothing at all while reporting busy.
+    //
+    //  The honest derivation needs no field. `stem_feeder` assembles TS-channel
+    //  quarters into one POOL_TM-channel pool entry, and that only works if the
+    //  quarters tile the entry exactly - which is C-12's equality,
+    //  n_oct*TS == POOL_TM. So the stem's tile count is POOL_TM/TS, a datapath
+    //  constant, and nothing about the compiled program can change it. Both
+    //  halves of that are now guarded: the division is checked at elaboration
+    //  here, and stem_feeder checks the equality per entry at runtime (C-12) and
+    //  refuses an out-of-range n_oct at start (C-8).
+    //  NOTE: stem_feeder calls this parameter POOL_TM and accel_top passes it
+    //  as `.POOL_TM(TM)` - so TM here IS the pool entry's channel count.
+    localparam ST_N_OCT = TM / TS;                   // 4
+
+    generate
+        if ((TM % TS) != 0) begin : chk_st_oct
+            // TS-channel quarters cannot tile a TM-channel pool entry
+            ERROR_ACCEL_TOP_POOL_TM_MUST_BE_A_MULTIPLE_OF_TS u_err();
+        end
+        if (ST_N_OCT > ((1 << OCTW) - 1)) begin : chk_st_oct_w
+            ERROR_ACCEL_TOP_OCTW_TOO_NARROW_FOR_TM_OVER_TS u_err();
+        end
+    endgenerate
+
+    wire [OCTW-1:0]  st_n_oct = ST_N_OCT[OCTW-1:0];
+
+`ifndef SYNTHESIS
+    //  ...and the cross-check that keeps `ld_pchan` honest for meaning (1). If a
+    //  stem op's parameter count ever implies a different tile count from the
+    //  structural one, the program and the datapath disagree about the shape and
+    //  one of them is wrong. Reported at the start of a stem op, where the
+    //  instruction fields are live.
+    wire [15:0] st_noct_from_pchan = (ld_pchan + (TS - 1)) >> TSLOG;
+
+    always @(posedge clock) begin
+        if (rst_n_i && st_start && (st_noct_from_pchan != {{(16-OCTW){1'b0}}, st_n_oct})) begin
+            $display("ERROR: %m T-7 the stem's parameter count implies %0d oc-tiles (ld_pchan=%0d, TS=%0d) but the datapath's structural count is %0d (POOL_TM/TS) at time %0t. The program and the hardware disagree about the stem's shape.",
+                     st_noct_from_pchan, ld_pchan, TS, st_n_oct, $time);
+            $finish;
+        end
+    end
+`endif
 
     // ================= the ONE requantize stage ==========================
     wire [TM*ACC_W-1:0]  os_acc;
@@ -357,6 +405,28 @@ module accel_top #(
     wire [PA_W-1:0]      os_param_addr;
     wire [TM*DATA_W-1:0] os_q;
     wire                 os_q_valid;
+
+    // ---- T-9 : q_valid is gated PER FEEDER now ---------------------------
+    //
+    //  `os_q_valid` was broadcast to all five feeders and isolation was left to
+    //  the write mux. That is functionally correct - all five muxes are verified -
+    //  but it means every feeder's output pipeline and writeback counter advances
+    //  on every result of every op, including the four feeders that are idle. Two
+    //  costs, and the second is the one that matters:
+    //    * power: five output pipelines toggling for one op's worth of work;
+    //    * an idle feeder asserting `aw_en` sits ONE mux input away from the pool.
+    //      Nothing is wrong today, and nothing structurally prevents it either -
+    //      the only thing standing between a stray write and the activation
+    //      buffer is the select logic being right.
+    //
+    //  One AND gate each makes the isolation explicit instead of implied, and it
+    //  composes with C-10: a stale valid escaping the requantize pipeline now has
+    //  to get past the gate as well as the mux.
+    wire st_q_valid  = os_q_valid & sel_stem;
+    wire pw_q_valid  = os_q_valid & sel_pwf;
+    wire dw_q_valid  = os_q_valid & sel_dw;
+    wire rs_q_valid  = os_q_valid & sel_res;
+    wire gp_q_valid  = os_q_valid & sel_gap;
 
     wire [TM*ACC_W-1:0]  st_os_acc,  pw_os_acc,  dw_os_acc,  rs_os_acc,  gp_os_acc;
     wire                 st_os_val,  pw_os_val,  dw_os_val,  rs_os_val,  gp_os_val;
@@ -449,7 +519,7 @@ module accel_top #(
         .wl_en(st_wl_en), .wl_bank(st_wl_bank),
         .wl_addr(st_wl_addr), .wl_data(st_wl_data),
         .os_acc(st_os_acc), .os_acc_valid(st_os_val),
-        .os_param_addr(st_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
+        .os_param_addr(st_os_pa), .os_q(os_q), .os_q_valid(st_q_valid),
         .im_rd_en(im_rd_en), .im_addr(im_addr), .im_data(im_data),
         .aw_en(st_aw_en), .aw_full(st_aw_full),
         .aw_addr(st_aw_addr), .aw_data(st_aw_data),
@@ -499,7 +569,7 @@ module accel_top #(
         .clock(clock), .rst_n(rst_n_i),
         .start(pwf_start), .n_oc(op_n_oc), .base_out(op_base_out),
         .os_acc(pw_os_acc), .os_acc_valid(pw_os_val),
-        .os_param_addr(pw_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
+        .os_param_addr(pw_os_pa), .os_q(os_q), .os_q_valid(pw_q_valid),
         .acc(pwf_acc), .acc_valid(pwf_acc_valid),
         .acc_pix(pwf_acc_pix), .acc_oct(pwf_acc_oct),
         .aw_en(pw_aw_en), .aw_addr(pw_aw_addr), .aw_data(pw_aw_data),
@@ -544,7 +614,7 @@ module accel_top #(
         .wl_en(dw_wl_en), .wl_bank(dw_wl_bank),
         .wl_addr(dw_wl_addr), .wl_data(dw_wl_data),
         .os_acc(dw_os_acc), .os_acc_valid(dw_os_val),
-        .os_param_addr(dw_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
+        .os_param_addr(dw_os_pa), .os_q(os_q), .os_q_valid(dw_q_valid),
         .a_rd_en(dw_rd_en), .a_addr(dw_addr), .a_sel(dw_sel), .a_word(a_word),
         .aw_en(dw_aw_en), .aw_full(dw_aw_full), .aw_sel(dw_aw_sel),
         .aw_addr(dw_aw_addr), .aw_data(dw_aw_data),
@@ -572,7 +642,7 @@ module accel_top #(
         .base_in(op_base_in), .base_saved(op_base_saved),
         .base_out(op_base_out),
         .os_acc(rs_os_acc), .os_acc_valid(rs_os_val),
-        .os_param_addr(rs_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
+        .os_param_addr(rs_os_pa), .os_q(os_q), .os_q_valid(rs_q_valid),
         .a_rd_en(rs_rd_en), .a_addr(rs_addr), .a_sel(rs_sel), .a_word(a_word),
         .aw_en(rs_aw_en), .aw_full(rs_aw_full), .aw_sel(rs_aw_sel),
         .aw_addr(rs_aw_addr), .aw_data(rs_aw_data),
@@ -599,7 +669,7 @@ module accel_top #(
         .start(gp_start), .n_pix(op_n_pix), .n_sl(op_n_ic), .n_ent(n_ent_w),
         .base_in(op_base_in), .base_out(op_base_out),
         .os_acc(gp_os_acc), .os_acc_valid(gp_os_val),
-        .os_param_addr(gp_os_pa), .os_q(os_q), .os_q_valid(os_q_valid),
+        .os_param_addr(gp_os_pa), .os_q(os_q), .os_q_valid(gp_q_valid),
         .a_rd_en(gp_rd_en), .a_addr(gp_addr), .a_sel(gp_sel), .a_word(a_word),
         .aw_en(gp_aw_en), .aw_full(gp_aw_full), .aw_sel(gp_aw_sel),
         .aw_addr(gp_aw_addr), .aw_data(gp_aw_data),
