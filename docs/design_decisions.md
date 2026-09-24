@@ -676,3 +676,119 @@ argmax over the 4 int16 logits is the predicted class.
   synchroniser then becomes a formality and only the sensitivity lists matter), or if L-1
   still misses timing after pipelining - at which point option D applied to individual
   datapath registers is the next lever, and the measurement above shows why it would work.
+
+### DD-021 - L-8: where the DSP budget actually went, and what `use_dsp` should be attached to
+- Status: **Accepted** - variant D implemented; the M0 narrowing REJECTED
+- Date: 2026-09-23
+- Context: L-8 says the blanket `(* use_dsp = "yes" *)` "solved the LUT problem (191k -> 34k)
+  by creating a DSP-budget and timing one: 944 DSPs = 54.6% vs the ~442 (26%) documented in
+  rq_bank", and to re-evaluate after L-1/L-3. Phase 2a forced the question earlier than
+  planned, because L-1's adder tree is NEW arithmetic and the attribute is on the MODULE, so
+  it claims the tree too. The first synthesis after pipelining `mac_lane` came back at
+  **1,200 DSPs (69.4%)**, up 224 from 976, i.e. +7 per lane - and the depthwise (144 DSPs)
+  and stem (216) trees are still to come in Phase 2b and 2c, so this compounds.
+
+- What the attribute is actually doing. `use_dsp="yes"` on a module applies to every
+  arithmetic operator in it. Before L-1 that was only multiplies, so "module" and "the
+  multiplies" were the same set and the distinction never came up. After L-1 the module also
+  contains 15 adders per lane of TREE_W = 20 bits, and Vivado put about half of them in
+  DSP48E2s. A 20-bit add is roughly 20 LUTs and three CARRY8; a DSP48E2 is 1/1728th of the
+  scarcest resource on this device.
+
+- Measured. FOUR variants, all at 4.000 ns, all bit-exact - the attribute is invisible to
+  xsim, so all 31 testbenches and `accel_tb`'s 6,895,780 elements pass identically in every
+  one. The differences below are purely what the tool builds:
+
+  | | pre-2a | A: module | B: tree="no" | C: prod="yes" | **D: split by level** |
+  |:--|--:|--:|--:|--:|--:|
+  | **DSPs** | 976 | 1,200 | 688 | 1,168 | **944 (54.6%)** |
+  | CLB LUTs | 32,954 | 33,085 | 51,581 | 33,922 | **30,095 (13.1%)** |
+  | CLB Registers | 4,929 | 4,951 | 18,417 | 5,789 | 9,926 (2.2%) |
+  | CARRY8 | 952 | 952 | 4,568 | 1,080 | 1,752 |
+  | WNS, synth | -17.036 | -17.036 | -16.275 | -17.036 | **-16.296** |
+  | DSPs per `mac_lane` | - | ~24 | 8 | 23 | **16** |
+  | DSPs in `u_pwf` | 544 | - | 256 | 736 | **512** |
+
+    A  the attribute on the module, which is what Phase 2a committed
+    B  `use_dsp="yes"` on the product register, `"no"` on the whole tree
+    C  no module attribute, `"yes"` on the product register, tree left to "auto"
+    D  `"yes"` on the product, level 1 left to "auto", levels 2.. forced `"no"`
+
+- What the four runs actually establish, which is not what the finding assumes.
+
+  The module-level attribute is NOT the cause. C removed it and still came back at 23 DSPs
+  per lane. The cause is that a DSP48E2 has an ALU behind its multiplier, so Vivado absorbs a
+  LEVEL-1 tree add into the same DSP that produced the two products - that add is free - and
+  cannot do so for level 2 and above, whose inputs are two DSP outputs. It then allocates a
+  whole DSP48E2 per adder: seven more per lane, 224 across the array.
+
+  B, which looked best on DSPs, is the one to reject. 688 cannot be 16 multiplies per lane: a
+  DSP48E2 has ONE 27x18 multiplier and two int8 products can only share it if they share an
+  operand, which `mac_lane`'s taps do not. `u_pwf` measured 256 DSPs - 8 per lane - so the
+  other eight multiplies are in FABRIC, which is precisely what DD-018 diagnosed and fixed.
+  Much smaller than the 191k-LUT original (51.6k, 22%, against 83% then), and arriving by
+  accident rather than by decision, which is how the first one happened too.
+
+  **D is strictly better than all of them, and better than not pipelining at all.**
+  `u_pwf` lands on exactly TM*TN = 512 DSPs - the theoretical minimum for 512 int8 multiplies
+  with no packing - so L-1's adder tree costs ZERO extra DSPs. And 30,095 LUTs is 2,859 FEWER
+  than the 32,954 the design used before `mac_lane` was pipelined at all, because the 27-tap
+  and 16-tap combinational cascades that used to be spread across DSP ALUs are now a compact
+  registered tree. The 4,997 extra flip-flops over A are the tree registers, which is the
+  thing being bought.
+
+- The OTHER half of L-8, and it is a harder no than the review implies. L-8 says
+  "requantize's 2 DSPs/lane can drop to 1 if M0 narrows to 27 bits - measure against golden
+  vectors first". Measured, over every per-channel multiplier this model exports:
+
+      per-channel M0 values : 36,324
+      max |M0|              : 2,147,461,603   (features.14.conv.0.0)
+      bits needed, signed   : 32
+      values fitting in signed 27 bits : 124 / 36,324  (0.3%)
+
+  That is not a near miss and it is not data-dependent. M0 is a NORMALIZED fixed-point
+  multiplier: the exporter scales it into the top of int32 on purpose, which is what buys the
+  mantissa precision, so by construction it occupies 31 bits. Narrowing `M0_W` to 27 requires
+  re-normalising M0 into [2**26, 2**27) and reducing `shift` by four to compensate - which
+  drops four bits of multiplier precision, changes results, and invalidates every golden
+  vector in the repository.
+
+  So this is not an RTL parameter change that needs a golden-vector check. It is a
+  QUANTIZATION change that needs an accuracy study, and it belongs with DD-005 and DD-011,
+  not here. The 64 DSPs it would save are 3.7% of the device; the thing it spends is the
+  bit-exactness chain the whole verification method rests on. **Recommend NOT doing it**, and
+  recording why, so it stops being re-proposed.
+
+- Recommendation: **D**. And the general rule it establishes, which matters more than this
+  one module: attach `use_dsp` to the OPERATION at the granularity the tool reasons about -
+  here, per tree level - never to the module. Phase 2b and 2c give `dwconv3x3` (9 taps, 144
+  DSPs) and `conv3x3_std` (27 taps, 216 DSPs) the same tree, and A's +7 DSPs per instance
+  would have repeated there at 16 and 8 instances respectively.
+
+  There is no trade to make: D dominates A, B and C on DSPs, LUTs and WNS simultaneously. The
+  only column where it is not first is flip-flops, at 2.2% of the device.
+
+- D post-route, which is the number the acceptance test asks for:
+
+  | | baseline | Phase 1 | DD-020 | **2a + D** |
+  |:--|--:|--:|--:|--:|
+  | CLB LUTs | 34,834 | 34,957 | 32,919 | **29,935 (13.0%)** |
+  | CLB Registers | 6,863 | 6,702 | 4,959 | 9,940 (2.2%) |
+  | CARRY8 | 937 | 940 | 952 | 1,752 |
+  | Block RAM / URAM | 176 / 52 | 176 / 52 | 178 / 52 | 178 / 52 |
+  | DSPs | 944 | 944 | 976 | **944 (54.6%)** |
+  | WNS | -18.821 | -18.463 | -18.282 | **-16.411** |
+  | real Fmax | 43.8 MHz | 44.5 MHz | 44.8 MHz | **49.0 MHz** |
+  | DPIR-2 | 10,940 | 10,940 | 0 | **0** |
+
+  So pipelining ONE of the three MAC kernels, with the attribute attached to the right thing,
+  is worth 4.2 MHz and costs 4,981 flip-flops and nothing else - the DSP count is identical
+  to the pre-review baseline and the LUT count is 4,899 LOWER. The worst path is still the
+  STEM, 27 unregistered DSP_ALU levels and 19.233 ns of the 20.362 total, which is Phase 2c's
+  job and the reason this is 49 MHz and not 250.
+
+- Revisit if: Phase 2c's conv3x3_std tree changes the DSP total enough to matter, or L-3's
+  requantize pipelining changes the 2-DSP-per-lane requantize cost (the `[Synth 8-5845] Not
+  enough pipeline registers after wide multiplier. Recommended levels of pipeline registers
+  is 2` note appears once per requantize lane today, and L-3 adds exactly those registers -
+  so the requantize DSP count may move on its own).

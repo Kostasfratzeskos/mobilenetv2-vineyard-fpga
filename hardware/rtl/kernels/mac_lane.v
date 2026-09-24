@@ -76,11 +76,13 @@
 //
 //  Run:  bash scripts/run_sim.sh mac_lane conv1x1
 //============================================================================
-// Force the multipliers into DSP48E2. Left on "auto", Vivado put almost all of
-// them in fabric: the first synthesis run of accel_top used 191,372 LUTs (83%
-// of the device) and only 72 DSPs, for a datapath that needs 512 multipliers
-// in the pointwise array alone.
-(* use_dsp = "yes" *)
+// NOTE: the `use_dsp` attribute is on the PRODUCT REGISTER inside this module,
+// not on the module itself. A module-level attribute applies to every arithmetic
+// operator in the module, which was harmless while the only arithmetic was the
+// multiplies - and stopped being harmless the moment L-1 added an adder tree.
+// Vivado then put tree ADDS into DSP48E2s: 976 -> 1,200 DSPs, +7 per lane, with
+// the depthwise and stem trees still to come. See DD-021, and dwconv3x3 /
+// conv3x3_std, which follow the same rule.
 module mac_lane #(
     parameter DATA_W = 8,     // int8 activations and weights
     parameter TN     = 16,    // input channels processed per cycle
@@ -125,6 +127,11 @@ module mac_lane #(
         if (ACC_W < TREE_W) begin : chk_acc_w
             ERROR_MAC_LANE_ACC_W_NARROWER_THAN_ONE_TILE_SUM u_err();
         end
+        if (TN < 4) begin : chk_tn_min
+            // the tree is split into level 1 (n1) and levels 2.. (nh), and nh
+            // is empty below TN=4
+            ERROR_MAC_LANE_TN_MUST_BE_AT_LEAST_4 u_err();
+        end
     endgenerate
 
     integer i;
@@ -134,6 +141,16 @@ module mac_lane #(
     //  assignment, which sign-extended both operands to 26 bits first; exact,
     //  but it made the width a property of the surrounding expression rather
     //  than of the arithmetic.
+    //
+    //  use_dsp="yes" HERE, on the multiply, rather than only on the module.
+    //  The module-level attribute is what forced the multipliers out of fabric
+    //  in the first place (191k LUTs -> 34k, DD-018), but it applies to all
+    //  arithmetic in the module, and once the adder tree below existed Vivado
+    //  started putting tree ADDS into DSPs too: 976 -> 1,200 DSPs, +7 per lane,
+    //  69.4% of the device with the depthwise and stem trees still to come.
+    //  A 20-bit add is about 20 LUTs and 3 CARRY8. Saying which operation wants
+    //  a DSP, instead of saying "this module does", is the difference.
+    (* use_dsp = "yes" *)
     reg signed [PROD_W-1:0] prod [0:TN-1];
 
     always @(posedge clock) begin
@@ -154,32 +171,60 @@ module mac_lane #(
     //
     //  Non-blocking assignment is what makes this a pipeline: level L reads the
     //  slots level L-1 wrote on the PREVIOUS edge, so each level is one clock.
-    reg signed [TREE_W-1:0] node [0:TN-2];
+    //
+    //  ---- the tree is SPLIT, and the split is the whole point (DD-021) ----
+    //
+    //  Measured, not guessed. A DSP48E2 has an ALU behind its multiplier, so
+    //  Vivado absorbs a LEVEL-1 add into the same DSP that produced the two
+    //  products - that add is free. It cannot do that for level 2 and above,
+    //  whose inputs are two DSP outputs, so it allocates a whole DSP48E2 per
+    //  adder: seven more per lane, 224 across the array, and the depthwise and
+    //  stem trees would each repeat it.
+    //
+    //  Three variants were synthesised before this one (DD-021 has the table).
+    //  Putting the attribute on the module, or on the product only, both gave
+    //  ~23 DSPs per lane. Saying use_dsp="no" for the WHOLE tree dropped it to 8
+    //  - by evicting half the multiplies into fabric, which is the mistake
+    //  DD-018 exists to prevent.
+    //
+    //  So the array is split by level, not by module:
+    //    n1  level 1, NO attribute  -> absorbed into the multiply's own DSP
+    //    nh  levels 2..LEVELS, "no" -> TREE_W-bit adds, which are a CARRY8
+    //                                  chain three deep and a few LUTs
+    reg signed [TREE_W-1:0] n1 [0:TN/2-1];      // level 1
+
+    (* use_dsp = "no" *)
+    reg signed [TREE_W-1:0] nh [0:TN/2-2];      // levels 2..LEVELS
 
     integer lv, k, off, prev, cnt;
 
     always @(posedge clock) begin
         if (!rst_n) begin
-            for (k = 0; k < TN-1; k = k + 1) node[k] <= {TREE_W{1'b0}};
+            for (k = 0; k < TN/2;   k = k + 1) n1[k] <= {TREE_W{1'b0}};
+            for (k = 0; k < TN/2-1; k = k + 1) nh[k] <= {TREE_W{1'b0}};
         end else begin
             // level 1 reads the products
             for (k = 0; k < TN/2; k = k + 1)
-                node[k] <= $signed(prod[2*k]) + $signed(prod[2*k+1]);
+                n1[k] <= $signed(prod[2*k]) + $signed(prod[2*k+1]);
 
-            // levels 2..LEVELS read the level below them
+            // level 2 reads level 1
+            for (k = 0; k < TN/4; k = k + 1)
+                nh[k] <= n1[2*k] + n1[2*k+1];
+
+            // levels 3..LEVELS read the level below them, all inside nh
             off = 0;
-            cnt = TN/2;
-            for (lv = 2; lv <= LEVELS; lv = lv + 1) begin
+            cnt = TN/4;
+            for (lv = 3; lv <= LEVELS; lv = lv + 1) begin
                 prev = off;
                 off  = off + cnt;
                 cnt  = cnt >> 1;
                 for (k = 0; k < cnt; k = k + 1)
-                    node[off + k] <= node[prev + 2*k] + node[prev + 2*k + 1];
+                    nh[off + k] <= nh[prev + 2*k] + nh[prev + 2*k + 1];
             end
         end
     end
 
-    wire signed [TREE_W-1:0] tile_sum = node[TN-2];
+    wire signed [TREE_W-1:0] tile_sum = nh[TN/2-2];
 
     // ================= the control, delayed to meet the sum (L-2) =======
     //  A free-running shift register of exactly CTRL_LAT stages, because the

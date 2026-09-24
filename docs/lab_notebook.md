@@ -903,3 +903,105 @@ wrote quant_scales.json  (53 layers)
 - Blocked on: nothing. Phase 2a is unblocked.
 - Next: Phase 2a - mac_lane (L-1, L-2, L-9, L-10), pw_feeder's tag pipeline and drain, A-3
   done sourcing, and A-4/A-5/A-6 for pe_array.
+
+### 2026-09-23 (evening) - Phase 2a: mac_lane pipelined, and L-8 turns out to be an attribute
+- Did: L-1, L-2, L-9, L-10 in `mac_lane`; A-3, A-4, A-5, A-6 in `pe_array`; and every constant
+  that encoded mac_lane's old one-cycle latency, in the same commit. A reassociation and a
+  latency change, never a change of value.
+- Tests: all 31 pass. `accel_tb` bit-exact at 6,895,780 elements, `pw_datapath` at 200,704.
+  `mac_lane` and `pe_array` check against both oracles (an independent reference sum and the
+  proven `conv1x1`), and all three pointwise testbenches now assert the latency as an
+  EQUALITY rather than a ceiling - the old drain check was `> 4` against a 1-cycle pipeline,
+  so it could not have caught this change in either direction.
+- The structure: one registered product per tap (PROD_W = 2*DATA_W, L-9), a balanced adder
+  tree with one register per level (clog2(TN) = 4), then the accumulator - the only stage
+  `valid` gates. MAC_LAT = 1 + clog2(TN) + 1 = 6, a localparam derived from TN.
+- Constants that moved with it: `pw_feeder`'s tag pipeline 2 -> 7, its drain from a literal
+  3'd7 to `MAC_LAT + OS_LAT` = 8, and `OS_LAT` became a parameter of `accel_top` passed down,
+  because out_stage is instantiated at the top and a feeder cannot see its depth.
+- **A correction to pw_feeder's own header.** It said "each tag stage advances on ITS OWN
+  valid, never on the bare clock, or a stall would slide the tags past the data". That is
+  right for a combinational array and BACKWARDS for the stages inside a pipelined one:
+  mac_lane's tree is not clock-enabled, so a held buffer output propagates through it every
+  cycle and a valid-gated tag falls behind it. Only the buffer-read stage stays gated, and
+  for the opposite reason - the buffers it shadows are the thing that holds.
+- Three bugs, none of them found by the golden vectors, which is the point of Phase 1:
+  1. My own latency check armed on the FIRST tile, but `done` only fires on a LAST tile, so
+     it measured MAC_LAT plus the dot product's length. Then it stayed armed and re-checked
+     against a counter that had kept running.
+  2. The tag pipeline had one stage too many: `acc_pix` IS the last register.
+  3. **`wait (!busy)` is delta-cycle sensitive, in all SIX datapath testbenches.**
+     `addr_gen`'s `run` drops and `layer_done` rises on the same clock edge and `busy` is a
+     continuous OR of the two, so inside the non-blocking update region it can momentarily
+     read 0. Real consumers sample it at a clock edge and never see it - `top_seq`'s
+     `S_RUN: if (!op_busy)` is inside `always @(posedge clock)` - so the RTL is fine. It was
+     invisible while the pipeline drained in 1-2 cycles because the fixed `repeat (8)` after
+     it covered the gap. At 8 cycles `pw_datapath_tb` lost THE LAST WRITE of the layer:
+     12,543 of 12,544 pixels, every one of them correct. That is exactly the failure shape
+     the review warns about for this phase, and the bookkeeping that was wrong was the
+     testbench's. All six now sample it the way hardware does. Phase 2b and 2c would have
+     walked into it twice more.
+- **L-8 is not a DSP-budget decision, it is an attribute scope bug**, and Phase 2a is what
+  made that visible. Synthesis at 4.000 ns with the tree in place:
+
+      DSPs   976 -> 1,200   (+224, i.e. +7 per lane, 56.5% -> 69.4% of the device)
+
+  `(* use_dsp = "yes" *)` sits on the MODULE, so it applies to every operation in it - and
+  once an adder tree existed, Vivado started putting tree ADDS into DSP48E2s. A TREE_W=20
+  adder is about 20 LUTs and three CARRY8. Spending a DSP on it is 1/1728th of the scarcest
+  resource on the device doing what 20 LUTs would, and the depthwise (144 DSPs) and stem
+  (216) trees are still to come in 2b and 2c - this compounds.
+  Fixed by scoping the attribute to the operation instead of the module: `use_dsp="yes"` on
+  the product register, `use_dsp="no"` on the tree nodes. Saying which operation wants a DSP
+  instead of saying "this module does" is the whole difference, and it is half of what L-8 is
+  actually about. The blanket attribute was never wrong about the MULTIPLIERS.
+- WNS did NOT move: -17.036 ns, and the worst path is still
+  `u_stem/u_arr/lane[0].u_conv/acc26/DSP_A_B_DATA_INST` -> `u_os/acc_q_reg`. That is the
+  correct result and worth stating plainly: the critical path is `conv3x3_std`'s 27-tap
+  cascade in the STEM, which Phase 2a did not touch. mac_lane's 16-deep cascade was never the
+  worst path - Phase 0 recorded that all ten worst paths were the stem - so pipelining it
+  buys headroom that only becomes visible once 2c removes the stem's. Phase 2c is where the
+  clock target moves.
+- Followed it up properly, because the first answer was wrong twice. FOUR variants, all
+  bit-exact (the attribute is invisible to xsim), all at 4.000 ns - the table is in DD-021.
+  The short version:
+
+      A  attribute on the MODULE                 1,200 DSP  33,085 LUT  WNS -17.036
+      B  "yes" on product, "no" on WHOLE tree      688 DSP  51,581 LUT  WNS -16.275
+      C  no module attribute, "yes" on product   1,168 DSP  33,922 LUT  WNS -17.036
+      D  "yes" on product, level 1 auto,           944 DSP  30,095 LUT  WNS -16.296
+         levels 2.. forced "no"
+
+  The module attribute was NOT the cause - C removed it and still got 23 DSPs per lane. A
+  DSP48E2 has an ALU behind its multiplier, so Vivado absorbs a LEVEL-1 tree add into the same
+  DSP that made the two products (free) and cannot for level 2 and above, so it spends a whole
+  DSP per adder: seven per lane.
+
+  B looked best and is the one to reject. 688 cannot be 16 multiplies per lane - one 27x18
+  multiplier, and mac_lane's taps share no operand, so packing is impossible. u_pwf measured
+  256 DSPs = 8 per lane, so half the multiplies were in FABRIC. That is DD-018's mistake
+  arriving by accident, and taking it because the numbers looked good is how the first one
+  happened.
+
+  D is strictly best: u_pwf lands on exactly TM*TN = 512 DSPs, the theoretical minimum, so
+  L-1's tree costs ZERO extra DSPs - and 30,095 LUTs is 2,859 FEWER than before mac_lane was
+  pipelined at all.
+- Post-route, cumulative, at 4.000 ns:
+
+      baseline    WNS -18.821   43.8 MHz   34,834 LUT   944 DSP   DPIR-2 10,940
+      Phase 1     WNS -18.463   44.5 MHz   34,957 LUT   944 DSP   DPIR-2 10,940
+      DD-020      WNS -18.282   44.8 MHz   32,919 LUT   976 DSP   DPIR-2 0
+      2a + D      WNS -16.411   49.0 MHz   29,935 LUT   944 DSP   DPIR-2 0
+
+  Pipelining ONE of the three MAC kernels is worth 4.2 MHz and costs 4,981 flip-flops and
+  nothing else. The worst path is still the STEM - 27 unregistered DSP_ALU levels, 19.233 of
+  20.362 ns - which is Phase 2c, and the reason this is 49 MHz and not 250.
+- Also settled, and it is a firmer no than the review implies: L-8's "narrow M0 to 27 bits to
+  halve requantize's DSPs". Over all 36,324 exported multipliers, max |M0| is 2,147,461,603
+  (32 bits) and 124 of them - 0.3% - fit signed 27 bits. Not a near miss and not
+  data-dependent: M0 is NORMALIZED into the top of int32 by construction, which is what buys
+  its precision. Narrowing it means renormalising and dropping four bits, i.e. a QUANTIZATION
+  change that invalidates every golden vector, for 64 DSPs (3.7% of the device). Rejected in
+  DD-021 with the numbers, so it stops being re-proposed.
+- Blocked on: nothing.
+- Next: Phase 2b (dwconv3x3, dw_array, dw_feeder), applying DD-021's rule from the start.
