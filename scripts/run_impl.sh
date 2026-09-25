@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 #=============================================================================
-#  run_impl.sh  -  synthesise AND place-and-route accel_top out of context
+#  run_impl.sh  -  synthesise AND place-and-route one top out of context
 #
 #  Usage:
-#     bash scripts/run_impl.sh                      # the committed XDC period
-#     PERIOD=4.000 bash scripts/run_impl.sh         # the 250 MHz target
+#     bash scripts/run_impl.sh                               # accel_top, XDC period
+#     PERIOD=4.000 bash scripts/run_impl.sh                  # the 250 MHz target
+#     TOP=accel_axi PERIOD=4.000 bash scripts/run_impl.sh    # + DMA + CSR
 #     PERIOD=25.000 TAG=40mhz bash scripts/run_impl.sh
 #
 #  Writes build/impl_<TAG>/{utilization,utilization_hier,timing_summary,
 #  timing_paths}.rpt plus post_synth.dcp / post_route.dcp, and prints the
-#  headline numbers. TAG defaults to the period when one is given, else
-#  "default", so two constraints never overwrite each other's reports.
+#  headline numbers. TAG defaults to <TOP>_<period>, so neither two constraints
+#  nor two tops ever overwrite each other's reports.
 #
 #  run_synth.sh stops at synthesis, where the route delay is a wireload
 #  estimate. This is the flow that produces a REAL Fmax, which is the only kind
@@ -30,9 +31,14 @@ if [[ -z "$VIVADO_BIN" ]]; then
 fi
 [[ -d "$VIVADO_BIN" ]] || { echo "ERROR: Vivado bin not found. Set VIVADO_BIN=/path/to/Vivado/<ver>/bin"; exit 1; }
 
-# TAG defaults to the period, so "which constraint was this" is in the path.
+TOP="${TOP:-accel_top}"
+export TOP
+
+# TAG defaults to <top>_<period>, so both "which top" and "which constraint"
+# are in the path. A post-route number that cannot be traced to its top and its
+# constraint is not a measurement.
 if [[ -z "${TAG:-}" ]]; then
-    if [[ -n "${PERIOD:-}" ]]; then TAG="${PERIOD//./p}"; else TAG="default"; fi
+    if [[ -n "${PERIOD:-}" ]]; then TAG="${TOP}_${PERIOD//./p}"; else TAG="$TOP"; fi
 fi
 export TAG
 
@@ -40,6 +46,7 @@ OUT="$ROOT/build/impl_$TAG"
 mkdir -p "$OUT"
 
 echo "== vivado : $VIVADO_BIN"
+echo "== top    : $TOP"
 echo "== tag    : $TAG"
 echo "== period : ${PERIOD:-<as committed in the XDC>}"
 echo "== running synthesis + implementation (this takes a while)"

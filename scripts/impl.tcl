@@ -36,11 +36,27 @@
 #=============================================================================
 
 set part "xczu7ev-ffvc1156-2-e"
-set top  "accel_top"
 
-# TAG names the output directory so two constraints can be compared without one
-# overwriting the other.
-set tag  [expr {[info exists ::env(TAG)] ? $::env(TAG) : "default"}]
+#  TOP selects what is implemented, and the XDC follows it - the same override
+#  scripts/synth.tcl takes. Left unset it is accel_top, which is every
+#  post-route number in the docs up to and including Phase 6.
+#
+#      PERIOD=4.000 bash scripts/run_impl.sh                    # accel_top
+#      TOP=accel_sys PERIOD=4.000 bash scripts/run_impl.sh      # + the DMA
+#      TOP=accel_axi PERIOD=4.000 bash scripts/run_impl.sh      # + the CSR
+#
+#  Why this matters more here than in synth.tcl: a post-route Fmax carries real
+#  placement noise. docs/lab_notebook.md records Phase 3 -> 4 swinging +23 MHz
+#  "on placement alone with no timing-directed change in it", so comparing two
+#  tops means running them through the SAME flow in the same session, not
+#  quoting one against a number from a previous day. Three runs, one command
+#  each, is the only honest way to say what a layer cost.
+set top  [expr {[info exists ::env(TOP)] ? $::env(TOP) : "accel_top"}]
+
+# TAG names the output directory so two constraints - or two tops - can be
+# compared without one overwriting the other. run_impl.sh defaults it to
+# <top>_<period>.
+set tag  [expr {[info exists ::env(TAG)] ? $::env(TAG) : $top}]
 set out  "build/impl_$tag"
 
 file mkdir $out
@@ -61,7 +77,10 @@ foreach f $srcs { read_verilog [list $f] }
 puts "== read [llength $srcs] Verilog files"
 
 # ---- constraints: the committed XDC, or a period-overridden copy of it ------
-set xdc "hardware/constraints/accel_top_ooc.xdc"
+#  One XDC per top. All three keep the same period, reset treatment and URAM
+#  expectation on purpose, so the three numbers stay comparable - see the header
+#  of accel_axi_ooc.xdc.
+set xdc "hardware/constraints/${top}_ooc.xdc"
 if {[info exists ::env(PERIOD)]} {
     set per $::env(PERIOD)
     set fh [open $xdc r]; set txt [read $fh]; close $fh
@@ -72,7 +91,7 @@ if {[info exists ::env(PERIOD)]} {
     if {$n != 1} {
         error "PERIOD override expected exactly 1 create_clock in $xdc, found $n"
     }
-    set xdc "$out/accel_top_ooc_${per}.xdc"
+    set xdc "$out/${top}_ooc_${per}.xdc"
     set fh [open $xdc w]; puts -nonewline $fh $txt; close $fh
     puts "== PERIOD OVERRIDE: create_clock -period $per  (copy at $xdc)"
 } else {
@@ -141,7 +160,7 @@ write_checkpoint -force "$out/post_route.dcp"
 
 #---- a summary on stdout, so the shell does not have to parse reports --------
 puts ""
-puts "================== POST-ROUTE SUMMARY ($tag) =================="
+puts "================== POST-ROUTE SUMMARY ($top, $tag) =================="
 
 # The period is read back from the CLOCK, not from a literal and not from the
 # PERIOD variable - synth.tcl's header records what a hardcoded 4 cost once
