@@ -442,6 +442,17 @@ module wgt_dma #(
         if ((PW_WA_W < DW_WA_W) || (PW_WA_W < ST_WA_W)) begin : chk_addr
             ERROR_WGT_DMA_PW_WA_W_MUST_BE_THE_WIDEST_WEIGHT_ADDRESS u_err();
         end
+        // The nested counter's limits live in 8-bit registers, so every tile
+        // count has to fit. The largest is ceil(1280/16) = 80 ic tiles on the
+        // classifier and 60 depthwise groups on features.18.x; 255 is the
+        // ceiling and a model four times deeper would reach it.
+        if ((TM > 255) || (TC > 255) || (TS > 255)) begin : chk_lane_lim
+            ERROR_WGT_DMA_LANE_COUNT_EXCEEDS_THE_EIGHT_BIT_LOOP_LIMITS u_err();
+        end
+        // BEAT_BYTES must be a power of two, or wp's modulo is not a truncation.
+        if ((1 << BB_LOG) != BEAT_BYTES) begin : chk_bb
+            ERROR_WGT_DMA_BEAT_BYTES_MUST_BE_TWO_POW_BB_LOG u_err();
+        end
     endgenerate
 
     // ======================================================================
@@ -587,7 +598,16 @@ module wgt_dma #(
     reg [7:0]         lp_a, lp_c;
     reg [BANK_W-1:0]  lp_b;
     reg [7:0]         lim_a, lim_c;
-    reg [BANK_W-1:0]  lim_b;
+    //  lim_b is ONE BIT WIDER than lp_b, and that is the whole point. lp_b
+    //  counts 0..TM-1, which fits in BANK_W = clog2(TM) bits; the LIMIT is TM
+    //  itself, which does not. Written as `reg [BANK_W-1:0] lim_b` the
+    //  assignment `lim_b <= TM[BANK_W-1:0]` stores ZERO, and `lim_b - 1` then
+    //  wraps to TM-1 - so the comparison is right, by accident, for exactly as
+    //  long as TM is a power of two AND BANK_W is exactly its log. Finding T-7
+    //  is on record for what that kind of silent truncation cost here before
+    //  (`st_noct_full[OCTW-1:0]` wrapping to zero above pchan 128), so this
+    //  carries the bit rather than relying on the wrap.
+    reg [BANK_W:0]    lim_b;
     reg [PCH_W-1:0]   ocx;
     reg [PW_WA_W-1:0] a_base;        // lp_a * lim_c, kept by accumulation
     reg [BYT_W-1:0]   ic_left;       // taps not yet dealt for this channel
@@ -722,13 +742,16 @@ module wgt_dma #(
     //  Loop advance, computed once and used by both the counter update and the
     //  end-of-rectangle test.
     wire c_wrap = (lp_c == (lim_c - 8'd1));
-    wire b_wrap = c_wrap && (lp_b == (lim_b - {{(BANK_W-1){1'b0}}, 1'b1}));
+    wire b_wrap = c_wrap && ({1'b0, lp_b} == (lim_b - {{BANK_W{1'b0}}, 1'b1}));
     wire a_wrap = b_wrap && (lp_a == (lim_a - 8'd1));
     wire w_emit = deal_ok && chunk_last;
 
-    //  Parameter emit: LINEAR writes NLOG entries, everything else a whole tile.
-    wire [BANK_W-1:0] pe_lim = is_lin ? NLOG[BANK_W-1:0] : TM[BANK_W-1:0];
-    wire pe_last = (pe_j == (pe_lim - {{(BANK_W-1){1'b0}}, 1'b1}));
+    //  Parameter emit: LINEAR writes NLOG entries, everything else a whole
+    //  tile of TM - NOT lim_b, which is TS or TC for the stem and the
+    //  depthwise. A parameter tile is TM channels whatever the weight shape is.
+    //  Same width rule as lim_b above: the limit is TM, not TM-1.
+    wire [BANK_W:0] pe_lim  = is_lin ? NLOG[BANK_W:0] : TM[BANK_W:0];
+    wire            pe_last = ({1'b0, pe_j} == (pe_lim - {{BANK_W{1'b0}}, 1'b1}));
 
     integer ri;
     initial begin
@@ -802,10 +825,14 @@ module wgt_dma #(
                     w1   <= w1_nxt;
                     wcnt <= wcnt_ar + {1'b0, win_push};
                 end
-                if (take) begin
-                    wp <= retire ? (wp_sum[BB_LOG-1:0] - BEAT_BYTES[BB_LOG-1:0])
-                                 : wp_sum[BB_LOG-1:0];
-                end
+                //  wp is (wp + tk) mod BEAT_BYTES, and because BEAT_BYTES is
+                //  2**BB_LOG the modulo IS the truncation - both branches of the
+                //  retire decision reduce to the same expression. An earlier
+                //  version wrote `wp_sum - BEAT_BYTES[BB_LOG-1:0]` on the retire
+                //  path, which is a no-op: BEAT_BYTES does not fit in BB_LOG
+                //  bits and truncates to zero. It computed the right answer and
+                //  said something false about why.
+                if (take) wp <= wp_sum[BB_LOG-1:0];
             end
         end
     end
@@ -858,8 +885,8 @@ module wgt_dma #(
             q_ntile   <= 8'd0;
             c_wgt <= {AXI_ADDR_W{1'b0}}; c_pb <= {AXI_ADDR_W{1'b0}};
             c_pm  <= {AXI_ADDR_W{1'b0}}; c_ps <= {AXI_ADDR_W{1'b0}};
-            lp_a  <= 8'd0; lp_b  <= {BANK_W{1'b0}};                  lp_c  <= 8'd0;
-            lim_a <= 8'd1; lim_b <= {{(BANK_W-1){1'b0}}, 1'b1};      lim_c <= 8'd1;
+            lp_a  <= 8'd0; lp_b  <= {BANK_W{1'b0}};              lp_c  <= 8'd0;
+            lim_a <= 8'd1; lim_b <= {{BANK_W{1'b0}}, 1'b1};      lim_c <= 8'd1;
             ocx     <= {PCH_W{1'b0}};
             a_base  <= {PW_WA_W{1'b0}};
             ic_left <= {BYT_W{1'b0}};
@@ -928,17 +955,17 @@ module wgt_dma #(
                     // ceil(pchan/TS) oc tiles of TS lanes, one tap row each
                     lim_a <= ((q_pchan + TS[PCH_W-1:0]
                                - {{(PCH_W-1){1'b0}}, 1'b1}) >> TS_LOG);
-                    lim_b <= TS[BANK_W-1:0];
+                    lim_b <= TS[BANK_W:0];
                     lim_c <= 8'd1;
                 end else if (is_dw) begin
                     lim_a <= ((q_pchan + TC[PCH_W-1:0]
                                - {{(PCH_W-1){1'b0}}, 1'b1}) >> TC_LOG);
-                    lim_b <= TC[BANK_W-1:0];
+                    lim_b <= TC[BANK_W:0];
                     lim_c <= 8'd1;
                 end else begin
                     // PW and LINEAR: ceil(pchan/TM) x TM x ceil(ic/TN)
                     lim_a <= q_ntile;
-                    lim_b <= TM[BANK_W-1:0];
+                    lim_b <= TM[BANK_W:0];
                     lim_c <= ((q_taps + TN[BYT_W-1:0]
                                - {{(BYT_W-1){1'b0}}, 1'b1}) >> TN_LOG);
                 end

@@ -98,5 +98,5 @@ if {[llength $paths] > 0} {
 #  put at 944 and 32,387. The filter matches sub-cells of a macro, not the macro.
 #  run_synth.sh greps utilization.rpt instead, which is the authoritative count.
 puts ""
-puts "  full reports in build/synth/"
+puts "  full reports in $out/"
 puts "======================================================"
