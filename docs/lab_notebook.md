@@ -1510,8 +1510,31 @@ wrote quant_scales.json  (53 layers)
   register-to-register path is a measurement. `wgt_dma` registers every one of its outputs
   specifically so that is true.
 
+- **Synthesis: the DMA costs no timing at all.** Both tops through `scripts/synth.tcl` at
+  25.000 ns, back to back, same session, same script - the existing `build/synth/` was from
+  2026-09-22 and predates the whole review, so it was re-run rather than quoted:
+
+        accel_top   WNS 20.716 ns   233.4 MHz   35,188 LUT   18,399 FF   165.5 BRAM   52 URAM   944 DSP
+        accel_sys   WNS 20.716 ns   233.4 MHz   36,997 LUT   19,786 FF   165.5 BRAM   52 URAM   944 DSP
+        delta                    0            0   +1,809      +1,387            0        0        0
+
+  **WNS identical to the picosecond**, and the worst path is the same one it has been since
+  Phase 3 - `u_act/mem_reg_0_uram_13/CLK` into `u_dw/u_arr/ch[10].u_dw/.../DSP_A_B_DATA_INST/A[24]`,
+  the `act_buffer` URAM read that DD-023 is about - with only the hierarchy prefix changed. So the
+  DMA is nowhere near the critical path, which is exactly what registering every one of its outputs
+  was for. `report_utilization -hierarchical` puts `u_dma` at **1,724 LUT and 1,395 FF, no DSP and
+  no BRAM**; the +1,809 LUT delta is that plus 85 of boundary optimisation.
+
+  Two caveats on those numbers, because the docs are careful about this elsewhere. These are
+  **synthesis** estimates at 25.000 ns, not post-route at 4.000 ns, so 233.4 MHz is not comparable
+  to Phase 6's 198.3 MHz - the route delay here is a wireload model. And no implementation run has
+  been done for `accel_sys`. What the pair *is* good for is the delta, because both sides come from
+  the same flow on the same day.
+
 - **What this does not include**, so nobody reads more into it than is there: no AXI-Lite control
   registers (the four base addresses are plain input wires, latched on `start`, shaped for a CSR
   block that does not exist); no image or program load path; no PS application; no board-level
   implementation; and no weight double-buffering. `accel_sys` keeps the write side a plain port that
   a second bank could later select, and that is the entire extent of the preparation for C-11.
+- Suite: **all 33 testbenches pass** (`bash scripts/run_all_sims.sh`), including both integration
+  runs and the new `wgt_dma` unit. The 31 that existed before are untouched.
