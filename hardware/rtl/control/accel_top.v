@@ -63,6 +63,13 @@
 //  today, an AXI master later - can fill them. The three weight buffers cannot
 //  be merged: their word widths are TN*8=128, K*K*8=72 and CIN*K*K*8=216 bits.
 //
+//  The AXI master now exists - hardware/rtl/axi/wgt_dma.v - and
+//  hardware/rtl/top/accel_sys.v is where the two are wired together. This
+//  module is deliberately UNCHANGED by that, apart from one added output:
+//  `ld_op`, the opcode, which the DMA needs and cannot derive (DD-030). Every
+//  write port below is still a port, so accel_tb keeps working as the fast
+//  path and all 31 existing testbenches are untouched.
+//
 //  Run:  bash scripts/run_sim.sh accel accel_top top_seq \
 //          pw_feeder pw_out dw_feeder res_feeder gap_feeder stem_feeder \
 //          logit_out out_stage pe_array mac_lane conv1x1 dwconv3x3 \
@@ -163,7 +170,13 @@ module accel_top #(
     input  wire [CIN*DATA_W-1:0]     im_wr_data,
 
     // ---- weight fetch handshake (the DMA answers) ------------------------
+    //  `ld_op` is new: the DMA needs the opcode to know the SHAPE of the load
+    //  and which parameter port it lands on, and it cannot get it any other
+    //  way. See top_seq's port comment and DD-030 for why taps does not
+    //  substitute for it. It is the same bits as the sequencer's `op_code`,
+    //  exposed here because accel_top's pin boundary is where the DMA lives.
     output wire                      ld_req,
+    output wire [3:0]                ld_op,
     output wire [23:0]               ld_off,
     output wire [19:0]               ld_bytes,
     output wire [15:0]               ld_pchan,
@@ -307,7 +320,7 @@ module accel_top #(
         .clock(clock), .rst_n(rst_n_i),
         .start(start), .n_instr(n_instr),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
-        .ld_req(ld_req), .ld_off(ld_off), .ld_bytes(ld_bytes),
+        .ld_req(ld_req), .ld_op(ld_op), .ld_off(ld_off), .ld_bytes(ld_bytes),
         .ld_pchan(ld_pchan), .ld_done(ld_done),
         .op_start(op_start), .op_code(op_code),
         .op_img_w(op_img_w), .op_img_h(op_img_h),

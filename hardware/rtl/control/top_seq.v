@@ -103,7 +103,27 @@ module top_seq #(
     input  wire [PW_W-1:0]     pg_data,
 
     // ---- weight / parameter fetch handshake (the DMA answers) -----------
+    //  `ld_op` is the SAME BITS as `op_code` below, and that is deliberate. It
+    //  carries no new information; what it adds is that the load handshake's
+    //  contract is a GROUP - {ld_op, ld_off, ld_bytes, ld_pchan}, all valid
+    //  while `ld_req` is high - instead of a reader having to know that
+    //  `op_code` happens to be stable during S_LOAD because `w[]` is not
+    //  rewritten until the next S_FETCH.
+    //
+    //  The DMA cannot do without it and cannot derive it (DD-030). accel_tb
+    //  reads `u_dut.op_code` hierarchically; an AXI master at the pin boundary
+    //  has no hierarchy to read. And the opcode is not recoverable from the
+    //  load fields: taps = ld_bytes/ld_pchan is 1280 for the LINEAR op and
+    //  there is no taps value that separates PW from LINEAR - yet those two
+    //  send their parameters to DIFFERENT ports, pl_* and lg_pl_*. A DMA
+    //  guessing from taps would load the classifier's parameters into the
+    //  pointwise banks and produce four plausible wrong logits.
+    //
+    //  Against finding T-7 ("ld_pchan carries three meanings at once"): this is
+    //  the honest way to make meaning (1), the DMA's parameter count, real
+    //  without also making it imply the shape and the destination.
     output reg                 ld_req,
+    output wire [3:0]          ld_op,       // the opcode, held with ld_req
     output wire [23:0]         ld_off,      // byte offset into the weight blob
     output wire [19:0]         ld_bytes,
     output wire [15:0]         ld_pchan,
@@ -253,6 +273,9 @@ module top_seq #(
     assign ld_off        = w[5][23:0];
     assign ld_bytes      = w[6][19:0];
     assign ld_pchan      = w[7][15:0];
+
+    // Same slice as op_code, named for the load side. See the port comment.
+    assign ld_op         = w[0][3:0];
 
     // ---- the sequence ----------------------------------------------------
     localparam S_IDLE  = 3'd0,

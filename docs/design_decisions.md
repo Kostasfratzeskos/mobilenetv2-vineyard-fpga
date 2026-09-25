@@ -1293,3 +1293,79 @@ argmax over the 4 int16 logits is the predicted class.
 - Consequences if the header fix alone is accepted: one paragraph in `wgt_buffer.v` stating that
   the fill is serial, what it costs on the worst layer, and that C-11/DD-029 is the record of why.
   C-11 closes as "documented, deferred with a plan".
+
+### DD-030 — The parameter blob's DDR addressing: three regions, not one interleaved record
+- Status: Accepted
+- Date: 2026-09-25
+- Context: the weight DMA is the first thing that has to actually *read* the parameter blob out of
+  PS-DDR. `top_seq` hands it `(ld_off, ld_bytes, ld_pchan)`, and `ld_off`/`ld_bytes` describe the
+  weight blob only — there is deliberately no parameter offset in the instruction, because ops
+  execute in program order and a running index advanced by `ceil(pchan/TM)*TM` after every load is
+  sufficient (`gen_program.py`, "the two blobs the DMA reads"). What the instruction does *not*
+  settle is that the parameters are **three separate arrays** on disk — `params_b.hex` (32-bit
+  bias), `params_m0.hex` (32-bit multiplier), `params_shift.hex` (8-bit shift) — while
+  `param_buffer` has **one** write port that takes bias, m0 and shift *together*
+  (`param_buffer.v:74-79`, one packed `{wr_shift, wr_m0, wr_bias}` per bank). Something has to
+  bridge those two facts, and where it is bridged is the decision.
+- Decision: **three DDR regions with three base-address registers** (`pb_base`, `pm_base`,
+  `ps_base`), read as three sequential streams per TM-channel tile into a 32-entry staging buffer,
+  which is then emitted as TM `pl_*` writes. `gen_program.py` and the export format do not change.
+- Rationale: four reasons, strongest first.
+  1. **It adds no second source of truth.** The three `.hex` files are what `export.py` writes and
+     what `gen_program.py` already *validates* — it checks each layer's three parameter files are
+     all exactly `pchan` long and pads to `ceil(pchan/TM)*TM` with explicit zeros. An interleaved
+     blob would be a fourth artefact encoding the same numbers, with its field offsets living in
+     the RTL and its layout living in a new emitter. This project has already paid for that class
+     of drift twice: DD-019 (a retrain silently invalidating measurements) and the stale
+     `software/golden/image_1` set found in Phase 6, whose *missing* checkpoint hash walked past
+     the guard written to catch exactly that.
+  2. **The parameter path is 1.1% of the traffic.** Weights are 2,194,880 bytes; the parameter
+     blob is 19,264 channels × 9 bytes = 173,376. In cycles: ~192,000 bank writes for weights
+     against ~37,000 for parameters over the whole 64-op network. Optimising the smaller number's
+     bus efficiency buys nothing that can be measured.
+  3. **Interleaving wastes 44% of every record.** bias + m0 + shift is 4+4+1 = 9 bytes; the record
+     has to be 16 to make one beat one channel. 308 KB in DDR against 173 KB, to save cycles on
+     the path that item 2 says does not matter.
+  4. **Three bases are three CSRs later.** The AXI-Lite block (a separate open item) gains three
+     32-bit registers instead of one, and the PS-side layout stays "three files, three memcpys",
+     which is what the export directory already looks like.
+- Alternatives considered:
+  - **One interleaved 16-byte record per channel.** Rejected — but it is the option that is
+    *simpler in RTL*, and that has to be said plainly. One beat would carry one channel's complete
+    parameters: no staging buffer, no stream switching, and the parameter phase would collapse to
+    "read `npad` beats, emit one `pl_*` write per beat". The three-region choice pays for its
+    cleanliness with a 32-entry staging buffer (32 × (32+32+8) = 2,304 bits of LUTRAM) and a
+    three-way stream sequencer inside `wgt_dma`. The trade is ~2.3 Kbit and one state machine
+    against inventing a binary format with no other consumer. That is the whole argument, and it
+    is a judgement call, not an obvious win.
+  - **Three concurrent read streams, interleaved on the R channel.** Rejected on the protocol.
+    AXI4 removed AXI3's read-data interleaving: beats of one transaction are contiguous, and
+    out-of-order return is per-ID only. Serving three streams at once would need three ARIDs plus
+    a descriptor queue to reattribute beats — significant logic, for the 1.1% path.
+  - **Buffer the whole op's parameters, then emit.** Rejected on size: the deepest op is GAP at
+    `pchan` 1280, so 1280 × 72 bits = 92 Kbit of staging against 2.3 Kbit for one tile.
+- Why a staging buffer is unavoidable here: `param_buffer` writes one bank per cycle with all
+  three fields in one word, and a 128-bit beat of `params_b.hex` carries 4 channels' bias and
+  nothing else. The three arrays cannot arrive together on one in-order read channel, so the
+  first two have to wait somewhere for the third. One tile is the smallest "somewhere" that keeps
+  the emit loop's `pl_bank = ch % TM` / `pl_addr = ch / TM` mapping trivial.
+- Also recorded here: **`ld_op`, and what it does to T-7.** The DMA needs the opcode and could not
+  get it. `accel_tb` reads `u_dut.op_code` hierarchically; an AXI master at the pin boundary
+  cannot, and the opcode is *not* derivable from the load fields — `taps = ld_bytes/ld_pchan` is
+  1280 for the LINEAR op and there is no `taps` value that separates PW from LINEAR, yet those two
+  route their parameters to different ports (`pl_*` versus `lg_pl_*`). So `top_seq` now exposes a
+  4-bit `ld_op`, held valid alongside `ld_req`, and `accel_top` passes it through. It is the same
+  bits as `op_code`, deliberately: the point is not new information, it is that the load
+  handshake's contract becomes a *group* — `{ld_op, ld_off, ld_bytes, ld_pchan}` — instead of a
+  reader having to know that `op_code` happens to be stable during `S_LOAD`. Against T-7's three
+  meanings of `ld_pchan`: meaning (3), the stem's oc-tile count, was closed in Phase 5
+  (`accel_top.v:347-380`, derived structurally as `POOL_TM/TS`); meaning (2), `top_seq`'s `no_load`
+  decision, is unchanged and unreachable in this program; meaning (1), the DMA's parameter count,
+  is now **real** rather than hypothetical, and `ld_op` is what stops it also having to imply the
+  shape and the destination port.
+- Revisit if: the parameter path stops being 1.1% of the traffic — a model with a 1000-class head
+  would make the classifier's parameters 1000 channels instead of 4, still negligible, so the
+  realistic trigger is a *per-pixel* or per-tile parameter scheme rather than per-channel. Or if
+  AXI-Lite register space becomes tight enough that three bases versus one matters, which it will
+  not. Or if the staging buffer ever shows up in a utilization report, which at 2,304 bits it
+  will not.
