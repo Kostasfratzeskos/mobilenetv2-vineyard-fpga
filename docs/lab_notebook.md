@@ -1538,3 +1538,124 @@ wrote quant_scales.json  (53 layers)
   a second bank could later select, and that is the entire extent of the preparation for C-11.
 - Suite: **all 33 testbenches pass** (`bash scripts/run_all_sims.sh`), including both integration
   runs and the new `wgt_dma` unit. The 31 that existed before are untouched.
+
+### 2026-09-25 (later) - AXI-Lite: the accelerator becomes something a processor can run
+- Context: after the weight DMA the design could fetch its own weights but still could not be
+  OPERATED. `accel_sys` had `start`, `n_instr`, four DDR base addresses and the whole 42-bit
+  program-load port as pins with nothing driving them, and `accel_dma_tb` drove them from a
+  testbench. `firmware/README.md` has said since Phase 4 was planned that the PS "configures the
+  PL accelerator over AXI-Lite, runs inference, reads the result"; nothing in the repository said
+  what that interface was. No register map existed anywhere, so there was nothing to honour.
+- Did: `hardware/rtl/axi/axi_lite_csr.v`, `hardware/rtl/top/accel_axi.v`,
+  `hardware/tb/axi_lite_csr_tb.sv` (unit, 12 cases), `hardware/tb/accel_axi_tb.sv`
+  (integration), `hardware/tb/axi_lite_master.svh` (an AXI-Lite BFM shared by both), DD-031,
+  `hardware/constraints/accel_axi_ooc.xdc`.
+- Tests: `axi_lite_csr_tb` ALL PASS - 13 registers, a 512-word aperture, six SLVERR guards.
+  `accel_axi_tb` ALL PASS - **6,895,780 elements bit-exact driven entirely over two AXI
+  interfaces**, logits -4950 -6177 15185 -5486, class 2 = Healthy read back over AXI-Lite after
+  the run, 5,645 STATUS polls, irq asserted. All 35 testbenches pass.
+
+- **The one piece of this that is not bookkeeping, and I did not expect to find it in
+  `logit_out`.** Its header says, at lines 212-217:
+
+        requantize's output register free-runs, so `logits` only ever means anything in a
+        `logits_valid` cycle... it deliberately does not turn `logits` into a latched output,
+        because that would move `logits_valid` by a cycle.
+
+  That is the right call for `logit_out` and it is also a loose end that had to land somewhere:
+  a processor polling a register cannot observe a one-cycle event, so SOMETHING has to convert
+  the event into state. Finding T-10 had already described the failure precisely - "a poll that
+  arrives between `start` and the first `logits_valid` gets a complete, plausible, four-class
+  answer belonging to the previous image. That is the worst shape a stale value can take: not an
+  x, not a zero, but last frame's confident prediction of a healthy leaf" - and closed the
+  window from `start` to the first result with its `stale` gate. The CSR closes the rest of it by
+  latching the result on valid and holding it to the next `start`. Between the two there is now
+  no window in which `RESULT_LO/HI` reads as anything but zeros or this image's answer.
+
+  `done` is the same problem in miniature: a one-cycle pulse from `top_seq`, now a sticky
+  `STATUS` bit. Every previous testbench waited on the `done` WIRE, which a processor cannot do -
+  `accel_axi_tb` polls the bit instead, 5,645 times over the run, which is the first time that
+  path has been exercised at all.
+
+  The unit test for this had to be designed rather than written: case 7 pulses `logits_valid`
+  with one value and then **changes `logits` while valid is low**, which is exactly what the
+  free-running requantize register does on hardware. A test that drove `logits` once would pass
+  against a plain wire.
+
+- **The guard I would not have thought of before writing the DMA.** START while `running` must be
+  REFUSED, not ignored. `top_seq` only looks at `start` in `S_IDLE`/`S_ERR`, so a mid-run START
+  appears to be a no-op - but `wgt_dma`'s `start` is unconditional and resets its running
+  parameter index to zero. The sequencer would keep going while every later parameter load read
+  from the wrong place in the blob, and the run would **finish**, with wrong biases from that
+  layer onward. That is the same silent-wrong-answer shape as T-10's stuck `ld_done` and C-11's
+  double-buffering hazard, and the CSR is the only module that can see both `top_seq` and
+  `wgt_dma` at once, so it is where the refusal belongs.
+
+- **Two bugs, one in each direction, and the RTL one is the interesting one.** The CSR's
+  read-side `[FAULT]` diagnostic decoded the REGISTERED address on the AR *capture* cycle - but
+  the registered address at that moment still holds the previous transaction's. So it reported
+  the wrong address, one read late, and blamed a perfectly good register read for the aperture
+  read before it. The SLVERR *response* was always correct because the response path uses the
+  address a cycle later; only the message was wrong. That is the more dangerous of the two to
+  leave in, because a diagnostic that lies sends you looking in the wrong module. Fixed by
+  qualifying on the cycle the response is formed, which also gave the unmapped-read case a
+  message it did not have.
+
+  And mine: the testbench packed `logits` as `{4444, 3333, -2222, 1111}` - most significant
+  first, so logit 0 is in the LOW bits - while I wrote the expectation from the visual order of
+  that concatenation. The DUT matched its own documented map and the test did not. Now packed by
+  index in a loop, which cannot be read the wrong way round.
+
+- **Port bits, and what they are made of now.** The three-top progression, measured:
+
+        accel_top   846 bits    672 of them the load side, pins only because nothing drove them
+        accel_sys   499 bits    + wgt_dma absorbed those 672
+        accel_axi   354 bits    + the CSR absorbed the config and the program
+
+  And the 354 break down as 196 AXI4 master, 114 AXI-Lite slave, 41 image load, 3 clock/reset/irq.
+  So there is nothing left on the top module that is not an AXI interface, a clock, a reset, an
+  interrupt - **or the image**. That is one port group away from a board top, which is why the
+  image path is the next item and why I deliberately did NOT route it through the CSR: 50,176
+  single AXI-Lite writes is 1-2.5 ms against 5.8 ms of inference, 17-43% overhead, and it would
+  have been a stopgap to remove later. The right answer is a second AXI4 read channel sharing
+  `wgt_dma`'s burst logic.
+
+- **Three tops rather than folding the CSR into `accel_sys`.** Same reasoning as keeping
+  `wgt_dma` a sibling of `accel_top`: folding it in would have meant rewriting `accel_dma_tb` to
+  drive AXI-Lite, and that testbench's entire value is that it changes exactly ONE thing against
+  `accel_tb`. The three integration testbenches now form a chain where each step adds one real
+  interface - task, then the weights, then the control - and all three share `accel_check.svh`,
+  so a failure is attributable to the layer that introduced it. `accel_sys`, `accel_top` and
+  `wgt_dma` are byte-identical after this work, confirmed by diff rather than by assertion.
+
+- **Synthesis: the entire PS interface costs no timing whatsoever.** All three tops through
+  `scripts/synth.tcl` at 25.000 ns, same session, same script, one XDC each:
+
+        accel_top   WNS 20.716 ns   233.4 MHz   35,188 LUT   18,399 FF   165.5 BRAM   52 URAM   944 DSP
+        accel_sys   WNS 20.716 ns   233.4 MHz   36,997 LUT   19,786 FF   165.5 BRAM   52 URAM   944 DSP
+        accel_axi   WNS 20.716 ns   233.4 MHz   37,145 LUT   20,141 FF   165.5 BRAM   52 URAM   944 DSP
+
+  **WNS identical to the picosecond across all three**, and the worst path is the same one it has
+  been since Phase 3 in every case - `u_act/mem_reg_0_uram_13/CLK` into
+  `u_dw/u_arr/ch[10].u_dw/.../DSP_A_B_DATA_INST/A[24]`, the `act_buffer` URAM read DD-023 is
+  about - with only the hierarchy prefix lengthening as the layers wrap it. BRAM, URAM and DSP do
+  not move at all.
+
+  Per-module, from `report_utilization -hierarchical`:
+
+        u_dma   wgt_dma        1,720 LUT   1,396 FF   0 BRAM   0 DSP
+        u_csr   axi_lite_csr     173 LUT     354 FF   0 BRAM   0 DSP
+
+  So **everything needed to make this a processor-driven accelerator - the weight DMA and the
+  control registers together - is 1,957 LUT and 1,742 FF over the bare datapath: +5.6% LUT,
+  +9.5% FF, zero DSP, zero BRAM, zero timing.** The CSR at 173 LUT is essentially free, which is
+  what a register file should be; if it ever appears in a timing report something is wrong with
+  the decode rather than with the budget.
+
+  Same two caveats as before, and they matter: these are **synthesis** estimates at 25.000 ns, so
+  233.4 MHz is not comparable to Phase 6's post-route 198.3 MHz at 4.000 ns, and no
+  implementation run has been done for either new top. What the three numbers are good for is the
+  deltas, because all three come from the same flow on the same day.
+
+- Suite: **all 35 testbenches pass** (`bash scripts/run_all_sims.sh`), including all three
+  integration runs. The 33 that existed before are untouched.
