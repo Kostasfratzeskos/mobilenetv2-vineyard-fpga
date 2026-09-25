@@ -1397,3 +1397,104 @@ argmax over the 4 int16 logits is the predicted class.
   AXI-Lite register space becomes tight enough that three bases versus one matters, which it will
   not. Or if the staging buffer ever shows up in a utilization report, which at 2,304 bits it
   will not.
+
+### DD-031 — The AXI-Lite register map, and where the result gets latched
+- Status: Accepted
+- Date: 2026-09-25
+- Context: after DD-030 the accelerator could fetch its own weights, but nothing could
+  *operate* it. `accel_sys` still exposed `start`, `n_instr`, four DDR base addresses and the
+  whole 42-bit program-load port as pins with no driver; `accel_dma_tb` drove them from a
+  testbench. `firmware/README.md` has always said the PS "configures the PL accelerator over
+  AXI-Lite, runs inference, reads the result" — this is the decision about what that interface
+  actually is. No register map existed anywhere in the repository, so there was nothing to
+  honour and everything to choose.
+- Decision: a 13-bit (8 KB) AXI4-Lite slave, `hardware/rtl/axi/axi_lite_csr.v`, wired to
+  `accel_sys` by a third top, `hardware/rtl/top/accel_axi.v`. Thirteen 32-bit registers at
+  `0x00`–`0x30` and the 512 program words as a 2 KB **aperture** at `0x1000`. An `irq` output
+  driven by the sticky status bits under an enable mask.
+
+- **The part that is not bookkeeping: the result has to be latched, and this is the only place
+  left to do it.** `logit_out.v:212-217` states plainly that it does not hold its output:
+
+  > "requantize's output register free-runs, so `logits` only ever means anything in a
+  > `logits_valid` cycle... it deliberately does not turn `logits` into a latched output,
+  > because that would move `logits_valid` by a cycle."
+
+  That is the right call *for logit_out* — moving `logits_valid` would have been worse — but it
+  means a register somewhere has to convert a one-cycle event into readable state, and a
+  processor polling over AXI cannot be the thing that does it. Finding T-10 had already noticed
+  half of this and described the failure exactly: "a poll that arrives between `start` and the
+  first `logits_valid` gets a complete, plausible, four-class answer belonging to the previous
+  image. That is the worst shape a stale value can take: not an x, not a zero, but last frame's
+  confident prediction of a healthy leaf." T-10's `stale` gate closed the window from `start` to
+  the first result by zeroing it; the CSR's latch closes the rest, holding this image's answer
+  until the next `start`. Between the two there is no window in which `RESULT_LO/HI` reads as
+  anything but zeros or this inference's logits.
+
+  `done` is the same problem in miniature: a one-cycle pulse from `top_seq` that a polling PS
+  would essentially never observe, so `STATUS[1]` is sticky.
+
+  `axi_lite_csr_tb` case 7 tests this specifically, by pulsing `logits_valid` with one value and
+  then **changing `logits` while valid is low** — which is what requantize's free-running
+  register does on real hardware. A testbench that drove `logits` once would pass against a
+  plain wire.
+
+- Rationale for the shape of the map:
+  1. **An aperture for the program, not an address/data register pair.** The program is 2 KB
+     written once per boot, so the PS side is a plain loop over an array with no pointer state
+     to get out of step. A pointer register one word behind produces a program that *executes* —
+     the same class of failure T-1 and the checkpoint-hash guard exist to make impossible, and
+     not introducing another one is worth 2 KB of address space that costs nothing.
+  2. **`N_INSTR` resets to zero.** `top_seq`'s T-1 check refuses `n_instr == 0` and raises
+     `fault`, so a PS that forgets to write it gets a loud refusal instead of an assumed 64 that
+     happens to be correct for this network today.
+  3. **`SLVERR`, not silent acceptance**, on six conditions: an unmapped address (read or
+     write), a write to a read-only register, a program or config write while `running`, a
+     partial program word (`WSTRB != 0xF`), a read of the write-only program aperture, and START
+     while running. The repository's convention is that a silent wrong answer is the outcome
+     worth spending logic to avoid, and a bus error is the loudest thing a slave can say to a
+     processor. In particular the program-while-running case turns T-10's silently *dropped*
+     write into a reported one.
+  4. **AW and W are captured independently.** The compact form — asserting both readies only
+     when both valids are present — deadlocks against a master that waits for `AWREADY` before
+     driving `WVALID`. AXI4 forbids a master from doing that, but "correct against every legal
+     master" is worth fifteen lines in the one module a processor talks to.
+
+- **The guard that is not obvious, and is the reason this module is the right place for it:
+  START while `running` must be REFUSED, not ignored.** `top_seq` only looks at `start` in
+  `S_IDLE`/`S_ERR`, so a mid-run START appears harmless. But `wgt_dma`'s `start` is
+  *unconditional* and resets its running parameter index to zero. A mid-run START would
+  therefore leave the sequencer running while every subsequent parameter load read from the
+  wrong place in the blob — and the run would **finish**, with wrong biases from that layer
+  onward. The CSR is the only place that can see both modules at once, so it is where the
+  refusal belongs. `axi_lite_csr_tb` case 12 drives it and checks that `start` did not pulse.
+
+- Alternatives considered:
+  - **Fold the CSR into `accel_sys`** rather than adding a third top. Rejected for the same
+    reason `wgt_dma` is a sibling of `accel_top` and not inside it: it would have meant
+    rewriting `accel_dma_tb` to drive AXI-Lite, and the entire value of that testbench is that
+    it changes exactly *one* thing against `accel_tb`. Three tops cost three XDCs and three
+    synthesis runs; they buy the ability to say which layer a number belongs to.
+  - **The image load over AXI-Lite too**, via an auto-incrementing data register, which would
+    have made `accel_axi` a complete board-ready top immediately. Rejected as a stopgap that
+    would then have to be removed: 50,176 single writes is 1–2.5 ms against 5.8 ms of inference,
+    17–43% overhead, and the right answer is a second AXI4 read channel sharing `wgt_dma`'s
+    burst logic. It is the next item of work and `im_wr_*` stays a port until then — the one
+    remaining non-AXI port group, 41 of `accel_axi`'s 354 port bits.
+  - **Poll-only, with no interrupt.** The `irq` line is ten lines of logic and a PS that prefers
+    polling leaves `IRQ_EN` at zero and ignores the pin, so there was no reason to refuse it.
+  - **Returning OKAY and zeros for unmapped reads**, which is what many CSR blocks do. Rejected
+    on the same ground as (3): a PS built against a stale map should find out.
+
+- Consequences: `accel_axi` is 354 port bits, of which 196 are the AXI4 master, 114 the AXI-Lite
+  slave, 41 the image load, and 3 are clock, reset and interrupt. There is nothing on the module
+  that is not an AXI interface, a clock, a reset, an interrupt or the image. `STATUS_CLR` cannot
+  clear a sticky bit whose source is still asserted — the copy re-sets on the next cycle — which
+  is deliberate and means the only way out of a `fault` really is a new run, matching what
+  `top_seq` and `wgt_dma` already do with their own sticky bits.
+- Revisit if: the image load path lands, at which point `im_wr_*` disappears and this becomes the
+  board top with no other change. Or if a second consumer needs the register block, which would
+  make the fixed `0x1000` aperture offset worth parameterising further than `CSR_ADDR_W` already
+  does. Or if the PS ever needs to *read* the program back for a bug report, which would mean
+  giving `top_seq`'s program memory a read port — it has none today, which is why the aperture is
+  write-only.
