@@ -151,3 +151,9 @@ software/golden/*/
 #  data/ and its checkpoint was overwritten. Its blobs are already in history,
 #  so excluding it here would save nothing; kept, marked stale in its manifest.
 !software/golden/image_1/
+
+# ── Claude project context ───────────────────────────
+#  Working notes kept for an assistant's context, not part of the thesis or the
+#  build: nothing in the repo reads them and nothing regenerates them. Local
+#  only, by decision 2026-09-25.
+docs/claude_project/
