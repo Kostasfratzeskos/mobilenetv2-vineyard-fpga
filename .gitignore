@@ -103,6 +103,17 @@ build/synth/timing_paths.rpt
 build/synth/timing_summary.rpt
 .Xil/
 build/synth/*backup.log
+#  scripts/synth.tcl takes TOP now, and a non-default top writes to
+#  build/synth_<top>/ so accel_top and accel_sys can be compared without one
+#  overwriting the other. Same rule for those: the two utilization reports stay
+#  as the evidence, everything else is regenerable with
+#      TOP=accel_sys bash scripts/run_synth.sh
+build/synth_*/*.dcp
+build/synth_*/vivado.log
+build/synth_*/*.jou
+build/synth_*/*backup.log
+build/synth_*/timing_paths.rpt
+build/synth_*/timing_summary.rpt
 
 # ── Place-and-route artifacts (scripts/run_impl.sh) ──
 #  Same rule as build/synth above, one directory per constraint so two runs can
