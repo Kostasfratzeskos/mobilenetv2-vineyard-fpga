@@ -1390,3 +1390,128 @@ wrote quant_scales.json  (53 layers)
   Python-vs-implementations intermediate clamp in the residual path, and the stale
   software/golden/image_1 set whose MISSING checkpoint hash walked past the guard written to
   catch exactly that. The third is the one I would fix first in any future review.
+
+### 2026-09-25 - The weight DMA: the load handshake stops being a promise
+- Context: `top_seq` has carried the `ld_req` / `ld_off` / `ld_bytes` / `ld_pchan` / `ld_done`
+  handshake since build plan #6, and its header says in as many words that it "does NOT contain
+  the DMA". `accel_tb` has answered it with a testbench task for the whole 64-op network since
+  2026-09-13. This is the first item of the Core success tier (`08_OPEN_ITEMS` section 2) and it
+  was the one the other three were queued behind, because it is what says the interface is real
+  rather than hopeful.
+- Did: `hardware/rtl/axi/wgt_dma.v` (a read-only AXI4 master), `hardware/rtl/top/accel_sys.v`,
+  `hardware/tb/wgt_dma_tb.sv` (unit, 11 cases), `hardware/tb/accel_dma_tb.sv` (integration),
+  `hardware/tb/accel_check.svh` (the checking, now shared with `accel_tb`), DD-030, T-7 closed.
+- Tests: `wgt_dma_tb` ALL PASS, 60,932 writes scoreboarded. `accel_dma_tb` ALL PASS, **6,895,780
+  elements bit-exact**, logits -4950 -6177 15185 -5486, class 2 = Healthy - identical to
+  `accel_tb`. All 33 testbenches pass.
+
+- **The design decision that made the module small, and it is not the one I expected to make.**
+  `wgt_buffer`'s address layout is `rd_addr = oct*n_ic + ict` with bank = lane, so the natural way
+  to describe a pointwise fill is "for each (oct, ict) tile, write all TM banks" - loop order
+  (ot, it, m), which is how the interface contract reads and how I first wrote the expectation.
+  Written that way the DMA has to read, for a fixed (ot, it), TN bytes from each of TM rows at
+  stride IC. That is a strided **gather**: one burst per 16 bytes, read efficiency 16/IC. On
+  `features.18.0` (IC=320, OC=1280) it is 800 bursts of 16 bytes.
+
+  But the buffer takes an arbitrary (bank, addr) with **every** write, so the write ORDER is free
+  and only the mapping is fixed. Reordering to (ot, m, it) - output channel outer, input-channel
+  tile inner - walks output channels in exactly the order the blob stores them, and each channel's
+  IC bytes are contiguous *and* immediately followed by the next channel's. Same rectangle, same
+  `addr = ot*n_ic + it`, same `bank = m`; but the DDR address stream becomes one unbroken run from
+  `ld_off` to `ld_off+ld_bytes`. 100 bursts of 256 beats instead of 800 of one.
+
+  And the stem and the depthwise reduce to the same thing - 27 contiguous bytes per channel, 9 per
+  channel, channels ascending. So all three shapes collapse to: a sequential byte reader, a
+  byte-granular realigner, and one nested counter with three output widths. I spent the first hour
+  designing a scatter-gather engine I did not need.
+
+- **The realigner is not optional, and the reason is not the one the brief gave.** Every `ld_off`
+  in the compiled program is a multiple of 16 - I decoded `program.hex` and checked all 64. What is
+  unaligned is **rows**: 27 bytes for the stem, 9 for a depthwise, and 24 for `features.3.conv.0.0`
+  and `features.4.conv.0.0`, where every odd output channel starts 8 bytes into a beat. Once the
+  load is one sequential stream the row stride stops mattering by itself and what is left is a
+  single byte pointer, which is what the two-beat window is. `wgt_dma_tb` case 6 drives a
+  deliberately odd `ld_off` anyway, so the base alignment cannot quietly become a dependency.
+
+- **Two bugs found by tracing the handshake on paper, not by simulation.** Both would have passed
+  every test I had written at the time.
+  1. `top_seq` drops `ld_req` on the same clock edge it sees `ld_done` **rise**, so `ld_req` is
+     still high for one cycle after the pulse. Returning from `S_DONE` straight to `S_IDLE`
+     re-latched the request and ran the entire load a second time - bit-identical, and therefore
+     invisible except as doubled fill cycles. That is the worst kind of bug this design keeps
+     producing: correct output, wrong performance, no error anywhere. Fixed with an `S_ACK` state
+     that waits for `ld_req` to fall, which is the complete req/ack handshake rather than half of it.
+  2. The DMA's own "`ld_done` asserted with no `ld_req`" check fired on every single load, because
+     a testbench that releases `ld_req` from a negedge has it low while `ld_done` is still high.
+     Qualified with `ld_req`'s previous value.
+
+- **And one bug in a check I wrote myself**, which is worth recording because it is the failure mode
+  the elaboration-check idiom exists to avoid. I asserted that the realigner window being empty
+  implies a zero byte pointer. Mid-stream that is true and provable: with one beat in the window the
+  available count is `BEAT_BYTES - wp`, a consume can never exceed it, so the only retire that
+  empties the window is the one where `wp + tk` is exactly `BEAT_BYTES`. What I missed is the cycle
+  a stream is **armed**: an unaligned `ld_off` sets `wp` before any beat has arrived. Case 6 tripped
+  it immediately. The check was wrong, not the logic - and an assertion that is wrong about a corner
+  is worse than no assertion, because the first thing it does is send you looking in the wrong place.
+
+- **Measured, and it is faster than the testbench it replaces.** Same program, same image, same
+  goldens:
+
+        accel_tb     (testbench task)   1,277,574 cycles   load 325,512   25.5%
+        accel_dma_tb (real AXI4 DMA)    1,151,347 cycles   load 199,285   17.3%
+
+  Feeders-busy is **952,062 cycles in both, identical to the digit**, which is the strongest
+  evidence I have that `accel_top` is genuinely untouched. The DMA moves the same ~162,000 buffer
+  writes 1.63x faster because it sustains one bank write per cycle instead of the task's two cycles
+  per bank word. `wgt_dma_tb` measures the weight phase directly on the worst load: **25,600 writes
+  in 26,300 cycles, 0.973 per cycle**, against `top_seq`'s 2^20-cycle `S_LOAD` watchdog.
+
+- **This corrects C-11's headline number, and in the direction that matters.** C-11 and DD-029 say
+  the design has "65% fill overhead, none of it hidden", from `features.18.0`'s 25,600 fill cycles
+  against 39,200 compute. That layer figure is still right. But DD-029 also says the network-wide
+  number "should be measured before anyone builds a second bank", and it now is: **199,285 load
+  cycles against 952,062 of compute is 17.3%**, not 65%. Double buffering can hide at most 17.3% of
+  the run. That does not make C-11 wrong, it makes it smaller than the review's framing suggests -
+  and the reason the two differ is that `features.18.0` is the single worst layer by a wide margin,
+  not a representative one.
+
+- **What DD-030 cost, measured.** The parameter blob is three DDR regions, so a tile of TM=32
+  channels needs three sequential streams (8 + 8 + 2 beats) into a staging memory before it can be
+  written, and each stream pays an AR turnaround. On the params-only GAP op that is 3,656 cycles for
+  1,280 channels - 2.85 cycles per channel, against ~1.0 for a weight word. Over the network it is
+  ~55,000 of the 199,285 load cycles: **27% of load time for 12% of the writes.** The rejected
+  alternative, one interleaved 16-byte record per channel, would have made one beat one channel and
+  removed both the staging and the stream switching - it is the simpler RTL and it would have been
+  faster. It was still rejected because it would be a fourth encoding of numbers `export.py` already
+  writes and `gen_program.py` already validates, and this project has twice paid for that class of
+  drift (DD-019, and the stale `image_1` golden set found in Phase 4). That trade is now a
+  measurement in DD-030 rather than an assertion.
+
+- **T-7 closes.** `ld_pchan` carried three meanings; Phase 5 removed meaning (3) by deriving the
+  stem's tile count structurally, meaning (2) is unchanged and unreachable, and meaning (1) - the
+  DMA's parameter count - became real here. `top_seq` now also exposes a 4-bit `ld_op`. It is the
+  same bits as `op_code`, deliberately: the value is not new information, the point is that the load
+  handshake's contract becomes a *group*. The DMA cannot do without it and cannot derive it -
+  `taps = ld_bytes/ld_pchan` is 1280 for the LINEAR op and there is no `taps` value that separates
+  PW from LINEAR, yet those two send their parameters to different ports. A DMA guessing from `taps`
+  would load the classifier's parameters into the pointwise banks and produce four plausible wrong
+  logits.
+
+- **The 841-port problem.** `scripts/impl.tcl:22` records it as the reason every number so far has
+  been out-of-context. Measured now: `accel_top` 846 port bits (the 841 predates `ld_op`),
+  `accel_sys` **499**. 672 bits across 29 ports were the load side and they were pins only because
+  the DMA did not exist. 83 of the remaining 499 are `pg_*` and `im_wr_*`, which are the next two
+  items of work. So a board top is one AXI-Lite block and one image path away.
+
+  `accel_sys_ooc.xdc` is also the answer to `accel_top_ooc.xdc`'s "Tighten these once the DMA is
+  real", and the answer is that they are not tightened - they are **gone**. Those 672 bits are
+  internal register-to-register paths now, with no input delay and no exception, which is strictly
+  stronger than the 0.5 ns budget they had: a budget is an assumption about a launch clock, and a
+  register-to-register path is a measurement. `wgt_dma` registers every one of its outputs
+  specifically so that is true.
+
+- **What this does not include**, so nobody reads more into it than is there: no AXI-Lite control
+  registers (the four base addresses are plain input wires, latched on `start`, shaped for a CSR
+  block that does not exist); no image or program load path; no PS application; no board-level
+  implementation; and no weight double-buffering. `accel_sys` keeps the write side a plain port that
+  a second bank could later select, and that is the entire extent of the preparation for C-11.

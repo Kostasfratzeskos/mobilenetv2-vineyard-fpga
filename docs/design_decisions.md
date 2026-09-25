@@ -1363,6 +1363,34 @@ argmax over the 4 int16 logits is the predicted class.
   decision, is unchanged and unreachable in this program; meaning (1), the DMA's parameter count,
   is now **real** rather than hypothetical, and `ld_op` is what stops it also having to imply the
   shape and the destination port.
+- **What it actually cost, measured after the fact.** The estimate above said the parameter path
+  is 1.1% of the traffic and that optimising it "buys nothing that can be measured". The traffic
+  claim holds; the *cycle* claim was too generous, and the honest number is worth recording.
+
+  Each TM-channel tile needs three sequential streams - 8 beats of bias, 8 of m0, 2 of shift - and
+  each pays an AR turnaround before its first beat, because a single ARID with in-order attribution
+  means the next stream cannot be requested until the current one has drained. Measured on the
+  params-only GAP op (`pchan` 1280, 40 tiles, no weights at all): **3,656 cycles for 1,280
+  parameter writes, 2.85 cycles per channel**, against ~1.0 cycles per weight word. Over the whole
+  64-op network that is roughly 55,000 of the 199,285 load cycles `accel_dma_tb` reports:
+
+  | | writes | share of load cycles |
+  |:--|--:|--:|
+  | weights | ~142,900 | ~73% |
+  | parameters | ~19,200 | **~27%** |
+
+  So the three-region choice spends 27% of load time on 12% of the writes. The interleaved
+  16-byte record would have made one beat one channel: one stream, no staging, no AR turnaround
+  per tile, and the parameter phase would have been roughly 1.0 cycles per channel instead of 2.85
+  - about 42,000 cycles saved out of a 1,151,347-cycle run, or **3.6% of the inference**.
+
+  That does not change the decision, and the reasoning is unchanged: 3.6% is not worth a fourth
+  encoding of data `export.py` already writes and `gen_program.py` already validates. But the
+  original entry implied the cost was unmeasurable, and it is not - it is small. If the parameter
+  path is ever revisited, the cheaper fix is not the interleaved record: it is issuing the three
+  streams for tile *n+1* while tile *n* is being written, which needs a descriptor queue but no
+  change to the blob format at all. That is the thing to try first.
+
 - Revisit if: the parameter path stops being 1.1% of the traffic — a model with a 1000-class head
   would make the classifier's parameters 1000 channels instead of 4, still negligible, so the
   realistic trigger is a *per-pixel* or per-tile parameter scheme rather than per-channel. Or if
