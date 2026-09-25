@@ -3,7 +3,8 @@
 #  run_synth.sh  -  synthesise accel_top out of context and report
 #
 #  Usage:
-#     bash scripts/run_synth.sh
+#     bash scripts/run_synth.sh                  # accel_top, build/synth/
+#     TOP=accel_sys bash scripts/run_synth.sh    # + the weight DMA, build/synth_accel_sys/
 #
 #  Writes build/synth/{utilization,utilization_hier,timing_summary,timing_paths}.rpt
 #  plus a checkpoint, and prints the headline numbers.
@@ -25,9 +26,13 @@ if [[ -z "$VIVADO_BIN" ]]; then
 fi
 [[ -d "$VIVADO_BIN" ]] || { echo "ERROR: Vivado bin not found. Set VIVADO_BIN=/path/to/Vivado/<ver>/bin"; exit 1; }
 
-OUT="$ROOT/build/synth"
+TOP="${TOP:-accel_top}"
+export TOP
+if [[ "$TOP" == "accel_top" ]]; then OUT="$ROOT/build/synth"
+else                                 OUT="$ROOT/build/synth_$TOP"; fi
 mkdir -p "$OUT"
 
+echo "== top    : $TOP"
 echo "== vivado : $VIVADO_BIN"
 echo "== running synthesis (this takes a while)"
 echo
@@ -52,4 +57,4 @@ if [[ $status -ne 0 ]]; then
 fi
 
 grep -E "^(WNS|TNS|WHS)" "$OUT/timing_summary.rpt" 2>/dev/null | head -3 || true
-echo ">> reports in build/synth/"
+echo ">> reports in ${OUT#$ROOT/}"

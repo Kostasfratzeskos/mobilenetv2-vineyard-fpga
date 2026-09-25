@@ -48,8 +48,15 @@ file mkdir $out
 create_project -in_memory -part $part
 set_property target_language Verilog [current_project]
 
+# hardware/rtl/axi and hardware/rtl/top are in this list because leaving them
+# out does not fail - it produces a clean-looking report of the WRONG design,
+# with the missing module inferred as a black box. Whatever is added under
+# hardware/rtl/ has to be added here, to scripts/impl.tcl and to
+# scripts/make_project.tcl, all three.
 set srcs [concat [glob -nocomplain "hardware/rtl/kernels/*.v"] \
-                 [glob -nocomplain "hardware/rtl/control/*.v"]]
+                 [glob -nocomplain "hardware/rtl/control/*.v"] \
+                 [glob -nocomplain "hardware/rtl/axi/*.v"] \
+                 [glob -nocomplain "hardware/rtl/top/*.v"]]
 foreach f $srcs { read_verilog [list $f] }
 puts "== read [llength $srcs] Verilog files"
 

@@ -54,6 +54,19 @@
 //  065_classifier_1_logits_int16.hex and the argmax against the class the
 //  software model predicted.
 //
+//  ---- the checking is SHARED with accel_dma_tb ---------------------------
+//
+//  Everything from the `checking` banner to the final report is in
+//  accel_check.svh, included by both this file and accel_dma_tb.sv. That is on
+//  purpose and it is the whole point of accel_dma_tb: the two differ ONLY in who
+//  answers `ld_req` - the task below, or wgt_dma behind an AXI4 slave model - so
+//  the pass criterion has to be bit-identical or the comparison says nothing.
+//  Nothing is copied between the two files.
+//
+//  This one stays as the FAST path: no AXI modelling, two cycles per bank word,
+//  and the only file to run when a datapath change needs checking against the
+//  whole network.
+//
 //  Run:  bash scripts/run_sim.sh accel accel_top top_seq \
 //          pw_feeder pw_out dw_feeder res_feeder gap_feeder stem_feeder \
 //          logit_out out_stage pe_array mac_lane conv1x1 dwconv3x3 \
@@ -209,7 +222,7 @@ module accel_tb;
 
     localparam N_OPS = N_PROG_OPS;
 
-    integer total = 0, fails = 0, checked = 0, ld_count = 0;
+    // total / fails / checked / ld_count are declared by accel_check.svh below.
     integer pidx = 0;            // running index into the parameter blob
 
     // ======================================================================
@@ -352,7 +365,6 @@ module accel_tb;
             // the blob is sequential: advance by a whole tile either way
             npad = ((ld_pchan + TM - 1) / TM) * TM;
             pidx = pidx + npad;
-            ld_count++;
         end
     endtask
 
@@ -372,125 +384,20 @@ module accel_tb;
     end
 
     // ======================================================================
-    //  checking
+    //  checking  -  SHARED with accel_dma_tb
     // ======================================================================
-    reg [NLOG*LOG_W-1:0] logits_q;
-    reg [IDX_W-1:0]      argmax_q;
-    reg                  got_logits, got_argmax;
-
-    always @(posedge clock) begin
-        if (!rst_n) begin
-            got_logits <= 1'b0;
-            got_argmax <= 1'b0;
-        end else begin
-            if (logits_valid) begin logits_q <= logits; got_logits <= 1'b1; end
-            if (argmax_valid) begin argmax_q <= argmax; got_argmax <= 1'b1; end
-        end
-    end
-
-    // Hierarchical reads of the pool take no simulation time, so a whole
-    // tensor can be compared inside the gap between two ops.
-    task automatic check_op(input integer k);
-        integer p, c, oc, npix, n_ent, bad, base;
-        reg [TM*DATA_W-1:0] ent;
-        reg signed [7:0] got, expd;
-        begin
-            if (OP_OPCODE[k] == OP_LINEAR) begin
-                checked++;
-                $display("  [ok ] op %2d LINEAR   : checked after the run", k);
-            end else begin
-                load_golden(k);
-                oc    = OP_OC[k];
-                npix  = OP_OH[k]*OP_OW[k];
-                n_ent = (oc + TM - 1) / TM;
-                base  = u_dut.op_base_out;
-                bad   = 0;
-
-                for (p = 0; p < npix; p++)
-                    for (c = 0; c < oc; c++) begin
-                        ent  = u_dut.u_act.mem[base + p*n_ent + (c/TM)];
-                        got  = ent[(c%TM)*DATA_W +: DATA_W];
-                        expd = gold_mem[c*npix + p];
-                        total++;
-                        if (got !== expd) begin
-                            bad++;
-                            if (bad <= 3)
-                                $display("  [ERR] op %0d pix %0d ch %0d : got %0d, golden %0d",
-                                         k, p, c, got, expd);
-                        end
-                    end
-
-                fails += bad;
-                checked++;
-                if (bad == 0)
-                    $display("  [ok ] op %2d %-8s : %7d elements bit-exact  (base=%0d)",
-                             k, opname(OP_OPCODE[k]), npix*oc, base);
-                else
-                    $display("  [ERR] op %2d %-8s : %0d of %0d elements wrong",
-                             k, opname(OP_OPCODE[k]), bad, npix*oc);
-            end
-        end
-    endtask
-
-    function automatic string opname(input integer code);
-        case (code)
-            1: return "STEM";    2: return "PW";     3: return "DW";
-            4: return "RES_ADD"; 5: return "GAP";    6: return "LINEAR";
-            default: return "?";
-        endcase
-    endfunction
-
-    // ---- op_busy must pulse exactly ONCE per op --------------------------
-    // Not a style check. top_seq leaves S_RUN on the first !busy it sees, so a
-    // feeder whose busy dips mid-op makes the sequencer start the next op's
-    // weight load on top of a pipeline that is still draining. Four of the five
-    // feeders used to do exactly that for one cycle, and pw_feeder exposed its
-    // address generator's busy, which stops a full pipeline depth early. Both
-    // are fixed (DD-017); this counts the edges so they stay fixed.
-    integer busy_pulses = 0, started = 0, ended = 0;
-    reg     was_busy;
-
-    // ---- how long the hardware actually computes --------------------------
-    // busy_cycles is the number the cycle model in docs/controller_design.md
-    // predicts: time a feeder is working. run_cycles also counts the gaps, and
-    // those are dominated by THIS TESTBENCH acting as the DMA two cycles per
-    // bank word - a real DMA is wider and would overlap with compute - so
-    // run_cycles is an upper bound on a system that does not exist yet, not a
-    // measurement of the accelerator.
-    integer busy_cycles = 0, run_cycles = 0;
-    always @(posedge clock) begin
-        if (rst_n && running) begin
-            run_cycles++;
-            if (u_dut.op_busy) busy_cycles++;
-        end
-    end
-
-    always @(posedge clock) begin
-        if (rst_n && u_dut.op_start) begin
-            if (u_dut.op_busy) begin
-                fails++;
-                $display("  [ERR] op %0d started while the previous one was still busy",
-                         started);
-            end
-            started++;
-        end
-    end
-
-    always @(posedge clock) begin
-        if (!rst_n) was_busy <= 1'b0;
-        else begin
-            was_busy <= u_dut.op_busy;
-            if (!was_busy && u_dut.op_busy) busy_pulses++;
-            if (was_busy && !u_dut.op_busy && running) begin
-                check_op(ended);
-                ended++;
-            end
-        end
-    end
+    //  Everything from here to the report lives in accel_check.svh so that this
+    //  testbench and accel_dma_tb apply a BIT-IDENTICAL pass criterion: they run
+    //  the same program against the same goldens and differ only in who answers
+    //  `ld_req`, so a divergence in the checking would make the comparison
+    //  worthless. `ACCEL_TB_DMA says the DMA below is this file's, which only
+    //  affects what the cycle report claims about its own numbers.
+    `define ACCEL_DUT u_dut
+    `define ACCEL_TB_DMA
+    `include "accel_check.svh"
 
     // ======================================================================
-    integer i, y, x, c0, bad_log;
-    logic signed [15:0] got_l, exp_l;
+    integer i, y, x, c0;
     initial begin
         load_op_table;
 
@@ -564,92 +471,7 @@ module accel_tb;
         wait (done === 1'b1);
         @(negedge clock);
 
-        // ---- the classifier -------------------------------------------
-        $display("");
-        $display("the answer:");
-        bad_log = 0;
-        if (!got_logits) begin
-            fails++;
-            $display("  [ERR] logits_valid never pulsed");
-        end else begin
-            for (i = 0; i < NLOG; i++) begin
-                got_l = logits_q[i*LOG_W +: LOG_W];
-                exp_l = gold_log[i];
-                total++;
-                if (got_l !== exp_l) begin
-                    bad_log++;
-                    $display("  [ERR] logit %0d : got %0d, golden %0d", i, got_l, exp_l);
-                end
-            end
-            fails += bad_log;
-            if (bad_log == 0)
-                $display("  [ok ] logits  %0d %0d %0d %0d  bit-exact",
-                         $signed(logits_q[0*LOG_W +: LOG_W]),
-                         $signed(logits_q[1*LOG_W +: LOG_W]),
-                         $signed(logits_q[2*LOG_W +: LOG_W]),
-                         $signed(logits_q[3*LOG_W +: LOG_W]));
-        end
-
-        if (!got_argmax) begin
-            fails++;
-            $display("  [ERR] argmax_valid never pulsed");
-        end else if (argmax_q !== GOLDEN_ARGMAX[IDX_W-1:0]) begin
-            fails++;
-            $display("  [ERR] predicted class %0d, golden %0d (%s)",
-                     argmax_q, GOLDEN_ARGMAX, GOLDEN_CLASS);
-        end else
-            $display("  [ok ] predicted class %0d = %s, as the software model",
-                     argmax_q, GOLDEN_CLASS);
-
-        // ---- structure -------------------------------------------------
-        $display("");
-        if (tag_error) begin
-            fails++;
-            $display("  [ERR] pw_out's tag self-check tripped");
-        end else
-            $display("  [ok ] no tag error: the pointwise pipelines stayed in step");
-
-        // T-2 gave top_seq a watchdog, an opcode-validity check and an S_ERR
-        // state. All three are meant to be silent on a healthy run, and a check
-        // that is only ever silent is a check nobody notices has stopped
-        // working - so the healthy run asserts on it too.
-        if (fault) begin
-            fails++;
-            $display("  [ERR] top_seq raised `fault`: the run was abandoned (watchdog, bad opcode or n_instr)");
-        end else
-            $display("  [ok ] no fault: no hang, no undecodable opcode, n_instr in range");
-
-        if (started !== N_OPS) begin
-            fails++;
-            $display("  [ERR] %0d ops started, expected %0d", started, N_OPS);
-        end else
-            $display("  [ok ] all %0d ops started, none overlapping", N_OPS);
-
-        if (ld_count !== N_OPS) begin
-            fails++;
-            $display("  [ERR] the DMA was asked %0d times, expected %0d", ld_count, N_OPS);
-        end else
-            $display("  [ok ] every op waited for its weights (%0d loads)", ld_count);
-
-        if (busy_pulses !== N_OPS) begin
-            fails++;
-            $display("  [ERR] op_busy pulsed %0d times for %0d ops - a feeder's busy dips mid-op",
-                     busy_pulses, N_OPS);
-        end else
-            $display("  [ok ] op_busy pulsed exactly once per op (%0d)", busy_pulses);
-
-        if (checked !== N_OPS) begin
-            fails++;
-            $display("  [ERR] only %0d of %0d ops were checked", checked, N_OPS);
-        end
-
-        $display("");
-        $display("cycles:");
-        $display("  feeders busy : %0d cycles = %0.3f ms at 250 MHz", busy_cycles,
-                 busy_cycles / 250000.0);
-        $display("  start to done: %0d cycles  (includes this testbench's DMA, which",
-                 run_cycles);
-        $display("                 is not the hardware - see the note in the source)");
+        report_tail;
 
         $display("");
         if (fails == 0)

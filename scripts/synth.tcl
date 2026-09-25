@@ -19,24 +19,44 @@
 #=============================================================================
 
 set part "xczu7ev-ffvc1156-2-e"
-set top  "accel_top"
-set out  "build/synth"
+
+#  TOP selects what is synthesised, and the XDC follows it. Left unset it is
+#  accel_top, which is every number in the docs up to and including Phase 6.
+#  Set it to accel_sys to measure the accelerator WITH the weight DMA, against
+#  hardware/constraints/accel_sys_ooc.xdc:
+#
+#      TOP=accel_sys bash scripts/run_synth.sh
+#
+#  The outputs go to build/synth_<top>/ so two tops can be compared without one
+#  overwriting the other. accel_top keeps build/synth/ so the existing reports
+#  and everything quoting them stay where they are.
+set top [expr {[info exists ::env(TOP)] ? $::env(TOP) : "accel_top"}]
+set out [expr {$top eq "accel_top" ? "build/synth" : "build/synth_$top"}]
+set xdc "hardware/constraints/${top}_ooc.xdc"
 
 file mkdir $out
 
 puts "== part : $part"
 puts "== top  : $top"
+puts "== xdc  : $xdc"
 puts "== cwd  : [pwd]"
 
 create_project -in_memory -part $part
 set_property target_language Verilog [current_project]
 
+# hardware/rtl/axi and hardware/rtl/top are in this list because leaving them
+# out does not fail - it produces a clean-looking report of the WRONG design,
+# with the missing module inferred as a black box. Whatever is added under
+# hardware/rtl/ has to be added here, to scripts/impl.tcl and to
+# scripts/make_project.tcl, all three.
 set srcs [concat [glob -nocomplain "hardware/rtl/kernels/*.v"] \
-                 [glob -nocomplain "hardware/rtl/control/*.v"]]
+                 [glob -nocomplain "hardware/rtl/control/*.v"] \
+                 [glob -nocomplain "hardware/rtl/axi/*.v"] \
+                 [glob -nocomplain "hardware/rtl/top/*.v"]]
 foreach f $srcs { read_verilog [list $f] }
 puts "== read [llength $srcs] Verilog files"
 
-read_xdc [list "hardware/constraints/accel_top_ooc.xdc"]
+read_xdc [list $xdc]
 
 synth_design -top $top -part $part -mode out_of_context
 
@@ -44,7 +64,7 @@ report_utilization               -file "$out/utilization.rpt"
 report_utilization -hierarchical -file "$out/utilization_hier.rpt"
 report_timing_summary -max_paths 10 -file "$out/timing_summary.rpt"
 report_timing -max_paths 25 -sort_by group -file "$out/timing_paths.rpt"
-write_checkpoint -force "$out/accel_top_synth.dcp"
+write_checkpoint -force "$out/${top}_synth.dcp"
 
 #---- a short summary on stdout, so the shell does not have to parse reports --
 puts ""

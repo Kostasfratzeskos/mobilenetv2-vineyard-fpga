@@ -108,8 +108,12 @@ proc add_abs {fileset paths} {
 }
 
 # ---- design sources -------------------------------------------------------
+# See the note in scripts/synth.tcl: a directory missing from these globs
+# becomes a black box, not an error.
 set rtl [concat [glob -nocomplain "$root/hardware/rtl/kernels/*.v"] \
-                [glob -nocomplain "$root/hardware/rtl/control/*.v"]]
+                [glob -nocomplain "$root/hardware/rtl/control/*.v"] \
+                [glob -nocomplain "$root/hardware/rtl/axi/*.v"] \
+                [glob -nocomplain "$root/hardware/rtl/top/*.v"]]
 add_abs sources_1 $rtl
 set_property top accel_top [get_filesets sources_1]
 puts "== added [llength $rtl] RTL files, top = accel_top"
