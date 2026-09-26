@@ -1371,6 +1371,10 @@ wrote quant_scales.json  (53 layers)
   alone with no timing-directed change in it. The band this design sits in is ~198-202 MHz; the
   honest statement is that Phases 4 and 5 were timing-neutral, which is what correctness work
   should be.
+  **Corrected 2026-09-26:** on four post-route runs the band is **~197-208 MHz**, not 198-202.
+  See the 2026-09-26 entry - three tops implemented in one session came out 197.0 / 203.8 / 207.9,
+  non-monotonic in logic size, all four launching from the same act_buffer URAM read. The
+  conclusion about Phases 4 and 5 stands; the width of the band was understated.
 - Final worst path, unchanged in character since Phase 3:
 
       u_act/mem_reg_1_uram_13/CLK -> u_pwf/u_array/lane[24].u_lane/prod_reg[12]/.../A[23]
@@ -1659,3 +1663,66 @@ wrote quant_scales.json  (53 layers)
 
 - Suite: **all 35 testbenches pass** (`bash scripts/run_all_sims.sh`), including all three
   integration runs. The 33 that existed before are untouched.
+
+### 2026-09-26 - Post-route at 4.000 ns: the DMA and the CSR are free, and the Fmax is a BAND
+- Context: the DMA and AXI-Lite work was measured at synthesis only, because `impl.tcl` still had
+  `accel_top` hardcoded. That forced the caveat "233.4 MHz is a synthesis estimate, not comparable
+  to Phase 6's post-route 198.3 MHz" into three separate commits. `impl.tcl` and `run_impl.sh` now
+  take `TOP` the way `synth.tcl` does, so this closes it.
+- Did: all three tops through `scripts/run_impl.sh` at `PERIOD=4.000`, sequentially, in one
+  session - deliberately including a fresh `accel_top` baseline rather than quoting Phase 5's.
+
+        top          WNS      Fmax       LUT      FF      BRAM  URAM  DSP  DPIR-2
+        accel_top   -0.906   203.8 MHz  35,132  20,011   178    52   944    0
+        accel_sys   -1.075   197.0 MHz  37,080  21,420   178    52   944    0
+        accel_axi   -0.811   207.9 MHz  37,175  21,775   178    52   944    0
+
+- **The ordering is NON-MONOTONIC, and that is the result.** `accel_sys` has more logic than
+  `accel_top` and less than `accel_axi`, yet it is the slowest of the three while `accel_axi` -
+  the biggest - is the fastest. If the added DMA and control logic were costing timing the
+  ordering would decrease with size. It does not, so what is being measured between these three
+  numbers is the placer, not the design. The honest statement is that **the weight DMA and the
+  AXI-Lite CSR are timing-neutral**, and this is stronger evidence for it than the synthesis run's
+  identical WNS was, because it arrives from the opposite direction: adding 2,043 LUT and 1,764 FF
+  measured 4.1 MHz FASTER.
+
+- **So the design's Fmax is a band, not a point, and the notebook has been saying so too
+  narrowly.** Four post-route runs of what is functionally the same datapath:
+
+        Phase 5 (2026-09-24)   198.3 MHz
+        accel_sys              197.0 MHz
+        accel_top              203.8 MHz
+        accel_axi              207.9 MHz
+
+  That is a **10.9 MHz spread, 197.0 to 207.9**. The Phase 6 entry says "the band this design sits
+  in is ~198-202 MHz"; on four runs it is ~197-208. Nothing in the thesis should quote a point
+  estimate from this flow, and the number to defend is the band with its cause named.
+
+- **And all four runs have the SAME worst-path START POINT**, which is the part that matters for
+  DD-023. Every one of them launches from `act_buffer`'s URAM read - `u_act/mem_reg_*_uram_*/CLK` -
+  and only the ENDPOINT moves with placement:
+
+        accel_top   -> u_pwf/u_array/lane[29]...prod_reg[12]/DSP_A_B_DATA_INST   9 levels, route 1.781
+        accel_axi   -> u_sys/u_dut/u_pwf/u_array/lane[0]...prod_reg[2]/DSP       8 levels, route 1.658
+        accel_sys   -> u_dut/u_dw/u_lb/lb0_reg_.../SP/I                         10 levels, route 2.140
+
+  Two land in a pointwise lane's DSP and one in the depthwise line buffer's LUTRAM. Which consumer
+  happens to be worst is a placement outcome; that the path STARTS at the activation pool's URAM
+  is not. DD-023 said the URAM read latency is the reason 250 MHz was not reached and was deferred
+  by decision rather than difficulty - four independent runs now say the same thing, which is a
+  much better basis for that claim than the single measurement it was resting on.
+
+- Per-module post-route, within a handful of LUTs of the synthesis figures:
+
+        wgt_dma        1,725-1,731 LUT   1,395-1,437 FF   0 BRAM   0 DSP
+        axi_lite_csr         171 LUT           354 FF     0 BRAM   0 DSP
+
+- BRAM is 178 tiles in all three, against 165.5 at synthesis - the usual post-route difference
+  from how the tool packs the 18K/36K primitives, not a design change. URAM 52 and DSP 944 are
+  identical everywhere, as they have been since DD-021.
+- DPIR-2 is zero in all three, so DD-020's synchronous-reset conversion is still holding with two
+  new AXI modules in the design; both take the raw `rst_n` and reset synchronously off it.
+- Still out of context, and still the honest caveat: no PS, no real interconnect, no I/O
+  placement. `accel_axi_ooc.xdc` has one placeholder budget left, `im_wr_*` at 41 bits, waiting on
+  the image path. What has changed is that "what did the DMA and the CSR cost in timing and area"
+  is now answered post-route rather than estimated.

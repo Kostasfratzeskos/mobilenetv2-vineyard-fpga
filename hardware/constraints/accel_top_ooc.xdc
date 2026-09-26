@@ -38,18 +38,30 @@ create_clock -period 25.000 -name clock [get_ports clock]
 # this file - same period, same reset treatment, same URAM expectation - so the
 # two tops stay directly comparable.
 #
-# What it did to the timing number: NOTHING, and that is the result. Both tops
-# synthesised with scripts/synth.tcl at this 25.000 ns constraint:
+# What it did to the timing number: NOTHING, and that is the result. All three
+# tops synthesised at this 25.000 ns constraint give WNS 20.716 ns / 233.4 MHz,
+# identical to the picosecond. And POST-ROUTE at 4.000 ns, all three through
+# scripts/run_impl.sh in one session (2026-09-26):
 #
-#     accel_top   WNS 20.716 ns   233.4 MHz   35,188 LUT   18,399 FF   944 DSP
-#     accel_sys   WNS 20.716 ns   233.4 MHz   36,997 LUT   19,786 FF   944 DSP
+#     accel_top   WNS -0.906   203.8 MHz   35,132 LUT   20,011 FF   944 DSP
+#     accel_sys   WNS -1.075   197.0 MHz   37,080 LUT   21,420 FF   944 DSP
+#     accel_axi   WNS -0.811   207.9 MHz   37,175 LUT   21,775 FF   944 DSP
 #
-# WNS is identical to the picosecond and the worst path is the same one it has
-# been since Phase 3 - act_buffer's URAM read into the depthwise array's DSP
-# (DD-023) - with only the hierarchy prefix changed. So the DMA is nowhere near
-# the critical path, which is what registering all of its outputs was for. It
-# costs 1,724 LUT and 1,395 FF of the delta (report_utilization -hierarchical
-# on u_dma), no DSP and no BRAM.
+# Note the ordering: NON-MONOTONIC in logic size. accel_sys has more logic than
+# accel_top and less than accel_axi, yet it is the slowest while accel_axi - the
+# biggest - is the fastest. If the DMA and the control registers were costing
+# timing, Fmax would fall as the design grows. It does not, so the spread is the
+# placer and the added logic is timing-neutral. Adding 2,043 LUT and 1,764 FF
+# measured 4.1 MHz FASTER, which is the clearest form that statement can take.
+#
+# What all four post-route runs of this datapath DO share is the worst path's
+# START POINT: act_buffer's URAM read (DD-023). Only the endpoint moves with
+# placement - two into a pointwise lane's DSP, one into the depthwise line
+# buffer. That is why the honest Fmax for this design is a BAND, ~197-208 MHz
+# over four runs, and not a point estimate.
+#
+# Per module, post-route: wgt_dma 1,725-1,731 LUT / 1,395-1,437 FF,
+# axi_lite_csr 171 LUT / 354 FF, neither using a DSP or a BRAM.
 #
 # THIS file is still the right one for measuring accel_top alone, which is every
 # number quoted in the docs up to and including Phase 6. It is not stale.
