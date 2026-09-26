@@ -1681,7 +1681,11 @@ wrote quant_scales.json  (53 layers)
   `accel_top` and less than `accel_axi`, yet it is the slowest of the three while `accel_axi` -
   the biggest - is the fastest. If the added DMA and control logic were costing timing the
   ordering would decrease with size. It does not, so what is being measured between these three
-  numbers is the placer, not the design. The honest statement is that **the weight DMA and the
+  numbers is the placer, not the design.
+  **Refined later the same day:** "the placer" is right but "noise" was not. `accel_top` re-run
+  after the image work reproduced to the digit, so the flow is DETERMINISTIC; the spread is this
+  design's sensitivity to small RTL changes, not run-to-run randomness. See the 2026-09-26 (later)
+  entry, where `accel_sys` moved +9.3 MHz on a change that only turned a port into an internal net. The honest statement is that **the weight DMA and the
   AXI-Lite CSR are timing-neutral**, and this is stronger evidence for it than the synthesis run's
   identical WNS was, because it arrives from the opposite direction: adding 2,043 LUT and 1,764 FF
   measured 4.1 MHz FASTER.
@@ -1805,3 +1809,40 @@ wrote quant_scales.json  (53 layers)
   later. The alternative was hoisting the whole state encoding above the dealer, which would have
   put the state names a long way from the machine that uses them. Noted in the source because a
   split declaration is the kind of thing a reader assumes is an accident.
+
+- **Post-route after the image phase, and it turned up something that corrects this morning's
+  entry.** All three tops again at 4.000 ns:
+
+        top          WNS      Fmax       LUT      FF      BRAM  URAM  DSP  DPIR-2
+        accel_top   -0.906   203.8 MHz  35,132  20,011   178    52   944    0
+        accel_sys   -0.847   206.3 MHz  37,201  21,551   178    52   944    0
+        accel_axi   -0.881   204.9 MHz  37,349  21,940   178    52   944    0
+
+  The image phase costs **+174 LUT and +165 FF** on `accel_axi` against the run before it
+  (37,175 / 21,775), split `u_dma` +132 and `u_csr` +25 - the dealer phase, the pixel counter and
+  `IMG_BASE` with its guards. No DSP, no BRAM, and nothing outside the noise on timing.
+
+- **`accel_top` reproduced EXACTLY, and that changes what the spread means.** Its RTL has not been
+  touched since the `ld_op` commit, and this run gives WNS -0.906, 203.8 MHz, 35,132 LUT, 20,011 FF
+  - identical to the digit to the run this morning. So **Vivado's flow here is deterministic**, and
+  the variation I called "placement noise" earlier today is not run-to-run randomness at all.
+
+  It is **sensitivity to small RTL changes**, which is a different and more useful statement. The
+  sharpest example is `accel_sys`: 197.0 MHz this morning, **206.3 MHz now**, +9.3 MHz, from a
+  change that did nothing to the datapath - `im_wr_*` stopped being a port and became an internal
+  net. Same logic, same constraint, 9 MHz apart, because the critical path is a URAM read whose
+  worst *consumer* is chosen by the placer, and moving anything reshuffles which consumer that is.
+
+  The practical consequence is unchanged and now better founded: quote the band, ~197-208 MHz over
+  seven post-route runs, and do not read a few MHz between two variants as a result. But the reason
+  to do so is "this design's Fmax is placement-sensitive", not "the tool is noisy" - and the first
+  can be investigated (it is DD-023) while the second cannot.
+
+- Worst path, all three: still launched from `act_buffer`'s URAM read. Two of the three now end in
+  the depthwise line buffer's LUTRAM rather than a pointwise DSP, at 9-10 logic levels. Seven runs,
+  one start point, four different endpoints. DD-023 is the whole story and it is not subtle any
+  more.
+- Suite: **all 35 testbenches pass.** One regression on the way, recorded in its own commit:
+  `axi_lite_csr_tb` had its four new image ports unconnected, which put an X through every write
+  guard. The integration tests passed clean throughout, because `accel_axi` drives those ports -
+  only the unit test could see it.
