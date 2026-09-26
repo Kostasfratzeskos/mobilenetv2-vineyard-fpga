@@ -115,6 +115,24 @@ build/synth_*/*backup.log
 build/synth_*/timing_paths.rpt
 build/synth_*/timing_summary.rpt
 
+# ── Board design artifacts (scripts/run_bd.sh) ──
+#  Same rule again: the utilization reports and the address map are small
+#  and are the evidence, everything else is regenerable with
+#      PL_MHZ=200 bash scripts/run_bd.sh
+#  The Vivado PROJECT under build/bd_*/proj is a working directory, not a
+#  source - the block design is built from scripts/make_bd.tcl every time.
+build/bd_*/proj/
+build/bd_*/*.dcp
+build/bd_*/*.bit
+build/bd_*/*.xsa
+build/bd_*/vivado.log
+build/bd_*/*.jou
+build/bd_*/*backup.log
+build/bd_*/timing_paths.rpt
+build/bd_*/timing_summary.rpt
+build/bd_*/synth_timing_summary.rpt
+build/bd_*/methodology.rpt
+
 # ── Place-and-route artifacts (scripts/run_impl.sh) ──
 #  Same rule as build/synth above, one directory per constraint so two runs can
 #  be compared. The utilization reports are small and are the evidence behind
