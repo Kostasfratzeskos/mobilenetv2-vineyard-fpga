@@ -1726,3 +1726,82 @@ wrote quant_scales.json  (53 layers)
   placement. `accel_axi_ooc.xdc` has one placeholder budget left, `im_wr_*` at 41 bits, waiting on
   the image path. What has changed is that "what did the DMA and the CSR cost in timing and area"
   is now answered post-route rather than estimated.
+
+### 2026-09-26 (later) - The image load: accel_axi runs out of non-AXI ports
+- Context: after the AXI-Lite work, `accel_axi` had exactly one port group left that was not an
+  AXI interface, a clock, a reset or an interrupt - `im_wr_*`, 41 bits, the image. 224x224x3 =
+  147 KB that the PS has to get into `img_buffer` before every inference.
+- Did: extended `wgt_dma` with an image phase, added `IMG_BASE` and `CTRL[1]` LOAD_IMAGE plus two
+  STATUS bits to `axi_lite_csr`, gave `axi_ddr_model` a fifth region, and rewrote both integration
+  testbenches to stop driving `im_wr_*` at all. DD-032.
+- Tests: `wgt_dma_tb` ALL PASS with a new image case - 50,176 pixels, every one written exactly
+  once, every channel bit-exact. `accel_dma_tb` and `accel_axi_tb` both ALL PASS, **6,895,780
+  elements bit-exact**, class 2 = Healthy.
+
+- **The layout question came back, and I answered it the opposite way to DD-030.** That is the part
+  worth recording. `img_buffer`'s write port is 24 bits, one pixel, `wr_data[c*8 +: 8]` = channel c.
+  So with the image stored HWC (interleaved) in DDR, three *consecutive* bytes are exactly that
+  word - one sequential stream, reusing the realigner with `need = CIN`, no new gather logic at all.
+  Stored CHW (planar), as `000_input.hex` does, it would be three concurrent streams 50,176 bytes
+  apart: the AXI4 read-interleaving problem DD-030 had to solve for the parameter blob with
+  per-tile staging.
+
+  DD-030 chose to keep three separate planar arrays and pay for staging. Here I chose to
+  interleave. The difference is not taste and it took me a minute to articulate: **in DD-030 the
+  artifact already existed on disk and `gen_program.py` validated it**, so inventing a fourth
+  encoding was the risk. **Here the buffer is produced at run time by firmware that does not exist
+  yet**, so there is no artifact to preserve and no validator to keep in step - the convenient
+  layout is free. And HWC is *also* what the PS already has, because a JPEG decoder produces
+  interleaved RGB; CHW would have forced the PS to transpose what its decoder handed it in the
+  right order, in order to make the hardware's job harder. Both sides simpler is rare enough to
+  notice.
+
+  The golden stays CHW, untouched. `axi_ddr_model.svh` transposes on load - in the MODEL rather
+  than the testbench, because the model is the PS-side contract and the transpose belongs beside
+  the little-endian parameter packing it sits next to. `wgt_dma_tb` then builds its expectation
+  from the CHW golden independently, indexed `(c*IH + y)*IW + x`, so a swapped index shows up as a
+  mismatch instead of cancelling out against a shared helper.
+
+- **One master, not two, and the reason is about software rather than gates.** The image is loaded
+  before `start`; the weights are read during the run. They are never concurrent - so with one
+  master there is no bus to contend for, structurally. Two masters behind a mux would have been
+  correct only for as long as the PS behaved, and "correct while the software behaves" is exactly
+  what the CSR's guards exist to stop relying on. It also avoids a second copy of the two-beat
+  window and byte barrel shift, which is the fiddliest logic in the module and the place an
+  off-by-one would hide.
+
+- **What it measures.** 50,176 pixels in 50,193 cycles: **1.00 pixels per cycle, and that is with
+  the slave model inserting R-channel holes.** The rate is floored by `img_buffer`'s single 24-bit
+  write port, not by the bus - three bytes a cycle consumed out of sixteen available - so stalling
+  the slave does not touch it. About 0.25 ms at 200 MHz, roughly 4% on top of a 5.8 ms inference,
+  against the 17-43% the AXI-Lite route would have cost. That was the argument for rejecting the
+  AXI-Lite stopgap in DD-031 and it turned out to be right by a wider margin than I estimated.
+
+  `start` to `done` is **unchanged at 1,151,347 cycles** with load overhead still 199,285, which is
+  as it should be: the image arrives before `start`, so it is outside the measured run entirely.
+
+- **The port count, and what it means.** 846 -> 493 -> **313**, and the 313 are 196 AXI4 master,
+  114 AXI-Lite slave, 3 clock/reset/irq. That is the whole list. `accel_axi` can be dropped into a
+  block design, wired to `S_AXI_HP` and `M_AXI_HPM`, and run - and `accel_axi_tb` now drives
+  **every input of the DUT through those two interfaces**, with no port poked directly, no
+  hierarchical write and no back door. That is the strongest statement a testbench at this level
+  can make: whatever the PS will do, that file has already done it.
+
+  `accel_axi_ooc.xdc` is also the first constraint file in this project with **no invented number
+  in it**. Every input delay is a budget for an interface that will genuinely be timed against the
+  PS; the one exception (`rst_n`) has a synchroniser behind it rather than a guess. The 41-bit
+  `im_wr_*` placeholder was the last one, and the sentence "one placeholder remains, named, with
+  its size" is now spent.
+
+- **What is left of the Core tier is no longer RTL.** Of the five things `08_OPEN_ITEMS` section 2
+  listed as missing, three are done: the weight DMA, the AXI-Lite registers and the AXI4-HP data
+  path (weights, parameters and now the image). What remains is the **PS application** and a
+  **board-level implementation** - and the second of those is a measurement, not a piece of
+  hardware. The honest statement of where this project stands is that the accelerator is complete
+  and verified against the software model over its real interfaces, and has never been on a board.
+
+- One thing I got wrong and fixed: `in_img` is used by `need` in the dealer section but `st` is not
+  declared until the state machine below it, so the wire had to be declared early and assigned
+  later. The alternative was hoisting the whole state encoding above the dealer, which would have
+  put the state names a long way from the machine that uses them. Noted in the source because a
+  split declaration is the kind of thing a reader assumes is an accident.

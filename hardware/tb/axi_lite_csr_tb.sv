@@ -29,6 +29,20 @@
 //  the sequencer would keep going while every later parameter load read from the
 //  wrong place in the blob. The run would finish. With wrong biases.
 //
+//  ---- and the image, added with DD-032 ----------------------------------
+//
+//  Cases 13 to 15. The one worth naming is 15: `img_busy` falls both when a load
+//  finishes and when a bus error abandons it, so a CSR that derived "image
+//  loaded" from its falling edge would report success on a failed read. The DMA
+//  therefore gives a separate one-cycle `img_done` that fires only on success,
+//  and case 15 drives the error shape - busy, then not busy, no pulse - to check
+//  the sticky bit stays clear.
+//
+//  Case 14 drives the other half: START is refused while the image is still
+//  loading, because the stem reads img_buffer from its first cycle and a run
+//  begun on a half-written image produces a complete, plausible feature map
+//  built partly from another photograph.
+//
 //  Run:  bash scripts/run_sim.sh axi_lite_csr
 //============================================================================
 module axi_lite_csr_tb;
@@ -59,11 +73,12 @@ module axi_lite_csr_tb;
                    A_RESULT_HI  = 'h28,
                    A_ARGMAX     = 'h2C,
                    A_ID         = 'h30,
+                   A_IMG_BASE   = 'h34,
                    A_PROG       = 'h1000;
 
     // STATUS bit positions
     localparam int S_RUNNING = 0, S_DONE = 1, S_FAULT = 2, S_DMA = 3,
-                   S_TAG = 4, S_RES = 5;
+                   S_TAG = 4, S_RES = 5, S_IMG_BUSY = 6, S_IMG_DONE = 7;
 
     logic clock, rst_n;
 
@@ -91,6 +106,15 @@ module axi_lite_csr_tb;
     wire                    pg_en;
     wire [PGA_W-1:0]        pg_addr;
     wire [PW_W-1:0]         pg_data;
+
+    //  The image side. img_busy and img_done are DRIVEN here, standing in for
+    //  wgt_dma: leaving them unconnected was how this testbench failed the
+    //  moment the CSR gained them - an X on img_busy makes every write guard X,
+    //  so BRESP came back x0 and START never pulsed. Unconnected inputs on a
+    //  DUT are not a warning to skim past.
+    wire                    img_start;
+    wire [AXI_ADDR_W-1:0]   img_base;
+    logic                   img_busy, img_done;
 
     logic                   running, done, fault, dma_error, tag_error;
     logic [NI_W-1:0]        pc;
@@ -120,6 +144,8 @@ module axi_lite_csr_tb;
         .wgt_base(wgt_base), .pb_base(pb_base),
         .pm_base(pm_base), .ps_base(ps_base),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
+        .img_start(img_start), .img_base(img_base),
+        .img_busy(img_busy), .img_done(img_done),
         .running(running), .done(done), .fault(fault),
         .dma_error(dma_error), .tag_error(tag_error), .pc(pc),
         .logits(logits), .logits_valid(logits_valid),
@@ -136,7 +162,8 @@ module axi_lite_csr_tb;
     `include "axi_lite_master.svh"
 
     // ---- watch the one-cycle outputs -------------------------------------
-    integer start_pulses = 0, pg_writes = 0;
+    integer start_pulses = 0, pg_writes = 0, img_pulses = 0;
+    integer img_width = 0, img_worst = 0;
     integer start_width = 0, worst_width = 0;
     reg [PGA_W-1:0] last_pg_addr;
     reg [PW_W-1:0]  last_pg_data;
@@ -153,6 +180,13 @@ module axi_lite_csr_tb;
             pg_writes++;
             last_pg_addr = pg_addr;
             last_pg_data = pg_data;
+        end
+        if (img_start) begin
+            img_width++;
+            if (img_width > img_worst) img_worst = img_width;
+        end else begin
+            if (img_width > 0) img_pulses++;
+            img_width = 0;
         end
     end
 
@@ -175,6 +209,7 @@ module axi_lite_csr_tb;
     initial begin
         al_idle;
         running = 0; done = 0; fault = 0; dma_error = 0; tag_error = 0;
+        img_busy = 0; img_done = 0;
         pc = 0; logits = '0; logits_valid = 0; argmax = 0; argmax_valid = 0;
         rst_n = 0;
 
@@ -397,7 +432,7 @@ module axi_lite_csr_tb;
         f0 = fails;
 
         al_wr_exp('h40, 32'h1, AL_SLVERR, cname);            // unmapped
-        al_wr_exp('h34, 32'h1, AL_SLVERR, cname);            // just past the map
+        al_wr_exp('h38, 32'h1, AL_SLVERR, cname);            // just past the map
         al_rd_exp('h40, d, AL_SLVERR, cname);                // unmapped read
         al_wr_exp(A_STATUS, 32'h1, AL_SLVERR, cname);        // read-only
         al_wr_exp(A_ID, 32'h1, AL_SLVERR, cname);            // read-only
@@ -437,9 +472,89 @@ module axi_lite_csr_tb;
         end else
             ok("12 the refused START did not pulse `start` (2 pulses over the run)");
 
+        // ---- 13: the image load (DD-032) -------------------------------
+        $display("");
+        banner("13 image");
+        f0 = fails;
+
+        al_wr(A_IMG_BASE, 32'h3000_0000, cname);
+        al_check(A_IMG_BASE, 32'h3000_0000, cname);
+        if (img_base !== 32'h3000_0000) begin
+            fails++;
+            $display("  [ERR] 13: img_base output is 0x%08x", img_base);
+        end
+
+        // LOAD_IMAGE must pulse img_start for exactly one cycle
+        al_wr(A_CTRL, 32'h2, cname);
+        repeat (4) @(negedge clock);
+        if (img_pulses !== 1) begin
+            fails++;
+            $display("  [ERR] 13: img_start pulsed %0d times, expected 1", img_pulses);
+        end
+        if (img_worst !== 1) begin
+            fails++;
+            $display("  [ERR] 13: img_start was %0d cycles wide, expected 1 - wgt_dma latches it as a pulse",
+                     img_worst);
+        end
+        // ...and CTRL bit 1 must not have started a RUN
+        if (start_pulses !== 2) begin
+            fails++;
+            $display("  [ERR] 13: LOAD_IMAGE also pulsed `start`");
+        end
+        if (fails == f0)
+            ok("13 IMG_BASE reads back, LOAD_IMAGE pulses img_start for one cycle only");
+
+        // ---- 14: STATUS follows the image, and img_done is not img_busy ----
+        banner("14 image status");
+        f0 = fails;
+        img_busy = 1'b1;
+        @(negedge clock);
+        al_check_mask(A_STATUS, (1 << S_IMG_BUSY), (1 << S_IMG_BUSY), cname);
+        // still loading: no "loaded" bit yet
+        al_check_mask(A_STATUS, 32'h0, (1 << S_IMG_DONE), cname);
+
+        //  The guards that matter. Starting a run on a half-written image gives
+        //  a feature map built partly from another photograph, and nothing
+        //  downstream could notice.
+        al_wr_exp(A_CTRL, 32'h1, AL_SLVERR, cname);          // START while loading
+        al_wr_exp(A_CTRL, 32'h2, AL_SLVERR, cname);          // a second LOAD_IMAGE
+        al_wr_exp(A_IMG_BASE, 32'h4000_0000, AL_SLVERR, cname);  // moving it mid-load
+        al_check(A_IMG_BASE, 32'h3000_0000, cname);          // and it did not move
+
+        // the DMA reports success with a pulse, not with img_busy falling
+        img_done = 1'b1;
+        @(negedge clock);
+        img_done = 1'b0;
+        img_busy = 1'b0;
+        @(negedge clock);
+        al_check_mask(A_STATUS, (1 << S_IMG_DONE),
+                      (1 << S_IMG_DONE) | (1 << S_IMG_BUSY), cname);
+        if (fails == f0)
+            ok("14 STATUS tracks img_busy live and img_done sticky; three guards refused");
+
+        // ---- 15: a bus error must NOT look like a loaded image -------------
+        //  img_busy falls in both cases, so a CSR deriving "loaded" from its
+        //  falling edge would report success on a failed read. This drives the
+        //  error shape - busy, then not busy, with no img_done - and checks that
+        //  the sticky bit stays clear.
+        banner("15 failed image load");
+        f0 = fails;
+        al_wr(A_STATUS_CLR, 32'hFF, cname);
+        @(negedge clock);
+        img_busy = 1'b1;
+        repeat (2) @(negedge clock);
+        img_busy = 1'b0;                  // abandoned: no img_done pulse
+        dma_error = 1'b1;                 // which is how the PS finds out
+        repeat (2) @(negedge clock);
+        al_check_mask(A_STATUS, (1 << S_DMA), (1 << S_IMG_DONE) | (1 << S_DMA),
+                      cname);
+        dma_error = 1'b0;
+        if (fails == f0)
+            ok("15 img_busy falling with no img_done does NOT set `image loaded`");
+
         $display("");
         if (fails == 0)
-            $display("ALL PASS  (13 registers, a 512-word aperture and six SLVERR guards)");
+            $display("ALL PASS  (14 registers, a 512-word aperture and nine SLVERR guards)");
         else
             $display("FAILED    (%0d problems)", fails);
         $finish;
