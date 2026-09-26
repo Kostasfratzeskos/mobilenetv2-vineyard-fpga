@@ -1846,3 +1846,102 @@ wrote quant_scales.json  (53 layers)
   `axi_lite_csr_tb` had its four new image ports unconnected, which put an X through every write
   guard. The integration tests passed clean throughout, because `accel_axi` drives those ports -
   only the unit test could see it.
+
+### 2026-09-26 (last) - The first IN-CONTEXT result: it closes at 187.5 MHz, with a bitstream
+- Context: every number in this project until now has been out-of-context.
+  `scripts/impl.tcl:22` records why - `accel_top` had 841 port bits against the ~300 PL user I/O of
+  the package, so a normal flow failed I/O placement before it reached timing. DD-030, DD-031 and
+  DD-032 dismantled that one interface at a time until `accel_axi` was 313 port bits, every one of
+  them an AXI interface, a clock, a reset or an interrupt. This is the run that was waiting for.
+- Did: `scripts/make_bd.tcl` + `scripts/run_bd.sh` - a scripted block design with the Zynq
+  UltraScale+ PS on the ZCU104 board preset, `S_AXI_HP0_FPD` from the accelerator's 128-bit read
+  master, `M_AXI_HPM0_FPD` through a SmartConnect to the CSR at `0xA000_0000`, `pl_ps_irq0` from
+  `irq`, one clock domain. No XDC: the clock is a PS PLL setting and every interface is internal.
+
+- **THE RESULT. It closes, and there is a bitstream.**
+
+        board          ZCU104 (xczu7ev-ffvc1156-2-e), PS + DDR4 + SmartConnect + accel_axi
+        PL clock       187.5 MHz (5.333 ns)
+        WNS            +0.020 ns   MET
+        Fmax           188.2 MHz
+        WHS            +0.012 ns
+        LUT            41,412  (17.97%)
+        FF             21,885  ( 4.75%)
+        BRAM           165.5   (53.04%)
+        URAM           52      (54.17%)
+        DSP            944     (54.63%)
+        DPIR-2         0
+        bitstream      18.4 MB, written
+        handoff        accel_bd_wrapper.xsa - what a PS application compiles against
+
+  Against `accel_axi` alone post-route at 4.000 ns (204.9 MHz), the complete system with the PS,
+  the DDR controller, the interconnect and real routing comes in at 188.2 MHz. **So the system
+  costs about 8% of the clock** - which is the answer to `08_OPEN_ITEMS` risk 1, and it is a good
+  deal better than "the board is the unknown" implied.
+
+- **And I got the frequency wrong the first time, in a way worth recording.** The ZU+ PL clock is
+  1500 MHz over an integer divider, so the only achievable frequencies are **150, 166.667, 187.5,
+  214.286, 250** - measured by reading `PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ` back for a range
+  of requests. Requesting 200 gives 187.5 **silently**: the PS IP rounds and says nothing.
+
+  I reported that first run as "WNS -0.021 ns at 200 MHz, Fmax 199.2 MHz". The period was 5.333 ns,
+  not 5.000, so the real figure was Fmax 186.8 MHz and the design MISSED. That is the same mistake
+  `synth.tcl`'s header already records for a hardcoded 4 ("Fmax 3401 MHz, meets 250 MHz"), made
+  again one level up. The script now reads the actual frequency back from the IP, prints requested
+  AND actual, and says so when they differ; the grid is in the header so nobody has to learn it
+  twice.
+
+- **21 picoseconds, and what closing them cost.** The default flow at 187.5 MHz gave WNS -0.021 ns
+  - 0.4% of the period, 20 failing endpoints out of 241,260. Dropping to the next PLL step (166.667)
+  would have cost 11% of the clock to save an hour of tool time, so instead:
+  `opt/place -directive Explore`, `phys_opt -directive AggressiveExplore`,
+  `route -directive Explore`. That recovered 41 ps and closed it at +0.020. `STRATEGY=explore` in
+  the script, off by default.
+
+- **The critical path is not where it has been for the last four phases, and that matters.**
+  Default strategy at 187.5 MHz: `act_buffer`'s URAM read into `gap_feeder`'s avgpool accumulator,
+  13 logic levels. After Explore, the top THREE paths are all the same shape and it is a different
+  shape entirely:
+
+        u_dma/wd_q_reg[47]  -> u_dw/u_wgt/bank[4]  write port   +0.020 ns, 0 logic levels
+        u_dma/wd_q_reg[99]  -> u_pwf/u_wgt/bank[8] write port   +0.024 ns, 0 logic levels
+        u_dma/wd_q_reg[115] -> u_pwf/u_wgt/bank[8] write port   +0.030 ns, 0 logic levels
+
+  **Zero logic levels.** That is `wgt_dma`'s output data register driving the weight buffers' write
+  ports, pure route delay with nothing to hide behind. It is the register stage I added precisely
+  to keep the DMA off the critical path - and it is right, because without it the path would carry
+  five levels of byte barrel-shift on top of the same route. But `wd_q` is 216 bits fanning out to
+  three physically separate buffers (stem 216-bit, depthwise 72-bit, pointwise 128-bit across 32
+  banks), and that is a wide slow crossing of the die.
+
+  So: **on a board the limiter is the DMA-to-weight-buffer write path, not DD-023.** DD-023 (the
+  `act_buffer` URAM cascade) is still the out-of-context limiter and still the reason 250 MHz was
+  never reached, and it is still what shows up at the OOC 4.000 ns constraint. But anyone trying to
+  push past 187.5 MHz on hardware should start by pipelining or replicating `wd_q` per destination
+  buffer, which is a much cheaper change than DD-023's five-feeder pipeline rework. That reorders
+  the remaining performance work and it is not something any OOC run could have told us.
+
+- Four things the flow needed, each a real trap rather than a typo, all in the commits:
+  1. an **on-disk project** - `create_project -in_memory` is manual compile-order mode and a block
+     design cannot reference an RTL module there.
+  2. a **relative `-log` path** - an absolute one breaks `create_bd_design` outright with
+     `couldn't read file "configure_noc.tcl"`, because Vivado sources that helper relatively and
+     this tree lives under a non-ASCII path.
+  3. **`generate_target`** with `synth_checkpoint_mode None` - a block design is a description; the
+     PS, SmartConnect and reset have no RTL until it is generated, and synthesis dies on
+     `module 'accel_bd_rst_pl_0' not found`.
+  4. the CSR address segment matched on the **cell**, not the interface name. A filter on `*s_axi*`
+     matched nothing *silently* and left the CSR unplaced - a driver writing into the void. It is
+     `SEG_u_accel_reg0`.
+
+- And one process fix that is worth more than any of them: `write_hw_platform -include_bit` failed
+  (it wants an implementation *run*, which the project flow has and this one does not), and **that
+  failure took the run's exit status and suppressed the timing summary** - even though place and
+  route had succeeded and the bitstream was on disk. The XSA step now runs after the summary, in a
+  `catch`. A step that produces an artifact must not be able to hide a step that produces a
+  measurement.
+
+- What this does NOT mean: nothing has run on hardware. There is no board. The bitstream and the
+  XSA are artifacts that a board run would consume, and the accelerator is verified against the
+  software model in simulation over its real interfaces - but the sentence "it has never run on a
+  board" is still true and stays true until someone programs it.

@@ -1,0 +1,11 @@
+Address map - accel_bd at 200 MHz
+
+segment                            offset         range      slave
+SEG_zynq_ps_HP0_DDR_LOW            0x00000000     0x80000000 /u_accel/m_axi
+SEG_zynq_ps_HP0_LPS_OCM            0xFF000000     0x01000000 /u_accel/m_axi
+SEG_zynq_ps_HP0_QSPI               0xC0000000     0x20000000 /u_accel/m_axi
+reg0                                              0x00002000 /u_accel/s_axi
+SEG_u_accel_reg0                   0x00A0000000   0x0000002000 /zynq_ps/Data
+HP0_DDR_LOW                                       0x80000000 /zynq_ps/SAXIGP2
+HP0_QSPI                                          0x20000000 /zynq_ps/SAXIGP2
+HP0_LPS_OCM                                       0x01000000 /zynq_ps/SAXIGP2

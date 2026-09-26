@@ -1,0 +1,295 @@
+Copyright 1986-2023 Xilinx, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2022.2.2 (win64) Build 3788238 Tue Feb 21 20:00:34 MST 2023
+| Date         : Sat Sep 26 18:09:06 2026
+| Host         : DESKTOP-0MFHRGM running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -file build/bd_200mhz/utilization_hier.rpt
+| Design       : accel_bd_wrapper
+| Device       : xczu7ev-ffvc1156-2-e
+| Speed File   : -2
+| Design State : Routed
+---------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++------------------------------------------------------------+------------------------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+|                          Instance                          |                     Module                     | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | URAM | DSP Blocks |
++------------------------------------------------------------+------------------------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+| accel_bd_wrapper                                           |                                          (top) |      41556 |      35323 |    6027 |  206 | 22496 |    165 |      1 |   52 |        944 |
+|   accel_bd_i                                               |                                       accel_bd |      41556 |      35323 |    6027 |  206 | 22496 |    165 |      1 |   52 |        944 |
+|     rst_pl                                                 |                              accel_bd_rst_pl_0 |         13 |         12 |       0 |    1 |    37 |      0 |      0 |    0 |          0 |
+|       U0                                                   |                                 proc_sys_reset |         13 |         12 |       0 |    1 |    37 |      0 |      0 |    0 |          0 |
+|         (U0)                                               |                                 proc_sys_reset |          0 |          0 |       0 |    0 |    13 |      0 |      0 |    0 |          0 |
+|         EXT_LPF                                            |                                            lpf |          4 |          3 |       0 |    1 |     9 |      0 |      0 |    0 |          0 |
+|           (EXT_LPF)                                        |                                            lpf |          2 |          1 |       0 |    1 |     5 |      0 |      0 |    0 |          0 |
+|           ACTIVE_LOW_EXT.ACT_LO_EXT                        |                                    cdc_sync_10 |          2 |          2 |       0 |    0 |     4 |      0 |      0 |    0 |          0 |
+|         SEQ                                                |                                 sequence_psr_8 |          9 |          9 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|           (SEQ)                                            |                                 sequence_psr_8 |          5 |          5 |       0 |    0 |     9 |      0 |      0 |    0 |          0 |
+|           SEQ_COUNTER                                      |                                      upcnt_n_9 |          4 |          4 |       0 |    0 |     6 |      0 |      0 |    0 |          0 |
+|     sc_csr                                                 |                              accel_bd_sc_csr_0 |        408 |        407 |       0 |    1 |   608 |      0 |      0 |    0 |          0 |
+|       inst                                                 |                                        bd_6946 |        408 |        407 |       0 |    1 |   608 |      0 |      0 |    0 |          0 |
+|         clk_map                                            |                            clk_map_imp_18WNHX2 |         12 |         11 |       0 |    1 |    22 |      0 |      0 |    0 |          0 |
+|           psr_aclk                                         |                             bd_6946_psr_aclk_0 |         12 |         11 |       0 |    1 |    22 |      0 |      0 |    0 |          0 |
+|             U0                                             |                 proc_sys_reset__parameterized1 |         12 |         11 |       0 |    1 |    22 |      0 |      0 |    0 |          0 |
+|               (U0)                                         |                 proc_sys_reset__parameterized1 |          0 |          0 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               EXT_LPF                                      |                            lpf__parameterized0 |          3 |          2 |       0 |    1 |     6 |      0 |      0 |    0 |          0 |
+|                 (EXT_LPF)                                  |                            lpf__parameterized0 |          2 |          1 |       0 |    1 |     2 |      0 |      0 |    0 |          0 |
+|                 ACTIVE_LOW_AUX.ACT_LO_AUX                  |                                       cdc_sync |          1 |          1 |       0 |    0 |     4 |      0 |      0 |    0 |          0 |
+|               SEQ                                          |                                   sequence_psr |          9 |          9 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|                 (SEQ)                                      |                                   sequence_psr |          5 |          5 |       0 |    0 |     9 |      0 |      0 |    0 |          0 |
+|                 SEQ_COUNTER                                |                                        upcnt_n |          4 |          4 |       0 |    0 |     6 |      0 |      0 |    0 |          0 |
+|         m00_exit_pipeline                                  |                   m00_exit_pipeline_imp_OTLSQ5 |          7 |          7 |       0 |    0 |     9 |      0 |      0 |    0 |          0 |
+|           m00_exit                                         |                                 bd_6946_m00e_0 |          7 |          7 |       0 |    0 |     9 |      0 |      0 |    0 |          0 |
+|             inst                                           |                            sc_exit_v1_0_13_top |          7 |          7 |       0 |    0 |     9 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |                            sc_exit_v1_0_13_top |          2 |          2 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               exit_inst                                    |                           sc_exit_v1_0_13_exit |          5 |          5 |       0 |    0 |     4 |      0 |      0 |    0 |          0 |
+|               xpm_cdc_async_rst_inst                       |                              xpm_cdc_async_rst |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|         m00_sc2axi                                         |                               bd_6946_m00s2a_0 |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|           inst                                             |                           sc_sc2axi_v1_0_8_top |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|         s00_axi2sc                                         |                               bd_6946_s00a2s_0 |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|           inst                                             |                           sc_axi2sc_v1_0_8_top |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|         s00_entry_pipeline                                 |                 s00_entry_pipeline_imp_1OL9ZN2 |        351 |        351 |       0 |    0 |   435 |      0 |      0 |    0 |          0 |
+|           s00_mmu                                          |                               bd_6946_s00mmu_0 |        177 |        177 |       0 |    0 |   219 |      0 |      0 |    0 |          0 |
+|             inst                                           |                             sc_mmu_v1_0_11_top |        177 |        177 |       0 |    0 |   219 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |                             sc_mmu_v1_0_11_top |         29 |         29 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|               ar_reg_stall                                 |   sc_util_v1_0_4_axi_reg_stall__parameterized0 |         44 |         44 |       0 |    0 |    84 |      0 |      0 |    0 |          0 |
+|               aw_reg_stall                                 | sc_util_v1_0_4_axi_reg_stall__parameterized0_7 |         39 |         39 |       0 |    0 |    68 |      0 |      0 |    0 |          0 |
+|               gen_endpoint.decerr_slave_inst               |                    sc_mmu_v1_0_11_decerr_slave |         65 |         65 |       0 |    0 |    49 |      0 |      0 |    0 |          0 |
+|               xpm_cdc_async_rst_inst                       |                          xpm_cdc_async_rst__13 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_si_converter                                 |                               bd_6946_s00sic_0 |        168 |        168 |       0 |    0 |   176 |      0 |      0 |    0 |          0 |
+|             inst                                           |                    sc_si_converter_v1_0_11_top |        168 |        168 |       0 |    0 |   176 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |                    sc_si_converter_v1_0_11_top |          1 |          1 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               gen_axilite_conv.axilite_conv_inst           |           sc_si_converter_v1_0_11_axilite_conv |        167 |        167 |       0 |    0 |   172 |      0 |      0 |    0 |          0 |
+|               xpm_cdc_async_rst_inst                       |                          xpm_cdc_async_rst__12 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_transaction_regulator                        |                                bd_6946_s00tr_0 |          7 |          7 |       0 |    0 |    40 |      0 |      0 |    0 |          0 |
+|             inst                                           |            sc_transaction_regulator_v1_0_9_top |          7 |          7 |       0 |    0 |    40 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |            sc_transaction_regulator_v1_0_9_top |          1 |          1 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               gen_endpoint.gen_r_singleorder.r_singleorder |    sc_transaction_regulator_v1_0_9_singleorder |          4 |          4 |       0 |    0 |    18 |      0 |      0 |    0 |          0 |
+|               gen_endpoint.gen_w_singleorder.w_singleorder |  sc_transaction_regulator_v1_0_9_singleorder_6 |          2 |          2 |       0 |    0 |    18 |      0 |      0 |    0 |          0 |
+|               xpm_cdc_async_rst_inst                       |                          xpm_cdc_async_rst__11 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|         s00_nodes                                          |                          s00_nodes_imp_1LONSMS |         39 |         39 |       0 |    0 |   142 |      0 |      0 |    0 |          0 |
+|           s00_ar_node                                      |                                 bd_6946_sarn_0 |          8 |          8 |       0 |    0 |    21 |      0 |      0 |    0 |          0 |
+|             inst                                           |                            sc_node_v1_0_14_top |          8 |          8 |       0 |    0 |    21 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |                            sc_node_v1_0_14_top |          3 |          3 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               inst_mi_handler                              |                     sc_node_v1_0_14_mi_handler |          5 |          5 |       0 |    0 |    17 |      0 |      0 |    0 |          0 |
+|                 (inst_mi_handler)                          |                     sc_node_v1_0_14_mi_handler |          0 |          0 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 gen_normal_area.inst_fifo_node_payld       |                         sc_node_v1_0_14_fifo_3 |          5 |          5 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|                   gen_reg_fifo.inst_reg_fifo               |                     sc_node_v1_0_14_reg_fifo_4 |          5 |          5 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|                     (gen_reg_fifo.inst_reg_fifo)           |                     sc_node_v1_0_14_reg_fifo_4 |          1 |          1 |       0 |    0 |    13 |      0 |      0 |    0 |          0 |
+|                     gen_single_rank.inst_cntr              |                       sc_util_v1_0_4_counter_5 |          4 |          4 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               s_sc_xpm_cdc_async_rst_inst                  |                           xpm_cdc_async_rst__9 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_aw_node                                      |                                 bd_6946_sawn_0 |          8 |          8 |       0 |    0 |    21 |      0 |      0 |    0 |          0 |
+|             inst                                           |            sc_node_v1_0_14_top__parameterized0 |          8 |          8 |       0 |    0 |    21 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |            sc_node_v1_0_14_top__parameterized0 |          3 |          3 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               inst_mi_handler                              |     sc_node_v1_0_14_mi_handler__parameterized0 |          5 |          5 |       0 |    0 |    17 |      0 |      0 |    0 |          0 |
+|                 (inst_mi_handler)                          |     sc_node_v1_0_14_mi_handler__parameterized0 |          0 |          0 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 gen_normal_area.inst_fifo_node_payld       |                           sc_node_v1_0_14_fifo |          5 |          5 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|                   gen_reg_fifo.inst_reg_fifo               |                       sc_node_v1_0_14_reg_fifo |          5 |          5 |       0 |    0 |    15 |      0 |      0 |    0 |          0 |
+|                     (gen_reg_fifo.inst_reg_fifo)           |                       sc_node_v1_0_14_reg_fifo |          1 |          1 |       0 |    0 |    13 |      0 |      0 |    0 |          0 |
+|                     gen_single_rank.inst_cntr              |                       sc_util_v1_0_4_counter_2 |          4 |          4 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               s_sc_xpm_cdc_async_rst_inst                  |                           xpm_cdc_async_rst__7 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_b_node                                       |                                  bd_6946_sbn_0 |          8 |          8 |       0 |    0 |    11 |      0 |      0 |    0 |          0 |
+|             inst                                           |            sc_node_v1_0_14_top__parameterized1 |          8 |          8 |       0 |    0 |    11 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |            sc_node_v1_0_14_top__parameterized1 |          3 |          3 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               inst_mi_handler                              |     sc_node_v1_0_14_mi_handler__parameterized1 |          5 |          5 |       0 |    0 |     7 |      0 |      0 |    0 |          0 |
+|                 (inst_mi_handler)                          |     sc_node_v1_0_14_mi_handler__parameterized1 |          0 |          0 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 gen_normal_area.inst_fifo_node_payld       |           sc_node_v1_0_14_fifo__parameterized0 |          5 |          5 |       0 |    0 |     5 |      0 |      0 |    0 |          0 |
+|                   gen_reg_fifo.inst_reg_fifo               |       sc_node_v1_0_14_reg_fifo__parameterized0 |          5 |          5 |       0 |    0 |     5 |      0 |      0 |    0 |          0 |
+|                     (gen_reg_fifo.inst_reg_fifo)           |       sc_node_v1_0_14_reg_fifo__parameterized0 |          1 |          1 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|                     gen_single_rank.inst_cntr              |                       sc_util_v1_0_4_counter_1 |          4 |          4 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               s_sc_xpm_cdc_async_rst_inst                  |                           xpm_cdc_async_rst__5 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_r_node                                       |                                  bd_6946_srn_0 |          8 |          8 |       0 |    0 |    43 |      0 |      0 |    0 |          0 |
+|             inst                                           |            sc_node_v1_0_14_top__parameterized2 |          8 |          8 |       0 |    0 |    43 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |            sc_node_v1_0_14_top__parameterized2 |          3 |          3 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               inst_mi_handler                              |     sc_node_v1_0_14_mi_handler__parameterized2 |          5 |          5 |       0 |    0 |    39 |      0 |      0 |    0 |          0 |
+|                 (inst_mi_handler)                          |     sc_node_v1_0_14_mi_handler__parameterized2 |          0 |          0 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 gen_normal_area.inst_fifo_node_payld       |           sc_node_v1_0_14_fifo__parameterized1 |          5 |          5 |       0 |    0 |    37 |      0 |      0 |    0 |          0 |
+|                   gen_reg_fifo.inst_reg_fifo               |       sc_node_v1_0_14_reg_fifo__parameterized1 |          5 |          5 |       0 |    0 |    37 |      0 |      0 |    0 |          0 |
+|                     (gen_reg_fifo.inst_reg_fifo)           |       sc_node_v1_0_14_reg_fifo__parameterized1 |          1 |          1 |       0 |    0 |    35 |      0 |      0 |    0 |          0 |
+|                     gen_single_rank.inst_cntr              |                       sc_util_v1_0_4_counter_0 |          4 |          4 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               s_sc_xpm_cdc_async_rst_inst                  |                           xpm_cdc_async_rst__3 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|           s00_w_node                                       |                                  bd_6946_swn_0 |          7 |          7 |       0 |    0 |    46 |      0 |      0 |    0 |          0 |
+|             inst                                           |            sc_node_v1_0_14_top__parameterized3 |          7 |          7 |       0 |    0 |    46 |      0 |      0 |    0 |          0 |
+|               (inst)                                       |            sc_node_v1_0_14_top__parameterized3 |          3 |          3 |       0 |    0 |     1 |      0 |      0 |    0 |          0 |
+|               inst_mi_handler                              |     sc_node_v1_0_14_mi_handler__parameterized3 |          4 |          4 |       0 |    0 |    42 |      0 |      0 |    0 |          0 |
+|                 (inst_mi_handler)                          |     sc_node_v1_0_14_mi_handler__parameterized3 |          0 |          0 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 gen_normal_area.inst_fifo_node_payld       |           sc_node_v1_0_14_fifo__parameterized2 |          4 |          4 |       0 |    0 |    40 |      0 |      0 |    0 |          0 |
+|                   gen_reg_fifo.inst_reg_fifo               |       sc_node_v1_0_14_reg_fifo__parameterized2 |          4 |          4 |       0 |    0 |    40 |      0 |      0 |    0 |          0 |
+|                     (gen_reg_fifo.inst_reg_fifo)           |       sc_node_v1_0_14_reg_fifo__parameterized2 |          1 |          1 |       0 |    0 |    38 |      0 |      0 |    0 |          0 |
+|                     gen_single_rank.inst_cntr              |                         sc_util_v1_0_4_counter |          4 |          4 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|               s_sc_xpm_cdc_async_rst_inst                  |                           xpm_cdc_async_rst__1 |          0 |          0 |       0 |    0 |     3 |      0 |      0 |    0 |          0 |
+|     u_accel                                                |                             accel_bd_u_accel_0 |      41136 |      34905 |    6027 |  204 | 21851 |    165 |      1 |   52 |        944 |
+|       (u_accel)                                            |                             accel_bd_u_accel_0 |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       inst                                                 |                                      accel_axi |      41136 |      34905 |    6027 |  204 | 21851 |    165 |      1 |   52 |        944 |
+|         u_csr                                              |                                   axi_lite_csr |        226 |        226 |       0 |    0 |   389 |      0 |      0 |    0 |          0 |
+|         u_sys                                              |                                      accel_sys |      40910 |      34679 |    6027 |  204 | 21462 |    165 |      1 |   52 |        944 |
+|           u_dma                                            |                                        wgt_dma |       1794 |       1500 |     294 |    0 |  1506 |      0 |      0 |    0 |          0 |
+|           u_dut                                            |                                      accel_top |      39116 |      33179 |    5733 |  204 | 19956 |    165 |      1 |   52 |        944 |
+|             (u_dut)                                        |                                      accel_top |        113 |        113 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|             u_act                                          |                                     act_buffer |        403 |        403 |       0 |    0 |  1301 |      0 |      0 |   52 |          0 |
+|             u_dw                                           |                                      dw_feeder |       4133 |       2451 |    1669 |   13 |  2353 |      2 |      0 |    0 |        144 |
+|               (u_dw)                                       |                                      dw_feeder |        129 |        117 |       0 |   12 |   254 |      0 |      0 |    0 |          0 |
+|               u_arr                                        |                                       dw_array |       2039 |       2038 |       0 |    1 |  1772 |      0 |      0 |    0 |        144 |
+|                 (u_arr)                                    |                                       dw_array |          2 |          1 |       0 |    1 |     2 |      0 |      0 |    0 |          0 |
+|                 ch[0].u_dw                                 |                                      dwconv3x3 |        130 |        130 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[10].u_dw                                |                                  dwconv3x3_112 |        127 |        127 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[11].u_dw                                |                                  dwconv3x3_113 |        127 |        127 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[12].u_dw                                |                                  dwconv3x3_114 |        127 |        127 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[13].u_dw                                |                                  dwconv3x3_115 |        127 |        127 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[14].u_dw                                |                                  dwconv3x3_116 |        127 |        127 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[15].u_dw                                |                                  dwconv3x3_117 |        128 |        128 |       0 |    0 |   110 |      0 |      0 |    0 |          9 |
+|                 ch[1].u_dw                                 |                                  dwconv3x3_118 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[2].u_dw                                 |                                  dwconv3x3_119 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[3].u_dw                                 |                                  dwconv3x3_120 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[4].u_dw                                 |                                  dwconv3x3_121 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[5].u_dw                                 |                                  dwconv3x3_122 |        128 |        128 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[6].u_dw                                 |                                  dwconv3x3_123 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[7].u_dw                                 |                                  dwconv3x3_124 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[8].u_dw                                 |                                  dwconv3x3_125 |        127 |        127 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|                 ch[9].u_dw                                 |                                  dwconv3x3_126 |        128 |        128 |       0 |    0 |   111 |      0 |      0 |    0 |          9 |
+|               u_lb                                         |                    line_buffer__parameterized0 |        624 |        299 |     325 |    0 |   327 |      2 |      0 |    0 |          0 |
+|               u_wgt                                        |                     wgt_buffer__parameterized1 |       1344 |          0 |    1344 |    0 |     0 |      0 |      0 |    0 |          0 |
+|             u_gap                                          |                                     gap_feeder |       1319 |       1311 |       0 |    8 |   570 |      0 |      0 |    0 |          0 |
+|               (u_gap)                                      |                                     gap_feeder |         94 |         86 |       0 |    8 |   152 |      0 |      0 |    0 |          0 |
+|               ch[0].u_ap                                   |                                        avgpool |         79 |         79 |       0 |    0 |    28 |      0 |      0 |    0 |          0 |
+|               ch[10].u_ap                                  |                                     avgpool_97 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[11].u_ap                                  |                                     avgpool_98 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[12].u_ap                                  |                                     avgpool_99 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[13].u_ap                                  |                                    avgpool_100 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[14].u_ap                                  |                                    avgpool_101 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[15].u_ap                                  |                                    avgpool_102 |         54 |         54 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[1].u_ap                                   |                                    avgpool_103 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[2].u_ap                                   |                                    avgpool_104 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[3].u_ap                                   |                                    avgpool_105 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[4].u_ap                                   |                                    avgpool_106 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[5].u_ap                                   |                                    avgpool_107 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[6].u_ap                                   |                                    avgpool_108 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[7].u_ap                                   |                                    avgpool_109 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[8].u_ap                                   |                                    avgpool_110 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|               ch[9].u_ap                                   |                                    avgpool_111 |         78 |         78 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|             u_img                                          |                                     img_buffer |        100 |        100 |       0 |    0 |     2 |     35 |      1 |    0 |          0 |
+|             u_log                                          |                                      logit_out |       1336 |       1336 |       0 |    0 |   552 |      0 |      0 |    0 |          8 |
+|               (u_log)                                      |                                      logit_out |          1 |          1 |       0 |    0 |   132 |      0 |      0 |    0 |          0 |
+|               cls[0].u_b                                   |                                    bias_add_90 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|               cls[0].u_r                                   |                     requantize__parameterized0 |        294 |        294 |       0 |    0 |   108 |      0 |      0 |    0 |          2 |
+|               cls[1].u_b                                   |                                    bias_add_91 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|               cls[1].u_r                                   |                  requantize__parameterized0_92 |        353 |        353 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|               cls[2].u_b                                   |                                    bias_add_93 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|               cls[2].u_r                                   |                  requantize__parameterized0_94 |        292 |        292 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|               cls[3].u_b                                   |                                    bias_add_95 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|               cls[3].u_r                                   |                  requantize__parameterized0_96 |        292 |        292 |       0 |    0 |   104 |      0 |      0 |    0 |          2 |
+|             u_os                                           |                                      out_stage |      14197 |      11637 |    2560 |    0 |  6104 |      0 |      0 |    0 |         64 |
+|               (u_os)                                       |                                      out_stage |          0 |          0 |       0 |    0 |   833 |      0 |      0 |    0 |          0 |
+|               u_param                                      |                                   param_buffer |       3106 |        546 |    2560 |    0 |  2048 |      0 |      0 |    0 |          0 |
+|               u_rq                                         |                                        rq_bank |      11091 |      11091 |       0 |    0 |  3223 |      0 |      0 |    0 |         64 |
+|                 ch[0].u_bias                               |                                       bias_add |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[0].u_rq                                 |                                     requantize |        330 |        330 |       0 |    0 |   100 |      0 |      0 |    0 |          2 |
+|                 ch[10].u_rq                                |                                  requantize_49 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[11].u_rq                                |                                  requantize_50 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[12].u_rq                                |                                  requantize_51 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[13].u_rq                                |                                  requantize_52 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[14].u_rq                                |                                  requantize_53 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[15].u_rq                                |                                  requantize_54 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[16].u_rq                                |                                  requantize_55 |        330 |        330 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[17].u_rq                                |                                  requantize_56 |        330 |        330 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[18].u_rq                                |                                  requantize_57 |        385 |        385 |       0 |    0 |   124 |      0 |      0 |    0 |          2 |
+|                 ch[19].u_rq                                |                                  requantize_58 |        385 |        385 |       0 |    0 |   124 |      0 |      0 |    0 |          2 |
+|                 ch[1].u_rq                                 |                                  requantize_59 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[20].u_bias                              |                                    bias_add_60 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[20].u_rq                                |                                  requantize_61 |        334 |        334 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[21].u_bias                              |                                    bias_add_62 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[21].u_rq                                |                                  requantize_63 |        334 |        334 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[22].u_bias                              |                                    bias_add_64 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[22].u_rq                                |                                  requantize_65 |        334 |        334 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[23].u_bias                              |                                    bias_add_66 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[23].u_rq                                |                                  requantize_67 |        334 |        334 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[24].u_rq                                |                                  requantize_68 |        414 |        414 |       0 |    0 |   125 |      0 |      0 |    0 |          2 |
+|                 ch[25].u_bias                              |                                    bias_add_69 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[25].u_rq                                |                                  requantize_70 |        331 |        331 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[26].u_bias                              |                                    bias_add_71 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[26].u_rq                                |                                  requantize_72 |        331 |        331 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[27].u_bias                              |                                    bias_add_73 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[27].u_rq                                |                                  requantize_74 |        331 |        331 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[28].u_bias                              |                                    bias_add_75 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[28].u_rq                                |                                  requantize_76 |        332 |        332 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[29].u_bias                              |                                    bias_add_77 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[29].u_rq                                |                                  requantize_78 |        332 |        332 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[2].u_rq                                 |                                  requantize_79 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[30].u_bias                              |                                    bias_add_80 |         26 |         26 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|                 ch[30].u_rq                                |                                  requantize_81 |        492 |        492 |       0 |    0 |   128 |      0 |      0 |    0 |          2 |
+|                 ch[31].u_rq                                |                                  requantize_82 |        428 |        428 |       0 |    0 |   126 |      0 |      0 |    0 |          2 |
+|                 ch[3].u_rq                                 |                                  requantize_83 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[4].u_rq                                 |                                  requantize_84 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[5].u_rq                                 |                                  requantize_85 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[6].u_rq                                 |                                  requantize_86 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[7].u_rq                                 |                                  requantize_87 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[8].u_rq                                 |                                  requantize_88 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|                 ch[9].u_rq                                 |                                  requantize_89 |        324 |        324 |       0 |    0 |    96 |      0 |      0 |    0 |          2 |
+|             u_pwf                                          |                                      pw_feeder |       5154 |       5123 |       0 |   31 |  5322 |    128 |      0 |    0 |        512 |
+|               (u_pwf)                                      |                                      pw_feeder |        117 |         93 |       0 |   24 |   169 |      0 |      0 |    0 |          0 |
+|               u_addr                                       |                                       addr_gen |         63 |         63 |       0 |    0 |    76 |      0 |      0 |    0 |          0 |
+|               u_array                                      |                                       pe_array |       4974 |       4967 |       0 |    7 |  5077 |      0 |      0 |    0 |        512 |
+|                 (u_array)                                  |                                       pe_array |          6 |          6 |       0 |    0 |     2 |      0 |      0 |    0 |          0 |
+|                 lane[0].u_lane                             |                                       mac_lane |        156 |        155 |       0 |    1 |   162 |      0 |      0 |    0 |         16 |
+|                 lane[10].u_lane                            |                                    mac_lane_18 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[11].u_lane                            |                                    mac_lane_19 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[12].u_lane                            |                                    mac_lane_20 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[13].u_lane                            |                                    mac_lane_21 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[14].u_lane                            |                                    mac_lane_22 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[15].u_lane                            |                                    mac_lane_23 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[16].u_lane                            |                                    mac_lane_24 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[17].u_lane                            |                                    mac_lane_25 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[18].u_lane                            |                                    mac_lane_26 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[19].u_lane                            |                                    mac_lane_27 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[1].u_lane                             |                                    mac_lane_28 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[20].u_lane                            |                                    mac_lane_29 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[21].u_lane                            |                                    mac_lane_30 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[22].u_lane                            |                                    mac_lane_31 |        154 |        154 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[23].u_lane                            |                                    mac_lane_32 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[24].u_lane                            |                                    mac_lane_33 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[25].u_lane                            |                                    mac_lane_34 |        156 |        154 |       0 |    2 |   162 |      0 |      0 |    0 |         16 |
+|                 lane[26].u_lane                            |                                    mac_lane_35 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[27].u_lane                            |                                    mac_lane_36 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[28].u_lane                            |                                    mac_lane_37 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[29].u_lane                            |                                    mac_lane_38 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[2].u_lane                             |                                    mac_lane_39 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[30].u_lane                            |                                    mac_lane_40 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[31].u_lane                            |                                    mac_lane_41 |        159 |        157 |       0 |    2 |   165 |      0 |      0 |    0 |         16 |
+|                 lane[3].u_lane                             |                                    mac_lane_42 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[4].u_lane                             |                                    mac_lane_43 |        157 |        157 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[5].u_lane                             |                                    mac_lane_44 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[6].u_lane                             |                                    mac_lane_45 |        156 |        156 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[7].u_lane                             |                                    mac_lane_46 |        157 |        155 |       0 |    2 |   162 |      0 |      0 |    0 |         16 |
+|                 lane[8].u_lane                             |                                    mac_lane_47 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|                 lane[9].u_lane                             |                                    mac_lane_48 |        155 |        155 |       0 |    0 |   158 |      0 |      0 |    0 |         16 |
+|               u_wgt                                        |                     wgt_buffer__parameterized0 |          0 |          0 |       0 |    0 |     0 |    128 |      0 |    0 |          0 |
+|             u_pwo                                          |                                         pw_out |         16 |         16 |       0 |    0 |    41 |      0 |      0 |    0 |          0 |
+|             u_res                                          |                                     res_feeder |        711 |        566 |       0 |  145 |   575 |      0 |      0 |    0 |          0 |
+|             u_seq                                          |                                        top_seq |       2173 |       1853 |     320 |    0 |   265 |      0 |      0 |    0 |          0 |
+|             u_stem                                         |                                    stem_feeder |       9467 |       8276 |    1184 |    7 |  2869 |      0 |      0 |    0 |        216 |
+|               (u_stem)                                     |                                    stem_feeder |        721 |        715 |       0 |    6 |   466 |      0 |      0 |    0 |          0 |
+|               u_arr                                        |                                     stem_array |       7475 |       7474 |       0 |    1 |  2186 |      0 |      0 |    0 |        216 |
+|                 (u_arr)                                    |                                     stem_array |          2 |          1 |       0 |    1 |     2 |      0 |      0 |    0 |          0 |
+|                 lane[0].u_conv                             |                                    conv3x3_std |        949 |        949 |       0 |    0 |   273 |      0 |      0 |    0 |         27 |
+|                 lane[1].u_conv                             |                                 conv3x3_std_11 |       1038 |       1038 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[2].u_conv                             |                                 conv3x3_std_12 |       1225 |       1225 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[3].u_conv                             |                                 conv3x3_std_13 |        642 |        642 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[4].u_conv                             |                                 conv3x3_std_14 |       1192 |       1192 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[5].u_conv                             |                                 conv3x3_std_15 |        495 |        495 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[6].u_conv                             |                                 conv3x3_std_16 |        760 |        760 |       0 |    0 |   270 |      0 |      0 |    0 |         27 |
+|                 lane[7].u_conv                             |                                 conv3x3_std_17 |       1225 |       1225 |       0 |    0 |   291 |      0 |      0 |    0 |         27 |
+|               u_lb                                         |                                    line_buffer |        295 |        103 |     192 |    0 |   217 |      0 |      0 |    0 |          0 |
+|               u_wgt                                        |                                     wgt_buffer |        992 |          0 |     992 |    0 |     0 |      0 |      0 |    0 |          0 |
+|     zynq_ps                                                |                             accel_bd_zynq_ps_0 |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
+|       inst                                                 |         zynq_ultra_ps_e_v3_4_1_zynq_ultra_ps_e |          0 |          0 |       0 |    0 |     0 |      0 |      0 |    0 |          0 |
++------------------------------------------------------------+------------------------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+* Note: The sum of lower-level cells may be larger than their parent cells total, due to cross-hierarchy LUT combining
+
+

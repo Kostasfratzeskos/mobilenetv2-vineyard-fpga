@@ -53,16 +53,29 @@
 #                      driven by this same PL clock, so there is no CDC in the
 #                      design and none is invented here.
 #
-#  ---- the frequency is a decision, not a default -----------------------
+#  ---- the frequency is a decision, and the GRID IS COARSE --------------
 #
-#  PL_MHZ defaults to 200. Seven post-route OOC runs put this design at
-#  197-208 MHz (see docs/lab_notebook.md), so 200 is the honest "what it does"
-#  figure and the margin is thin on purpose - if real interconnect eats it, the
-#  slack number says by how much, and that IS the measurement. Override it to
-#  get a bitstream that closes:
+#  The PL clock comes from a PS PLL divider, so only a handful of frequencies
+#  exist. Measured on this board preset by reading back
+#  PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ:
 #
-#      PL_MHZ=200 bash scripts/run_bd.sh          # the measurement
-#      PL_MHZ=150 bash scripts/run_bd.sh          # a comfortable bitstream
+#      requested    150  160  166  175  180  187.5  190  195  200  210  214  220  250
+#      actual       150  150  150  166  166  187.5  187  187  187  187  187  214  250
+#
+#  i.e. the achievable set is 150, 166.667, 187.5, 214.286, 250 - which is
+#  1500 MHz over an integer divider of 10, 9, 8, 7, 6.
+#
+#  THIS MATTERS AND IT CAUGHT ME. Requesting 200 gives 187.5 SILENTLY: the PS IP
+#  rounds and says nothing, so a run reported as "200 MHz" is constrained at
+#  5.333 ns and an Fmax computed from the requested figure is wrong by 6%. The
+#  summary below therefore reads the ACTUAL frequency back from the IP and
+#  prints both, and warns when they differ. A number that cannot be traced to
+#  the constraint that produced it is not a measurement - the same reason
+#  synth.tcl reads its period from the clock rather than a literal.
+#
+#      PL_MHZ=187.5 bash scripts/run_bd.sh                  # the fastest that fits
+#      PL_MHZ=166.666 bash scripts/run_bd.sh                # comfortable
+#      STRATEGY=explore PL_MHZ=187.5 bash scripts/run_bd.sh # slower, closes tighter
 #=============================================================================
 
 set part  "xczu7ev-ffvc1156-2-e"
@@ -141,6 +154,16 @@ set_property -dict [list \
     CONFIG.PSU__FPGA_PL0_ENABLE     {1}       \
     CONFIG.PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ $plmhz \
 ] $ps
+
+#  What the PLL could actually give, as opposed to what was asked for. See the
+#  header: the grid is 150 / 166.667 / 187.5 / 214.286 / 250 and the IP rounds
+#  down silently.
+set plmhz_act [get_property CONFIG.PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ $ps]
+puts "== PL clock : requested $plmhz MHz, ACTUAL $plmhz_act MHz"
+if {abs($plmhz_act - $plmhz) > 0.01} {
+    puts "== NOTE: the PS PLL rounded the request. Every timing number below is"
+    puts "==       against $plmhz_act MHz, not $plmhz MHz."
+}
 
 # ---- the accelerator -------------------------------------------------------
 #  A module reference rather than a packaged IP: the RTL is the deliverable and
@@ -235,8 +258,25 @@ if {[info exists ::env(BD_ONLY)] && $::env(BD_ONLY) == 1} {
     return
 }
 
-# ---- wrap it and build -----------------------------------------------------
+# ---- generate the IP output products, then wrap it -------------------------
+#  Without this, synthesis fails on the first IP it meets:
+#
+#      ERROR: [Synth 8-439] module 'accel_bd_rst_pl_0' not found
+#
+#  The block design is a description; the IP inside it (the PS, the SmartConnect,
+#  the reset) have no RTL until generate_target produces it.
+#
+#  synth_checkpoint_mode None selects GLOBAL synthesis of the block design -
+#  every IP's RTL is synthesised together with the accelerator rather than each
+#  IP being pre-synthesised into its own checkpoint. That is the right choice
+#  here for two reasons: this flow is one `synth_design` call rather than the
+#  project flow's launch_runs, so there is nothing to run the per-IP jobs; and
+#  one flat design gives one utilization report, which is what a measurement
+#  wants. The cost is a slower synthesis, which does not matter for a run of
+#  this length.
 set bd_file [get_files accel_bd.bd]
+set_property synth_checkpoint_mode None $bd_file
+generate_target all $bd_file
 make_wrapper -files $bd_file -top -import
 
 puts ""
@@ -260,10 +300,32 @@ if {[info exists ::env(SYNTH_ONLY)] && $::env(SYNTH_ONLY) == 1} {
     return
 }
 
-opt_design
-place_design
-phys_opt_design
-route_design
+#  STRATEGY=explore turns on the directives that matter when the design misses
+#  by a hair. At 187.5 MHz the default flow came in at WNS -0.021 ns - 21
+#  picoseconds, 0.4% of the period - which is exactly the territory phys_opt and
+#  a harder place/route recover. Dropping to the next PLL step (166.667) to avoid
+#  that would cost 11% of the clock to save an hour of tool time.
+set strategy [expr {[info exists ::env(STRATEGY)] ? $::env(STRATEGY) : "default"}]
+puts "== strategy : $strategy"
+
+if {$strategy eq "explore"} {
+    opt_design       -directive Explore
+    place_design     -directive Explore
+    phys_opt_design  -directive AggressiveExplore
+    route_design     -directive Explore
+    #  A post-route phys_opt only helps if something is still negative, and it
+    #  can only improve: it is skipped when the design already closes.
+    set p [lindex [get_timing_paths -max_paths 1 -nworst 1 -setup] 0]
+    if {[get_property SLACK $p] < 0} {
+        puts "== still negative after routing; running post-route phys_opt"
+        phys_opt_design -directive AggressiveExplore
+    }
+} else {
+    opt_design
+    place_design
+    phys_opt_design
+    route_design
+}
 
 report_utilization               -file "$out/utilization.rpt"
 report_utilization -hierarchical -file "$out/utilization_hier.rpt"
@@ -274,11 +336,6 @@ write_checkpoint -force "$out/post_route.dcp"
 
 write_bitstream -force "$out/accel_bd_wrapper.bit"
 
-#  The hardware handoff. This is what a PS application is compiled against - it
-#  carries the address map, the clock configuration and the PS settings - so it
-#  is an output of this flow rather than something to be exported by hand later.
-write_hw_platform -fixed -include_bit -force "$out/accel_bd_wrapper.xsa"
-
 # ============================================================================
 #  the summary, on stdout so the shell does not have to parse reports
 # ============================================================================
@@ -287,15 +344,16 @@ puts "================== BOARD POST-ROUTE SUMMARY ($tag) =================="
 
 #  The period is read back from the CLOCK, never from a literal - synth.tcl's
 #  header records what a hardcoded 4 cost once ("Fmax 3401 MHz, meets 250 MHz").
-set clk [get_clocks -of_objects [get_ports -quiet -scoped_to_current_instance *]]
-if {[llength $clk] == 0} { set clk [lindex [get_clocks] 0] }
+#  The period comes from the path's own clock GROUP below, not from a
+#  get_clocks guess: in a block design the clock is internal, so there are no
+#  scoped ports to find it through and asking produced only a warning.
 set paths [get_timing_paths -max_paths 1 -nworst 1 -setup]
 if {[llength $paths] > 0} {
     set p   [lindex $paths 0]
     set wns [get_property SLACK $p]
     set grp [get_property GROUP $p]
     set per [get_property PERIOD [get_clocks $grp]]
-    puts [format "  PL clock         : %s MHz requested" $plmhz]
+    puts [format "  PL clock         : %s MHz requested, %s MHz actual" $plmhz $plmhz_act]
     puts [format "  clock group      : %s at %.3f ns" $grp $per]
     puts [format "  WNS (setup)      : %s ns" $wns]
     puts [format "  => Fmax          : %.1f MHz   - %s" \
@@ -310,6 +368,32 @@ set dpir [llength [get_methodology_violations -filter {CHECK_NAME == DPIR-2}]]
 puts [format "  DPIR-2           : %d" $dpir]
 puts ""
 puts "  bitstream : $out/accel_bd_wrapper.bit"
-puts "  handoff   : $out/accel_bd_wrapper.xsa   (what the PS app builds against)"
 puts "  reports   : $out/"
 puts "===================================================================="
+
+#  The hardware handoff, LAST and deliberately so. This is what a PS application
+#  is compiled against - it carries the address map, the clock configuration and
+#  the PS settings.
+#
+#  Two things learned the hard way. It is written AFTER the summary above,
+#  because when it failed it took the whole run's exit status with it and the
+#  timing numbers - the actual point of the run - never printed even though place
+#  and route had succeeded and the bitstream was on disk. A step that produces an
+#  artifact must not be able to hide a step that produces a measurement.
+#
+#  And it is written WITHOUT -include_bit: that option wants an implementation
+#  RUN to take the bitstream from, which exists in the project flow
+#  (launch_runs) and not in this one (synth_design / route_design directly):
+#
+#      ERROR: [Common 17-69] Unable to get BIT file from implementation run.
+#
+#  A -fixed XSA without the bitstream still carries everything a baremetal BSP
+#  needs, which is the address map and the PS configuration; the .bit sits beside
+#  it and is programmed through the FSBL or JTAG. Wrapped in a catch so that if
+#  it fails on some future tool version, the numbers still stand.
+if {[catch { write_hw_platform -fixed -force "$out/accel_bd_wrapper.xsa" } e]} {
+    puts "  NOTE: the XSA was not written ($e)"
+    puts "        the bitstream and the reports above are unaffected."
+} else {
+    puts "  handoff   : $out/accel_bd_wrapper.xsa   (what the PS app builds against)"
+}
