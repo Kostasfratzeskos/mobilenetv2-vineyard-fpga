@@ -28,7 +28,8 @@
 #
 #  Three groups, and all three are honest about what they are:
 #
-#    1. the AXI4 read channel. This is the one real system interface, and out of
+#    1. the AXI4 read channel. This is the one real system interface - and since
+#       DD-032 it carries the image as well as the weights and parameters. Out of
 #       context there is no interconnect on the other end. It gets a budget
 #       rather than a false path, because unlike the old load ports it WILL be
 #       a timed path on a board - against the PS's S_AXI_HP, in the same clock
@@ -36,12 +37,15 @@
 #       a quarter of the 4.000 ns target, which is a deliberately pessimistic
 #       stand-in for an AXI SmartConnect's own register stage.
 #
-#    2. pg_* and im_wr_*. The program load and the image load, which accel_sys's
-#       header explains are still ports because they are the next items of work.
-#       They keep accel_top_ooc.xdc's 0.5 ns for the same reason it gave it to
-#       them: there is no launch clock on the other side yet. This is the one
-#       remaining place in this file where a number is a placeholder, and it is
-#       83 of 499 port bits.
+#    2. pg_*, the program load. accel_axi absorbs it into the AXI-Lite aperture;
+#       at THIS level it is still a port with no launch clock on the other side,
+#       so it keeps accel_top_ooc.xdc's 0.5 ns. This is the one remaining place
+#       in this file where a number is a placeholder, and it is 42 of 493 port
+#       bits.
+#
+#       im_wr_* was listed here too until DD-032. wgt_dma now reads the image
+#       from DDR over the same master as the weights, so those 41 bits became an
+#       internal register-to-register path like the weight ports above.
 #
 #    3. the configuration and status pins: the four base addresses, start,
 #       n_instr, and the answer. The bases are read once per run and latched on
@@ -66,8 +70,8 @@ set_input_delay  -clock clock 1.000 \
 set_output_delay -clock clock 1.000 \
     [get_ports {m_axi_ar* m_axi_rready}]
 
-# ---- still ports, still placeholders: the program and image load ------------
-set_input_delay  -clock clock 0.500 [get_ports {pg_* im_wr_*}]
+# ---- still a port, still a placeholder: the program load -------------------
+set_input_delay  -clock clock 0.500 [get_ports {pg_*}]
 
 # ---- configuration and status ----------------------------------------------
 set_input_delay  -clock clock 0.500 \

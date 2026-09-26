@@ -7,50 +7,48 @@
 //  at all. The layering is deliberate and each level is separately measurable:
 //
 //      accel_top   the datapath and the sequencer.       846 port bits
-//      accel_sys   + wgt_dma, so weights come from DDR.  499 port bits
-//      accel_axi   + axi_lite_csr, so a PS drives it.    354 port bits
+//      accel_sys   + wgt_dma, so weights come from DDR.  493 port bits
+//      accel_axi   + axi_lite_csr, so a PS drives it.    313 port bits
 //
-//  Nothing below this file changed to make it exist. accel_sys and accel_top are
-//  byte-identical to what they were, which is why all 35 testbenches still pass
-//  and why a failure here can only be in this wiring or in the CSR.
+//  ---- and THIS is now the whole port list -------------------------------
 //
-//  ---- what those 354 bits ARE, which is the whole point -----------------
-//
-//      AXI4 master       196    weights and parameters from PS-DDR
+//      AXI4 master       196    weights, parameters and the image from PS-DDR
 //      AXI-Lite slave    114    every control and status register
-//      image load         41    im_wr_*, the one exception
 //      clock, rst_n, irq   3
 //
-//  Compare accel_top, where 672 of 846 bits were the load side and existed as
-//  pins only because nothing drove them. There is now nothing on this module
-//  that is not an AXI interface, a clock, a reset, an interrupt - or the image.
+//  That is all of it. There is **nothing on this module that is not an AXI
+//  interface, a clock, a reset or an interrupt.** Compare accel_top, where 672
+//  of 846 port bits were the load side and existed as pins only because nothing
+//  drove them.
 //
-//  ---- what is left, and it is one thing ---------------------------------
+//  So this file IS the board top, in the sense that mattered: it can be dropped
+//  into a block design, wired to the PS's S_AXI_HP and M_AXI_HPM, and run. What
+//  has never been done is the implementation run that proves it fits and closes
+//  timing with the PS in the picture, and that is the next measurement rather
+//  than the next piece of RTL.
 //
-//      im_wr_*   41 bits   the image load. 224x224x3 = 147 KB from the PS.
-//
-//  That is the ONLY remaining port group that is not an AXI interface, a clock,
-//  a reset or the interrupt. It was deliberately not folded in here: the right
-//  answer is a second AXI4 read channel sharing wgt_dma's burst logic, and
-//  routing 50,176 single AXI-Lite writes through the CSR instead would have
-//  been a stopgap that then had to be removed. It is the next item of work, and
-//  when it lands this file becomes the board top with no other change.
+//  The image arrived here last (DD-032). It is read from DDR by wgt_dma over the
+//  same AXI master as the weights - they are never concurrent, since the image
+//  is loaded before `start` and the weights during the run - so it cost no new
+//  master and no arbiter.
 //
 //  ---- so what CAN be done now that could not before ---------------------
 //
 //  A PS can run an inference. Concretely, and this is the whole sequence:
 //
-//      write ID           read it back, confirm the aperture is alive
-//      write the program   512 words into the 0x1000 aperture
-//      write WGT/PB/PM/PS_BASE  where the blobs are in DDR
-//      write N_INSTR       64
-//      write CTRL bit 0    START
-//      poll STATUS bit 1   (or take the interrupt)
+//      write ID            read it back, confirm the aperture is alive
+//      write the program    512 words into the 0x1000 aperture
+//      write WGT/PB/PM/PS_BASE and IMG_BASE   where the blobs are in DDR
+//      write N_INSTR        64
+//      write CTRL bit 1     LOAD_IMAGE
+//      poll STATUS bit 7    until the image is in
+//      write CTRL bit 0     START
+//      poll STATUS bit 1    (or take the interrupt)
 //      read RESULT_LO/HI, ARGMAX
 //
 //  accel_axi_tb does exactly that and nothing else, over two AXI interfaces,
-//  and gets all 64 golden tensors bit-exact. Before this file, the same run
-//  needed a testbench driving seven separate port groups.
+//  and gets all 64 golden tensors bit-exact. Before these three tops existed,
+//  the same run needed a testbench driving seven separate port groups.
 //
 //  ---- why the CSR is a sibling of accel_sys and not inside it ------------
 //
@@ -156,10 +154,6 @@ module accel_axi #(
     output wire                      s_axi_rvalid,
     input  wire                      s_axi_rready,
 
-    // ---- image load: the one remaining non-AXI port group ----------------
-    input  wire                      im_wr_en,
-    input  wire [IA_W-1:0]           im_wr_addr,
-    input  wire [CIN*DATA_W-1:0]     im_wr_data,
 
     // ---- AXI4 read-only master to PS-DDR ---------------------------------
     output wire [AXI_ID_W-1:0]       m_axi_arid,
@@ -192,6 +186,9 @@ module accel_axi #(
     wire [PGA_W-1:0]        pg_addr;
     wire [PW_W-1:0]         pg_data;
 
+    wire                    img_start, img_busy, img_done;
+    wire [AXI_ADDR_W-1:0]   img_base;
+
     wire [NLOG*LOG_W-1:0]   logits;
     wire                    logits_valid;
     wire [IDX_W-1:0]        argmax;
@@ -220,6 +217,8 @@ module accel_axi #(
         .wgt_base(wgt_base), .pb_base(pb_base),
         .pm_base(pm_base), .ps_base(ps_base),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
+        .img_start(img_start), .img_base(img_base),
+        .img_busy(img_busy), .img_done(img_done),
         .running(running), .done(done), .fault(fault),
         .dma_error(dma_error), .tag_error(tag_error), .pc(pc),
         .logits(logits), .logits_valid(logits_valid),
@@ -254,7 +253,8 @@ module accel_axi #(
         .wgt_base(wgt_base), .pb_base(pb_base),
         .pm_base(pm_base),   .ps_base(ps_base),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
-        .im_wr_en(im_wr_en), .im_wr_addr(im_wr_addr), .im_wr_data(im_wr_data),
+        .img_base(img_base), .img_start(img_start),
+        .img_busy(img_busy), .img_done(img_done),
         .m_axi_arid(m_axi_arid), .m_axi_araddr(m_axi_araddr),
         .m_axi_arlen(m_axi_arlen), .m_axi_arsize(m_axi_arsize),
         .m_axi_arburst(m_axi_arburst), .m_axi_arlock(m_axi_arlock),

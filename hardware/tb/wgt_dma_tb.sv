@@ -57,8 +57,14 @@
 //                     taken against a stalling slave measures the slave.
 //  11 bus error       SLVERR on every beat: dma_error must go high and STAY
 //                     high, and ld_done must never pulse.
+//  12 IMAGE           the whole 224x224x3 image, 50,176 pixels, scoreboarded
+//                     per pixel against the CHW golden transposed
+//                     INDEPENDENTLY of the model's own transpose (DD-032). The
+//                     case that matters if HWC was the wrong call: a channel
+//                     swap here is three bytes in the right place with the
+//                     wrong meaning, which the network would happily classify.
 //
-//  The eleven data cases run as ONE sequence without an intervening `start`, so
+//  The data cases run as ONE sequence without an intervening `start`, so
 //  the running parameter index is under test too - it is the one piece of state
 //  that carries between loads, and the blob has no offset field to catch it.
 //
@@ -118,6 +124,11 @@ module wgt_dma_tb;
     localparam [31:0] PB_BASE  = 32'h2000_0000;
     localparam [31:0] PM_BASE  = 32'h2400_0000;
     localparam [31:0] PS_BASE  = 32'h2800_0000;
+    localparam [31:0] IMG_BASE = 32'h3000_0000;
+
+    localparam IH = 224, IW = 224;
+    localparam IDEPTH = IH*IW;                 // 50,176 pixels
+    localparam IMG_N  = CIN*IDEPTH;            // 150,528 bytes
 
     // ======================================================================
     //  DUT and slave
@@ -165,6 +176,12 @@ module wgt_dma_tb;
     wire [SHIFT_W-1:0]       lg_pl_shift;
     wire                     dma_error;
 
+    logic                    img_start;
+    wire                     img_busy, img_done;
+    wire                     im_wr_en;
+    wire [15:0]              im_wr_addr;
+    wire [CIN*DATA_W-1:0]    im_wr_data;
+
     wire [AXI_ID_W-1:0]   arid;
     wire [AXI_ADDR_W-1:0] araddr;
     wire [7:0]            arlen;
@@ -187,11 +204,14 @@ module wgt_dma_tb;
         .BANK_W(BANK_W), .DW_BANK_W(DW_BANK_W), .ST_BANK_W(ST_BANK_W),
         .NLOG(NLOG), .IDX_W(IDX_W),
         .OFF_W(OFF_W), .BYT_W(BYT_W), .PCH_W(PCH_W),
-        .AXI_ADDR_W(AXI_ADDR_W), .AXI_DATA_W(AXI_DATA_W), .AXI_ID_W(AXI_ID_W)
+        .AXI_ADDR_W(AXI_ADDR_W), .AXI_DATA_W(AXI_DATA_W), .AXI_ID_W(AXI_ID_W),
+        .IDEPTH(IDEPTH), .IA_W(16)
     ) u_dma (
         .clock(clock), .rst_n(rst_n), .start(start),
         .wgt_base(WGT_BASE), .pb_base(PB_BASE),
-        .pm_base(PM_BASE),   .ps_base(PS_BASE),
+        .pm_base(PM_BASE),   .ps_base(PS_BASE), .img_base(IMG_BASE),
+        .img_start(img_start), .img_busy(img_busy), .img_done(img_done),
+        .im_wr_en(im_wr_en), .im_wr_addr(im_wr_addr), .im_wr_data(im_wr_data),
         .ld_req(ld_req), .ld_op(ld_op), .ld_off(ld_off),
         .ld_bytes(ld_bytes), .ld_pchan(ld_pchan), .ld_done(ld_done),
         .pw_wl_en(pw_wl_en), .pw_wl_bank(pw_wl_bank),
@@ -220,6 +240,7 @@ module wgt_dma_tb;
         .ADDR_W(AXI_ADDR_W), .DATA_W(AXI_DATA_W), .ID_W(AXI_ID_W),
         .WGT_BASE(WGT_BASE), .WGT_N(WBLOB),
         .PB_BASE(PB_BASE), .PM_BASE(PM_BASE), .PS_BASE(PS_BASE), .PN(PBLOB),
+        .IMG_BASE(IMG_BASE), .IMG_N(IMG_N),
         .AR_LAT(5), .GAP_MASK(15)
     ) u_ddr (
         .clock(clock), .rst_n(rst_n), .err_on(err_on), .gaps_on(gaps_on),
@@ -239,6 +260,13 @@ module wgt_dma_tb;
     reg signed [31:0] pb [0:PBLOB-1];
     reg signed [31:0] pm [0:PBLOB-1];
     reg [7:0]         ps [0:PBLOB-1];
+    //  The image golden, CHW, exactly as the file stores it. The expectation
+    //  below transposes it independently of axi_ddr_model's own transpose - if
+    //  both were the same code a swapped index would cancel out and the test
+    //  would pass on a wrong layout.
+    reg [7:0]         img_chw [0:IMG_N-1];
+    bit               px_seen [0:IDEPTH-1];
+    integer           px_obs, px_bad;
 
     // ======================================================================
     //  the expectation
@@ -399,6 +427,32 @@ module wgt_dma_tb;
             if (fails <= 20) $display("  [ERR] %s: %s", cname, what);
         end
     endtask
+
+    //  The image monitor. Checked per pixel as it is written, against the CHW
+    //  golden indexed the long way round - (c*IH + y)*IW + x - so the check does
+    //  not share an expression with either the DUT or the DDR model.
+    integer mx, my, mc;
+    reg [7:0] mexp;
+    always @(posedge clock) if (rst_n && im_wr_en) begin
+        px_obs++;
+        my = im_wr_addr / IW;
+        mx = im_wr_addr % IW;
+        if (px_seen[im_wr_addr]) begin
+            px_bad++;
+            if (px_bad <= 5)
+                $display("  [ERR] image: pixel %0d written twice", im_wr_addr);
+        end
+        px_seen[im_wr_addr] = 1;
+        for (mc = 0; mc < CIN; mc++) begin
+            mexp = img_chw[(mc*IH + my)*IW + mx];
+            if (im_wr_data[mc*DATA_W +: DATA_W] !== mexp) begin
+                px_bad++;
+                if (px_bad <= 5)
+                    $display("  [ERR] image: pixel (%0d,%0d) channel %0d: got %02x, golden %02x",
+                             mx, my, mc, im_wr_data[mc*DATA_W +: DATA_W], mexp);
+            end
+        end
+    end
 
     always @(posedge clock) if (rst_n) begin
         // The weight phase, timed separately. The whole-load rate also carries
@@ -587,8 +641,9 @@ module wgt_dma_tb;
     integer big_writes, big_cycles, big_wc, big_wcyc;
     real    wrate;
     initial begin
-        err_on  = 0;
-        gaps_on = 1;        // holes in the R stream for every correctness case
+        err_on    = 0;
+        img_start = 0;
+        gaps_on   = 1;      // holes in the R stream for every correctness case
         ld_req = 0; ld_op = 0; ld_off = 0; ld_bytes = 0; ld_pchan = 0;
         start  = 0;
         rst_n  = 0;
@@ -602,10 +657,13 @@ module wgt_dma_tb;
         $readmemh("../../software/export/params_b.hex",     pb);
         $readmemh("../../software/export/params_m0.hex",    pm);
         $readmemh("../../software/export/params_shift.hex", ps);
+        $readmemh("../../software/golden/healthy_hl6025/000_input.hex", img_chw);
         u_ddr.load("../../software/export/weights.hex",
                    "../../software/export/params_b.hex",
                    "../../software/export/params_m0.hex",
                    "../../software/export/params_shift.hex");
+        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+                       IH, IW, CIN);
         $display("loaded the weight blob (%0d bytes) and %0d parameter entries",
                  WBLOB, PBLOB);
         $display("");
@@ -723,10 +781,59 @@ module wgt_dma_tb;
         end else
             $display("  [ok ] the weight phase sustains one bank write per cycle");
 
+        // ---- 12: the image -----------------------------------------------
+        //  A different shape from everything above: one sequential stream of
+        //  CIN bytes per pixel, 50,176 writes, no banks and no padding.
+        $display("");
+        cname = "12 image";
+        f0 = fails;
+        for (i = 0; i < IDEPTH; i++) px_seen[i] = 0;
+        px_obs = 0; px_bad = 0;
+        gaps_on = 1;                  // holes on, to stall the realigner
+
+        t0 = cyc;
+        @(negedge clock);
+        img_start = 1'b1;
+        @(negedge clock);
+        img_start = 1'b0;
+
+        // img_busy must be high from the moment the request is latched, with no
+        // window in which a poller could see "not busy" and start a run.
+        if (!img_busy) begin
+            fails++;
+            $display("  [ERR] 12 image: img_busy was low the cycle after img_start");
+        end
+
+        @(posedge img_done);
+        cyc_last = cyc - t0;
+        @(negedge clock);
+
+        if (img_busy) begin
+            fails++;
+            $display("  [ERR] 12 image: img_busy still high after img_done");
+        end
+        if (px_obs !== IDEPTH) begin
+            fails++;
+            $display("  [ERR] 12 image: %0d pixels written, expected %0d", px_obs, IDEPTH);
+        end
+        for (i = 0; i < IDEPTH; i++)
+            if (!px_seen[i]) begin
+                fails++;
+                $display("  [ERR] 12 image: pixel %0d never written", i);
+                break;
+            end
+        fails += px_bad;
+
+        $display("  [%s] %-22s %6d pixels, %6d cycles  (%.2f pixels/cycle)",
+                 (fails == f0) ? "ok " : "ERR", cname, px_obs, cyc_last,
+                 (cyc_last > 0) ? (1.0*px_obs/cyc_last) : 0.0);
+        if (fails == f0)
+            $display("       every pixel once, every channel bit-exact vs the CHW golden");
+
         $display("");
         if (fails == 0)
-            $display("ALL PASS  (%0d loads, %0d writes scoreboarded against an independent expectation)",
-                     cases, tot_obs);
+            $display("ALL PASS  (%0d loads + the image, %0d writes and %0d pixels scoreboarded against an independent expectation)",
+                     cases, tot_obs, px_obs);
         else
             $display("FAILED    (%0d problems over %0d writes)", fails, tot_obs);
         $finish;

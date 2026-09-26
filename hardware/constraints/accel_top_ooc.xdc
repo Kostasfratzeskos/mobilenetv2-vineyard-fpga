@@ -66,9 +66,13 @@ create_clock -period 25.000 -name clock [get_ports clock]
 # THIS file is still the right one for measuring accel_top alone, which is every
 # number quoted in the docs up to and including Phase 6. It is not stale.
 #
-# Of accel_sys's 499 port bits, pg_* and im_wr_* are still 83 of them and still
-# have no launch clock, so they keep the 0.5 ns there too. They are the only
-# placeholder left.
+# Of accel_sys's 493 port bits, pg_* is still 42 of them and still has no launch
+# clock, so it keeps the 0.5 ns there too. accel_axi has none left at all: the
+# program went into the AXI-Lite aperture (DD-031) and the image onto the AXI4
+# master (DD-032).
+#
+# THIS file still lists im_wr_* below, and correctly: accel_top has those ports
+# whatever the tops above it do with them.
 set_input_delay  -clock clock 0.500 [get_ports {pg_* im_wr_* pw_wl_* dw_wl_* st_wl_* pl_* lg_pl_* ld_done start n_instr rst_n}]
 set_output_delay -clock clock 0.500 [get_ports {ld_req ld_off ld_bytes ld_pchan logits* argmax* pc running done tag_error fault}]
 

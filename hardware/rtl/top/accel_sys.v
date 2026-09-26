@@ -27,29 +27,22 @@
 //  32-bit base-address registers:
 //
 //      accel_top   846 port bits
-//      accel_sys   499 port bits
+//      accel_sys   493 port bits   (41 bits of image out, 35 of control in)
 //
 //  ---- so this is still NOT the board top --------------------------------
 //
-//  Two groups remain as ports and both are the next items of work, not
-//  oversights:
+//  One group remains as a port, and it is the next item of work rather than an
+//  oversight:
 //
 //      pg_*      42 bits   the program load. 512 words of instruction memory
-//                          that the PS writes once per boot. It wants either an
-//                          AXI-Lite window or its own small DMA; it is 2 KB and
-//                          is written before `start`, so almost anything works
-//                          and nothing has been chosen.
-//      im_wr_*   41 bits   the image load. 224x224x3 = 147 KB from the PS. The
-//                          natural answer is a second read channel on the same
-//                          master, sharing the burst logic that already exists
-//                          in wgt_dma - but the image load path is explicitly a
-//                          separate open item and speculatively generalising the
-//                          DMA for it would be building the wrong thing first.
+//                          that the PS writes once per boot. accel_axi absorbs
+//                          it into the AXI-Lite aperture; at THIS level it is
+//                          still a port.
 //
-//  83 bits of the 499 are those two. Everything else is the AXI master, the
-//  configuration registers, the answer (logits, argmax) and status. So a board
-//  top is one AXI-Lite block and one image path away, and the number that made
-//  it impossible is no longer the blocker.
+//  The image is no longer among them. wgt_dma reads it from DDR over the same
+//  AXI master as the weights (DD-032), so `im_wr_*` is an internal connection
+//  here instead of 41 bits of pin. Everything else is the AXI master, the
+//  configuration registers, the answer and status.
 //
 //  ---- why the base addresses are plain input wires -----------------------
 //
@@ -174,10 +167,15 @@ module accel_sys #(
     input  wire [PGA_W-1:0]          pg_addr,
     input  wire [PW_W-1:0]           pg_data,
 
-    // ---- image load: still a port, see the header ------------------------
-    input  wire                      im_wr_en,
-    input  wire [IA_W-1:0]           im_wr_addr,
-    input  wire [CIN*DATA_W-1:0]     im_wr_data,
+    // ---- the image, read from DDR by wgt_dma (DD-032) --------------------
+    //  `img_base` is not latched at `start` like the other four: the image is
+    //  loaded BEFORE a run, so it is sampled when the load is requested.
+    //  `img_busy` is the level to poll; `img_done` pulses only on success, so a
+    //  bus error cannot be read as a loaded image.
+    input  wire [AXI_ADDR_W-1:0]     img_base,
+    input  wire                      img_start,
+    output wire                      img_busy,
+    output wire                      img_done,
 
     // ---- AXI4 read-only master -------------------------------------------
     output wire [AXI_ID_W-1:0]       m_axi_arid,
@@ -262,6 +260,10 @@ module accel_sys #(
     wire [ST_WA_W-1:0]        st_wl_addr;
     wire [CIN*K*K*DATA_W-1:0] st_wl_data;
 
+    wire                      im_wr_en;
+    wire [IA_W-1:0]           im_wr_addr;
+    wire [CIN*DATA_W-1:0]     im_wr_data;
+
     wire                      pl_en;
     wire [BANK_W-1:0]         pl_bank;
     wire [PA_W-1:0]           pl_addr;
@@ -323,6 +325,7 @@ module accel_sys #(
         .PW_WA_W(PW_WA_W), .DW_WA_W(DW_WA_W), .ST_WA_W(ST_WA_W), .PA_W(PA_W),
         .BANK_W(BANK_W), .DW_BANK_W(DW_BANK_W), .ST_BANK_W(ST_BANK_W),
         .NLOG(NLOG), .IDX_W(IDX_W),
+        .IDEPTH(IDEPTH), .IA_W(IA_W),
         .OFF_W(OFF_W), .BYT_W(BYT_W), .PCH_W(PCH_W),
         .AXI_ADDR_W(AXI_ADDR_W), .AXI_DATA_W(AXI_DATA_W),
         .AXI_ID_W(AXI_ID_W), .AXI_ID(AXI_ID),
@@ -338,7 +341,9 @@ module accel_sys #(
         // ld_req until it has left reset and been given `start`.
         .clock(clock), .rst_n(rst_n), .start(start),
         .wgt_base(wgt_base), .pb_base(pb_base),
-        .pm_base(pm_base),   .ps_base(ps_base),
+        .pm_base(pm_base),   .ps_base(ps_base), .img_base(img_base),
+        .img_start(img_start), .img_busy(img_busy), .img_done(img_done),
+        .im_wr_en(im_wr_en), .im_wr_addr(im_wr_addr), .im_wr_data(im_wr_data),
         .ld_req(ld_req), .ld_op(ld_op), .ld_off(ld_off),
         .ld_bytes(ld_bytes), .ld_pchan(ld_pchan), .ld_done(ld_done),
         .pw_wl_en(pw_wl_en), .pw_wl_bank(pw_wl_bank),

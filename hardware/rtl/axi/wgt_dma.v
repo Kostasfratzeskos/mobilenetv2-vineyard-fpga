@@ -163,6 +163,62 @@
 //  So an unknown opcode is treated as parameters-only: the weight phase is
 //  skipped, ld_done pulses, and S_GO reports it properly one state later.
 //
+//  ---- it loads the IMAGE too, and the name did not change ---------------
+//
+//  This module now serves three things: the weight blob, the parameter blob and
+//  the input image. The name says weights, which is narrower than the truth, and
+//  that is deliberate - DD-030, DD-031 and three dated lab-notebook entries all
+//  name `wgt_dma`, and rewriting dated records to tidy a name is worse than a
+//  name that needs a sentence of explanation. This is the sentence.
+//
+//  Why one module rather than a second master for the image:
+//
+//    * The image is loaded BEFORE `start`; the weights are read DURING the run.
+//      They are never concurrent. With one master that is structural - there is
+//      no bus to contend for - rather than an invariant the PS has to honour.
+//      Two masters behind a mux would be correct only while the PS behaved.
+//    * The image needs the same byte-granular realigner as everything else, and
+//      that is the fiddliest logic here. Duplicating it to keep the name honest
+//      would be trading a real risk for a cosmetic one.
+//
+//  What the image phase adds is small, because it reuses all of it: a phase in
+//  the state machine, a pixel counter, `need = CIN`, and one more write port.
+//  The image is ONE sequential stream of CIN bytes per pixel - see the layout
+//  note below.
+//
+//  ---- the image layout in DDR is HWC, and both sides are simpler for it ----
+//
+//  The PS writes byte (y*IW + x)*CIN + c for channel c, i.e. channels
+//  interleaved per pixel. Then three consecutive DDR bytes ARE img_buffer's
+//  24-bit word, `wr_data[c*8 +: 8]`, and the image is one sequential read that
+//  the existing realigner already handles with need = CIN.
+//
+//  The alternative, channel-planar (CHW), is how software/golden/*/000_input.hex
+//  stores it - and it would mean three concurrent streams 50,176 bytes apart,
+//  which is exactly the AXI4 read-interleaving problem DD-030 had to solve for
+//  the parameter blob with per-tile staging. It would also be WORSE for the PS:
+//  a JPEG decoder produces interleaved RGB, so CHW would force the PS to
+//  transpose what it already has in the right order.
+//
+//  Note the contrast with DD-030, which faced the same question and answered it
+//  the other way. There the on-disk artifact already existed and gen_program.py
+//  validated it, so inventing a second encoding was the risk. Here the buffer is
+//  produced at run time by the PS, so there is no artifact to preserve and the
+//  convenient layout is free. The golden .hex stays CHW and the integration
+//  testbenches transpose when they fill the DDR model.
+//
+//  ---- the image size is STRUCTURAL, not a register ----------------------
+//
+//  CIN * IDEPTH bytes and IDEPTH writes, both derived from the parameters
+//  img_buffer is built with. Deliberately not a CSR register: a PS that wrote
+//  the wrong pixel count would half-fill the image buffer and the run would
+//  finish, with a plausible wrong answer from a tensor that is partly the
+//  previous image. That is the failure shape T-7 is about, and the fix is the
+//  same one - do not let a number that can be wrong decide a shape the hardware
+//  already knows. If a variable input size is ever wanted, an IMG_PIXELS
+//  register is the extension point, and it would need a bound check against
+//  IDEPTH to be safe.
+//
 //  ---- one module, not two ----------------------------------------------
 //
 //  The reader and the dealer are separable and a split was considered: an
@@ -173,6 +229,11 @@
 //  passes any test written against it alone. The sections below are banner-
 //  separated in the order the data flows, which is what the split would have
 //  bought for reading.
+//
+//  The image phase is a second consumer of that reader, which is the condition
+//  the paragraph above says would justify the split. It is still not taken: the
+//  second consumer lives in the same module and is covered by the same
+//  testbench, so a separable module would gain a name and no coverage.
 //
 //  Run:  bash scripts/run_sim.sh wgt_dma
 //============================================================================
@@ -203,6 +264,10 @@ module wgt_dma #(
     parameter ST_BANK_W = 3,
     parameter NLOG      = 4,
     parameter IDX_W     = 2,
+
+    // ---- the image, as img_buffer is built with it -----------------------
+    parameter IDEPTH    = 50176,   // 224*224 pixels
+    parameter IA_W      = 16,      // clog2(IDEPTH), img_buffer's address
 
     // ---- the load handshake's field widths (top_seq's instruction) -------
     parameter OFF_W     = 24,   // ld_off
@@ -244,6 +309,10 @@ module wgt_dma #(
     input  wire [AXI_ADDR_W-1:0]       pb_base,    // params_b.hex
     input  wire [AXI_ADDR_W-1:0]       pm_base,    // params_m0.hex
     input  wire [AXI_ADDR_W-1:0]       ps_base,    // params_shift.hex
+    // The image base is NOT latched at `start`, unlike the four above: the
+    // image is loaded before a run, so `start` is too late to be its trigger.
+    // It is sampled when the image load is requested instead.
+    input  wire [AXI_ADDR_W-1:0]       img_base,   // the image, HWC in DDR
 
     // ---- the handshake top_seq raises ------------------------------------
     input  wire                        ld_req,
@@ -256,6 +325,20 @@ module wgt_dma #(
     // level left high from the previous load used to complete a load with no
     // data moved, so a pulse is not a style choice here.
     output reg                         ld_done,
+
+    // ---- the image load, requested by the PS before a run ----------------
+    //  `img_start` is a pulse and is LATCHED, so it cannot be lost if it lands
+    //  while the module is finishing something else. `img_busy` is the level a
+    //  PS polls; `img_done` is a one-cycle pulse that fires ONLY on success, so
+    //  a bus error cannot be mistaken for a loaded image - img_busy falls in
+    //  both cases and the falling edge alone would not tell them apart.
+    input  wire                        img_start,
+    output wire                        img_busy,
+    output reg                         img_done,
+
+    output reg                         im_wr_en,
+    output wire [IA_W-1:0]             im_wr_addr,
+    output wire [CIN*DATA_W-1:0]       im_wr_data,
 
     // ---- the four write ports of accel_top -------------------------------
     output reg                         pw_wl_en,
@@ -348,6 +431,10 @@ module wgt_dma #(
     localparam BEATS_W    = BYT_W;
     localparam PIDX_W     = 20;      // 19,264 entries in the parameter blob
     localparam CHK_W      = BB_LOG + 2;   // chunk / gathered-bytes counters
+
+    //  The image: CIN bytes per pixel, IDEPTH pixels. Structural, per the header.
+    localparam IMG_BYTES  = CIN * IDEPTH;      // 150,528
+    localparam IMG_BITS   = CIN * DATA_W;      // 24, img_buffer's word
 
     localparam [1:0] RESP_OKAY = 2'b00, RESP_EXOKAY = 2'b01;
 
@@ -442,6 +529,19 @@ module wgt_dma #(
         if ((PW_WA_W < DW_WA_W) || (PW_WA_W < ST_WA_W)) begin : chk_addr
             ERROR_WGT_DMA_PW_WA_W_MUST_BE_THE_WIDEST_WEIGHT_ADDRESS u_err();
         end
+        // The image address must reach every pixel of img_buffer, and the image
+        // byte count must fit the byte counter the reader is armed with.
+        if (IDEPTH > (1 << IA_W)) begin : chk_idepth
+            ERROR_WGT_DMA_IA_W_TOO_NARROW_FOR_IDEPTH u_err();
+        end
+        if (IMG_BYTES > ((1 << BYT_W) - 1)) begin : chk_imgbytes
+            ERROR_WGT_DMA_IMAGE_IS_LARGER_THAN_THE_BYTE_COUNTER u_err();
+        end
+        // One pixel must fit one beat, or the image dealer needs the two-chunk
+        // assembly the stem uses and the single-cycle write below is wrong.
+        if (CIN > BEAT_BYTES) begin : chk_cin
+            ERROR_WGT_DMA_PIXEL_WIDER_THAN_A_BEAT u_err();
+        end
         // The nested counter's limits live in 8-bit registers, so every tile
         // count has to fit. The largest is ceil(1280/16) = 80 ic tiles on the
         // classifier and 60 depthwise groups on features.18.x; 255 is the
@@ -458,6 +558,11 @@ module wgt_dma #(
     // ======================================================================
     //  the latched request, and the shape it implies
     // ======================================================================
+    //  ---- the image phase's own state ---------------------------------
+    reg                  img_pend;   // img_start latched, so it cannot be lost
+    reg [AXI_ADDR_W-1:0] c_img;      // img_base, sampled at the request
+    reg [IA_W-1:0]       img_px;     // the pixel being written
+
     reg [3:0]            q_op;
     reg [OFF_W-1:0]      q_off;
     reg [BYT_W-1:0]      q_bytes;
@@ -614,13 +719,25 @@ module wgt_dma #(
 
     wire ch_real = (ocx < q_pchan);
 
+    //  Declared here and DRIVEN in the state-machine section below, because
+    //  `need` on the next lines has to see it and `st` is not declared until
+    //  then. A wire may be declared and continuously assigned in two places;
+    //  the alternative was hoisting the whole state encoding above the dealer,
+    //  which would put the state names a long way from the machine that uses
+    //  them.
+    wire in_img;
+
     //  Bytes this bank word needs. Zero for a padded output channel, which
     //  still gets a write - the TAIL CONTRACT - but consumes no stream.
-    wire [CHK_W-1:0] need = !ch_real ? {CHK_W{1'b0}}
-                          : is_pw    ? ((ic_left > BEAT_BYTES[BYT_W-1:0])
+    //  In the image phase the shape is not a weight rectangle at all: one
+    //  pixel is CIN contiguous bytes and every pixel is real, so `need` is a
+    //  constant and the ch_real / ic_left machinery does not apply.
+    wire [CHK_W-1:0] need = in_img    ? CIN[CHK_W-1:0]
+                          : !ch_real  ? {CHK_W{1'b0}}
+                          : is_pw     ? ((ic_left > BEAT_BYTES[BYT_W-1:0])
                                           ? BEAT_BYTES[CHK_W-1:0]
                                           : ic_left[CHK_W-1:0])
-                                     : q_taps[CHK_W-1:0];
+                                      : q_taps[CHK_W-1:0];
 
     reg [CHK_W-1:0]      gh;         // bytes of this word already gathered
     reg [AXI_DATA_W-1:0] lo_q;       // the stem's first beat, latched
@@ -670,6 +787,7 @@ module wgt_dma #(
     reg [ST_BITS-1:0]       wd_q;
     reg [BANK_W-1:0]        wb_q;
     reg [PW_WA_W-1:0]       wa_q;
+    reg [IA_W-1:0]          ia_q;
     reg signed [BIAS_W-1:0] pd_bias;
     reg signed [M0_W-1:0]   pd_m0;
     reg [SHIFT_W-1:0]       pd_shift;
@@ -679,6 +797,11 @@ module wgt_dma #(
     assign pw_wl_data = wd_q[PW_BITS-1:0];
     assign dw_wl_data = wd_q[DW_BITS-1:0];
     assign st_wl_data = wd_q;
+    //  The image shares the same data register, sliced to one pixel. HWC means
+    //  the three bytes arrive in channel order, so wd_q[c*8 +: 8] is channel c -
+    //  exactly what img_buffer's wr_data expects, with no shuffling.
+    assign im_wr_data = wd_q[IMG_BITS-1:0];
+    assign im_wr_addr = ia_q;
     assign pw_wl_bank = wb_q;
     assign dw_wl_bank = wb_q[DW_BANK_W-1:0];
     assign st_wl_bank = wb_q[ST_BANK_W-1:0];
@@ -724,19 +847,35 @@ module wgt_dma #(
                S_DONE  = 5'd14,  // pulse ld_done
                S_ACK   = 5'd15,  // wait for top_seq to drop ld_req
                S_DRAIN = 5'd16,  // wait out the requested beats after an abort
-               S_ERR   = 5'd17;  // parked: dma_error set, ld_done never again
+               S_ERR   = 5'd17,  // parked: dma_error set, ld_done never again
+               S_IARM  = 5'd18,  // arm the reader for the image
+               S_IDEAL = 5'd19,  // one pixel per cycle into img_buffer
+               S_IEND  = 5'd20;  // let the last registered write commit
 
     reg [4:0] st;
 
     //  The dealer consumes only in the states that read the stream, and never
     //  in the cycle a stream is being armed - the window still holds the
     //  previous stream's bytes until the end of that cycle.
+    //  True in every state that belongs to the image load, so `need` and the
+    //  dealer's readiness follow the image's shape rather than a weight's.
+    //  Declared up in the dealer section; see the note there.
+    assign in_img = (st == S_IARM) || (st == S_IDEAL) || (st == S_IEND);
+
+    //  The level a PS polls. High from the moment the request is latched, so
+    //  there is no window in which a PS can see "not busy" between writing
+    //  LOAD_IMAGE and the load actually starting.
+    assign img_busy = img_pend || in_img;
+
+    wire ideal_ok = (st == S_IDEAL) && !rd_arm
+                    && (avail >= {1'b0, chunk});
+
     wire deal_ok  = (st == S_WDEAL) && !rd_arm
                     && (avail >= {1'b0, chunk});
     wire pfill_ok = ((st == S_PB) || (st == S_PM) || (st == S_PS)) && !rd_arm
                     && (avail >= BEAT_BYTES[CHK_W:0]);
 
-    assign take = (deal_ok && (chunk != {CHK_W{1'b0}})) || pfill_ok;
+    assign take = (deal_ok && (chunk != {CHK_W{1'b0}})) || pfill_ok || ideal_ok;
     assign tk   = pfill_ok ? BEAT_BYTES[CHK_W-1:0] : chunk;
 
     //  Loop advance, computed once and used by both the counter update and the
@@ -872,6 +1011,12 @@ module wgt_dma #(
         if (!rst_n) begin
             st <= S_IDLE;
             ld_done   <= 1'b0;
+            img_done  <= 1'b0;
+            img_pend  <= 1'b0;
+            c_img     <= {AXI_ADDR_W{1'b0}};
+            img_px    <= {IA_W{1'b0}};
+            im_wr_en  <= 1'b0;
+            ia_q      <= {IA_W{1'b0}};
             dma_error <= 1'b0;
             pidx      <= {PIDX_W{1'b0}};
             rd_arm    <= 1'b0;
@@ -915,13 +1060,32 @@ module wgt_dma #(
             st_wl_en <= 1'b0;
             pl_en    <= 1'b0;
             lg_pl_en <= 1'b0;
+            im_wr_en <= 1'b0;
             ld_done  <= 1'b0;
+            img_done <= 1'b0;
             rd_arm   <= 1'b0;
+
+            //  Latched, not sampled where it is used: a request that lands while
+            //  the module is in S_ACK or S_DRAIN would otherwise be dropped, and
+            //  the PS would poll img_busy forever on an image that never loads.
+            //  img_base is sampled with it, so a later write cannot move the
+            //  region under a load in flight.
+            if (img_start) begin
+                img_pend <= 1'b1;
+                c_img    <= img_base;
+            end
 
             case (st)
 
             // ---- waiting ---------------------------------------------
-            S_IDLE: if (ld_req) begin
+            //  The image is served first when both are pending. In practice
+            //  they never are - the CSR refuses an image request while `running`
+            //  and refuses START while img_busy, and ld_req only rises during a
+            //  run - so this ordering is belt-and-braces rather than a policy.
+            S_IDLE: if (img_pend) begin
+                img_pend <= 1'b0;
+                st       <= S_IARM;
+            end else if (ld_req) begin
                 q_op    <= ld_op;
                 q_off   <= ld_off;
                 q_bytes <= ld_bytes;
@@ -1136,6 +1300,38 @@ module wgt_dma #(
             //  cycles. Waiting for ld_req to fall is the complete handshake.
             S_ACK: if (!ld_req) st <= S_IDLE;
 
+            // ---- the image: one sequential stream, one pixel a cycle ----
+            S_IARM: if ((outst == 4'd0) && !m_axi_arvalid) begin
+                rd_arm  <= 1'b1;
+                rd_addr <= c_img;
+                rd_len  <= IMG_BYTES[BEATS_W-1:0];
+                img_px  <= {IA_W{1'b0}};
+                st      <= S_IDEAL;
+            end
+
+            //  CIN bytes consumed, one img_buffer word written, every cycle the
+            //  window has the bytes. The write is rate-limited by img_buffer's
+            //  single 24-bit port, not by the bus: three bytes a cycle against
+            //  sixteen available, so the R channel is never the constraint here.
+            S_IDEAL: if (ideal_ok) begin
+                wd_q     <= word_now;
+                ia_q     <= img_px;
+                im_wr_en <= 1'b1;
+                if (img_px == (IDEPTH[IA_W-1:0] - {{(IA_W-1){1'b0}}, 1'b1}))
+                    st <= S_IEND;
+                else
+                    img_px <= img_px + {{(IA_W-1){1'b0}}, 1'b1};
+            end
+
+            //  One cycle for the last registered write to reach img_buffer
+            //  before img_done says the image is there. img_done fires ONLY on
+            //  this path, so a bus error - which jumps to S_DRAIN and leaves
+            //  img_busy falling with no pulse - cannot be read as success.
+            S_IEND: begin
+                img_done <= 1'b1;
+                st       <= S_IDLE;
+            end
+
             // ---- wait for the bus to go quiet ---------------------
             S_DRAIN: if ((outst == 4'd0) && !m_axi_arvalid)
                 st <= dma_error ? S_ERR : S_ACK;
@@ -1143,7 +1339,7 @@ module wgt_dma #(
             // ---- parked ------------------------------------------
             S_ERR: ;
 
-            //  Eighteen of the thirty-two encodings of `st` are named, so
+            //  Twenty-one of the thirty-two encodings of `st` are named, so
             //  this is reachable only by corruption. It parks rather than
             //  recovering, for the same
             //  reason top_seq's default goes to S_ERR: a state register that
@@ -1169,7 +1365,13 @@ module wgt_dma #(
                 st_wl_en  <= 1'b0;
                 pl_en     <= 1'b0;
                 lg_pl_en  <= 1'b0;
+                im_wr_en  <= 1'b0;
                 ld_done   <= 1'b0;
+                //  img_done is NOT set here, and img_pend is dropped so
+                //  img_busy falls: a PS polling it stops waiting and finds
+                //  dma_error in STATUS instead of a phantom loaded image.
+                img_done  <= 1'b0;
+                img_pend  <= 1'b0;
                 st        <= S_DRAIN;
             end
 
@@ -1192,7 +1394,14 @@ module wgt_dma #(
                 st_wl_en  <= 1'b0;
                 pl_en     <= 1'b0;
                 lg_pl_en  <= 1'b0;
+                im_wr_en  <= 1'b0;
                 ld_done   <= 1'b0;
+                //  `start` does NOT cancel a pending or in-flight image load.
+                //  It cannot legitimately arrive during one - the CSR refuses
+                //  START while img_busy - and if it somehow did, abandoning the
+                //  image half-written is the one outcome worse than ignoring
+                //  the start: the run would proceed on a partial image.
+                img_done  <= 1'b0;
                 st        <= S_DRAIN;
             end
         end
@@ -1240,6 +1449,20 @@ module wgt_dma #(
                          q_bytes, q_pchan, $time);
                 $finish;
             end
+            // The image must land inside img_buffer. IDEPTH is structural so
+            // this cannot fire from a bad program, only from a bad edit.
+            if (im_wr_en && (ia_q > (IDEPTH - 1))) begin
+                $display("ERROR: %m image write to pixel %0d, but img_buffer holds %0d at time %0t.",
+                         ia_q, IDEPTH, $time);
+                $finish;
+            end
+            // An image request while a weight load is in flight would mean the
+            // CSR's guards are not doing their job, or ld_req rose outside a run.
+            if (img_start && (st != S_IDLE) && !in_img && (st != S_ACK)) begin
+                $display("  [FAULT] %m an image load was requested while the DMA was in state %0d (a weight load is in flight). It is latched and will run afterwards, but the CSR should have refused it at time %0t.",
+                         st, $time);
+            end
+
             // The rectangle must fit the buffer it is being written into.
             if (pw_wl_en && (wa_q > ((1 << PW_WA_W) - 1))) begin
                 $display("ERROR: %m pointwise weight address %0d exceeds PW_WA_W=%0d at time %0t.",

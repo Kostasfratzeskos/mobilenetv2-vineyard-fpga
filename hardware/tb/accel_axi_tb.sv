@@ -6,13 +6,15 @@
 //  accelerator the way a processor will. Everything the PS does, this file does,
 //  in the same order, over the same two interfaces and nothing else:
 //
-//      read ID                     confirm the aperture is alive
-//      write 512 program words      into the 0x1000 aperture
-//      write WGT/PB/PM/PS_BASE      where the four blobs are in DDR
-//      write N_INSTR                64
-//      write CTRL bit 0             START
-//      poll STATUS bit 1            until done   (the interrupt is checked too)
-//      read RESULT_LO/HI, ARGMAX    the answer
+//      read ID                      confirm the aperture is alive
+//      write 512 program words       into the 0x1000 aperture
+//      write WGT/PB/PM/PS/IMG_BASE   where the five blobs are in DDR
+//      write N_INSTR                 64
+//      write CTRL bit 1              LOAD_IMAGE
+//      poll STATUS bit 7             until the image is in
+//      write CTRL bit 0              START
+//      poll STATUS bit 1             until done  (the interrupt is checked too)
+//      read RESULT_LO/HI, ARGMAX     the answer
 //
 //  ---- the three integration testbenches, and what each one adds ----------
 //
@@ -38,11 +40,15 @@
 //      writes with byte strobes, and the accelerator executing it.
 //    * the interrupt actually asserting on a real run.
 //
-//  ---- the image is still a port, and that is the last one ---------------
+//  ---- and now there is no port left at all ------------------------------
 //
-//  im_wr_* is driven directly here, as in the other two. It is the only port
-//  group on accel_axi that is not AXI, and the image load path is the next item
-//  of work - see accel_axi.v's header for why it was not folded into the CSR.
+//  Since DD-032 the image comes from DDR over the same AXI master as the
+//  weights, so accel_axi has nothing on it but two AXI interfaces, a clock, a
+//  reset and an interrupt. THIS testbench drives every one of the DUT's inputs
+//  through those two interfaces - there is no back door, no hierarchical write
+//  and no port poked directly. That is the strongest statement this level of
+//  testbench can make, and it is what makes accel_axi droppable into a block
+//  design: whatever the PS will do, this file has already done.
 //
 //  Run:  bash scripts/run_sim.sh accel_axi accel_sys axi_lite_csr wgt_dma \
 //          accel_top top_seq pw_feeder pw_out dw_feeder res_feeder \
@@ -90,15 +96,17 @@ module accel_axi_tb;
                    A_STAT_CLR = 'h0C, A_STATUS    = 'h10, A_WGT_BASE  = 'h14,
                    A_PB_BASE  = 'h18, A_PM_BASE   = 'h1C, A_PS_BASE   = 'h20,
                    A_RESULT_LO= 'h24, A_RESULT_HI = 'h28, A_ARGMAX    = 'h2C,
-                   A_ID       = 'h30, A_PROG      = 'h1000;
+                   A_ID       = 'h30, A_IMG_BASE  = 'h34,
+                   A_PROG     = 'h1000;
     localparam int S_RUNNING = 0, S_DONE = 1, S_FAULT = 2, S_DMA = 3,
-                   S_TAG = 4, S_RES = 5;
+                   S_TAG = 4, S_RES = 5, S_IMG_BUSY = 6, S_IMG_DONE = 7;
 
     // the DDR map the PS will have to honour
     localparam [31:0] WGT_BASE = 32'h1000_0000;
     localparam [31:0] PB_BASE  = 32'h2000_0000;
     localparam [31:0] PM_BASE  = 32'h2400_0000;
     localparam [31:0] PS_BASE  = 32'h2800_0000;
+    localparam [31:0] IMG_BASE = 32'h3000_0000;
 
     // ======================================================================
     logic clock, rst_n;
@@ -121,11 +129,6 @@ module accel_axi_tb;
     wire [1:0]               al_rresp;
     wire                     al_rvalid;
     logic                    al_rready;
-
-    // the image, still a port
-    logic                    im_wr_en;
-    logic [IA_W-1:0]         im_wr_addr;
-    logic [CIN*DATA_W-1:0]   im_wr_data;
 
     // the AXI4 master to DDR
     wire [AXI_ID_W-1:0]   arid;
@@ -166,7 +169,6 @@ module accel_axi_tb;
         .s_axi_arvalid(al_arvalid), .s_axi_arready(al_arready),
         .s_axi_rdata(al_rdata), .s_axi_rresp(al_rresp),
         .s_axi_rvalid(al_rvalid), .s_axi_rready(al_rready),
-        .im_wr_en(im_wr_en), .im_wr_addr(im_wr_addr), .im_wr_data(im_wr_data),
         .m_axi_arid(arid), .m_axi_araddr(araddr), .m_axi_arlen(arlen),
         .m_axi_arsize(arsize), .m_axi_arburst(arburst), .m_axi_arlock(arlock),
         .m_axi_arcache(arcache), .m_axi_arprot(arprot),
@@ -180,6 +182,7 @@ module accel_axi_tb;
         .ADDR_W(AXI_ADDR_W), .DATA_W(AXI_DATA_W), .ID_W(AXI_ID_W),
         .WGT_BASE(WGT_BASE), .WGT_N(WBLOB),
         .PB_BASE(PB_BASE), .PM_BASE(PM_BASE), .PS_BASE(PS_BASE), .PN(PBLOB),
+        .IMG_BASE(IMG_BASE), .IMG_N(CIN*IH*IW),
         .AR_LAT(3), .GAP_MASK(0)
     ) u_ddr (
         .clock(clock), .rst_n(rst_n), .err_on(1'b0), .gaps_on(1'b0),
@@ -231,7 +234,7 @@ module accel_axi_tb;
     end
 
     // ======================================================================
-    integer i, y, x, c0;
+    integer i;
     integer poll_reads;
     logic [31:0] d, st;
     logic signed [LOG_W-1:0] ax_got, ax_exp;
@@ -246,9 +249,10 @@ module accel_axi_tb;
                    "../../software/export/params_b.hex",
                    "../../software/export/params_m0.hex",
                    "../../software/export/params_shift.hex");
+        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+                       IH, IW, CIN);
 
         al_idle;
-        im_wr_en = 0; im_wr_addr = 0; im_wr_data = 0;
         rst_n = 0;
         repeat (4) @(negedge clock);
         rst_n = 1;
@@ -274,26 +278,34 @@ module accel_axi_tb;
         al_wr(A_PB_BASE,  PB_BASE,  "pb_base");
         al_wr(A_PM_BASE,  PM_BASE,  "pm_base");
         al_wr(A_PS_BASE,  PS_BASE,  "ps_base");
+        al_wr(A_IMG_BASE, IMG_BASE, "img_base");
         al_wr(A_N_INSTR,  N_OPS,    "n_instr");
         al_wr(A_IRQ_EN,   32'h3,    "irq_en");
-        $display("  configured: wgt 0x%08x  b 0x%08x  m0 0x%08x  shift 0x%08x",
-                 WGT_BASE, PB_BASE, PM_BASE, PS_BASE);
+        $display("  configured: wgt 0x%08x  b 0x%08x  m0 0x%08x  shift 0x%08x  img 0x%08x",
+                 WGT_BASE, PB_BASE, PM_BASE, PS_BASE, IMG_BASE);
 
-        // ---- 4: the image, the one remaining port ---------------------
-        for (y = 0; y < IH; y++) begin
-            for (x = 0; x < IW; x++) begin
-                @(negedge clock);
-                for (c0 = 0; c0 < CIN; c0++)
-                    im_wr_data[c0*DATA_W +: DATA_W] = img_mem[(c0*IH + y)*IW + x];
-                im_wr_addr = y*IW + x;
-                im_wr_en   = 1'b1;
-                @(posedge clock);
-                @(negedge clock);
-                im_wr_en = 1'b0;
+        // ---- 4: the image, over AXI-Lite and AXI4 like everything else ---
+        //  The last port group is gone (DD-032). Write LOAD_IMAGE, poll until
+        //  STATUS says it is in. A PS does exactly this and nothing more.
+        al_wr(A_CTRL, 32'h2, "LOAD_IMAGE");
+        poll_reads = 0;
+        forever begin
+            al_rd(A_STATUS, st, "img poll");
+            poll_reads++;
+            if (st[S_IMG_DONE]) break;
+            if (st[S_DMA]) begin
+                fails++;
+                $display("  [ERR] dma_error while loading the image (STATUS 0x%08x)", st);
+                break;
             end
+            repeat (200) @(negedge clock);
         end
-        $display("  loaded the %0dx%0d image (still a port - the next item of work)",
-                 IH, IW);
+        if (st[S_IMG_BUSY]) begin
+            fails++;
+            $display("  [ERR] STATUS says the image load is still busy after it reported done");
+        end
+        $display("  loaded the %0dx%0d image over AXI4 in %0d polls - no image port remains",
+                 IH, IW, poll_reads);
         $display("");
 
         // ---- 5: go, and POLL for it, the way a processor must ----------

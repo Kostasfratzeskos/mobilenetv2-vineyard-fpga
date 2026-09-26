@@ -47,7 +47,8 @@
 //    off    name         acc   contents
 //    0x00   CTRL         W1P   [0] START. Writing 1 pulses start for exactly
 //                              one cycle and clears the sticky status bits.
-//                              Reads as 0 - it is an action, not a state.
+//                              [1] LOAD_IMAGE. Pulses the DMA's image request.
+//                              Reads as 0 - these are actions, not state.
 //    0x04   N_INSTR      RW    [7:0] instruction count. RESETS TO ZERO, on
 //                              purpose: top_seq's T-1 check refuses n_instr==0
 //                              and raises `fault`, so a PS that forgets to
@@ -59,6 +60,8 @@
 //                              [1] done  [2] fault  [3] dma_error
 //                              [4] tag_error        (all four sticky)
 //                              [5] result captured
+//                              [6] image load busy  (live, not sticky)
+//                              [7] image loaded     (sticky)
 //                              [15:8] pc, for diagnosing a hang
 //    0x14   WGT_BASE     RW    weights.hex       in DDR
 //    0x18   PB_BASE      RW    params_b.hex
@@ -68,6 +71,7 @@
 //    0x28   RESULT_HI    RO    [15:0] logit 2, [31:16] logit 3   (latched)
 //    0x2C   ARGMAX       RO    [1:0] predicted class (latched), [2] valid
 //    0x30   ID           RO    a fixed magic word
+//    0x34   IMG_BASE     RW    the image in DDR, HWC interleaved (DD-032)
 //
 //    0x1000-0x17FF  PROG  WO   the 512 program words, as a 2 KB aperture
 //
@@ -105,6 +109,15 @@
 //       from the wrong place in the blob, and the run would finish, with wrong
 //       biases from some layer onward. So it is refused here, which is the only
 //       place that can see both modules at once.
+//
+//    6. START while the IMAGE IS STILL LOADING, and LOAD_IMAGE while `running`.
+//       Same shape, and the same consequence: the stem reads img_buffer from its
+//       first cycle, so starting on a half-written image produces a complete
+//       feature map built partly from the previous picture. Nothing downstream
+//       could notice. `img_busy` is the live bit both guards test, and it is
+//       high from the moment the request is latched so there is no window where
+//       a PS can see "not busy" between writing LOAD_IMAGE and the load
+//       beginning.
 //
 //  ---- AXI-Lite handshaking ----------------------------------------------
 //
@@ -167,6 +180,12 @@ module axi_lite_csr #(
     output reg  [PGA_W-1:0]         pg_addr,
     output reg  [PW_W-1:0]          pg_data,
 
+    // ---- the image load ---------------------------------------------------
+    output reg                      img_start,    // one cycle
+    output reg  [AXI_ADDR_W-1:0]    img_base,
+    input  wire                     img_busy,
+    input  wire                     img_done,     // a one-cycle pulse
+
     // ---- what it observes -----------------------------------------------
     input  wire                     running,
     input  wire                     done,          // a ONE-CYCLE pulse
@@ -203,7 +222,8 @@ module axi_lite_csr #(
                R_RESULT_HI  = 4'd10,
                R_ARGMAX     = 4'd11,
                R_ID         = 4'd12,
-               N_REGS       = 4'd13;
+               R_IMG_BASE   = 4'd13,
+               N_REGS       = 4'd14;
 
     localparam [1:0] RESP_OKAY = 2'b00, RESP_SLVERR = 2'b10;
 
@@ -245,7 +265,7 @@ module axi_lite_csr #(
     // ======================================================================
     //  event -> state: the whole point of the module
     // ======================================================================
-    reg                    st_done, st_fault, st_dma, st_tag, st_res;
+    reg                    st_done, st_fault, st_dma, st_tag, st_res, st_img;
     reg [NLOG*LOG_W-1:0]   logits_q;
     reg [IDX_W-1:0]        argmax_q;
     reg [1:0]              irq_en;
@@ -259,12 +279,12 @@ module axi_lite_csr #(
     // The clear is keyed on the REGISTERED `start` output, not on the
     // combinational write decision one cycle earlier, so that "the run begins"
     // is one instant for the status bits and for the accelerator rather than two.
-    reg  [5:0]             stat_clr;            // one cycle, from STATUS_CLR
+    reg  [7:0]             stat_clr;            // one cycle, from STATUS_CLR
 
     always @(posedge clock) begin
         if (!rst_n) begin
             st_done  <= 1'b0; st_fault <= 1'b0; st_dma <= 1'b0;
-            st_tag   <= 1'b0; st_res   <= 1'b0;
+            st_tag   <= 1'b0; st_res   <= 1'b0; st_img <= 1'b0;
             logits_q <= {NLOG*LOG_W{1'b0}};
             argmax_q <= {IDX_W{1'b0}};
         end else begin
@@ -275,11 +295,17 @@ module axi_lite_csr #(
             if (start || stat_clr[3]) st_dma   <= 1'b0;
             if (start || stat_clr[4]) st_tag   <= 1'b0;
             if (start || stat_clr[5]) st_res   <= 1'b0;
+            if (start || stat_clr[7]) st_img   <= 1'b0;
 
             if (done)      st_done  <= 1'b1;
             if (fault)     st_fault <= 1'b1;
             if (dma_error) st_dma   <= 1'b1;
             if (tag_error) st_tag   <= 1'b1;
+            //  From the DMA's one-cycle pulse, which fires only on a successful
+            //  image load. Deliberately NOT derived from img_busy's falling
+            //  edge: img_busy also falls when a bus error abandons the load, and
+            //  the two must not read the same.
+            if (img_done)  st_img   <= 1'b1;
 
             // The latch this module exists for. logits are only meaningful in a
             // logits_valid cycle (logit_out.v:212-217); argmax likewise.
@@ -303,7 +329,8 @@ module axi_lite_csr #(
     wire [DATA_W-1:0] status_word =
         { {(DATA_W-16){1'b0}},
           pc,                                        // [15:8]
-          2'b00, st_res, st_tag, st_dma, st_fault, st_done, running };
+          st_img, img_busy,                          // [7], [6]
+          st_res, st_tag, st_dma, st_fault, st_done, running };
 
     // ======================================================================
     //  the write channel
@@ -351,6 +378,7 @@ module axi_lite_csr #(
     wire [DATA_W-1:0] mg_pb  = wstrb_merge(pb_base,  w_data, w_strb);
     wire [DATA_W-1:0] mg_pm  = wstrb_merge(pm_base,  w_data, w_strb);
     wire [DATA_W-1:0] mg_ps  = wstrb_merge(ps_base,  w_data, w_strb);
+    wire [DATA_W-1:0] mg_img = wstrb_merge(img_base, w_data, w_strb);
 
     // ---- is this write allowed? -----------------------------------------
     wire wr_ro     = (wr_reg == R_STATUS) || (wr_reg == R_RESULT_LO)
@@ -358,14 +386,19 @@ module axi_lite_csr #(
                   || (wr_reg == R_ID);
     wire wr_cfg    = (wr_reg == R_N_INSTR) || (wr_reg == R_WGT_BASE)
                   || (wr_reg == R_PB_BASE) || (wr_reg == R_PM_BASE)
-                  || (wr_reg == R_PS_BASE);
+                  || (wr_reg == R_PS_BASE) || (wr_reg == R_IMG_BASE);
     wire wr_start  = (wr_reg == R_CTRL) && w_data[0] && w_strb[0];
+    wire wr_img    = (wr_reg == R_CTRL) && w_data[1] && w_strb[0];
 
     wire wr_bad_addr = wr_is_prog ? wr_prog_hi
                                   : (wr_reg_hi || (wr_reg >= N_REGS));
     // (3) and (5) of the header: nothing that changes how a run behaves may be
-    // written while one is in progress.
-    wire wr_bad_run  = running && (wr_is_prog || wr_cfg || wr_start);
+    // written while one is in progress. (6): nor while the image is loading -
+    // starting on a half-written image is the same class of silent wrong answer,
+    // and IMG_BASE moving mid-load would be worse still.
+    wire wr_bad_run  = (running  && (wr_is_prog || wr_cfg || wr_start || wr_img))
+                    || (img_busy && (wr_start || wr_img
+                                     || (wr_reg == R_IMG_BASE)));
     // (4): a partial program word would assemble an instruction from two writes
     wire wr_bad_strb = wr_is_prog && (w_strb != {BYTES{1'b1}});
 
@@ -381,7 +414,9 @@ module axi_lite_csr #(
             w_strb  <= {BYTES{1'b0}};
             s_axi_bvalid <= 1'b0;
             s_axi_bresp  <= RESP_OKAY;
-            start    <= 1'b0;
+            start     <= 1'b0;
+            img_start <= 1'b0;
+            img_base  <= {AXI_ADDR_W{1'b0}};
             n_instr  <= {NI_W{1'b0}};       // zero on purpose; see the map
             wgt_base <= {AXI_ADDR_W{1'b0}};
             pb_base  <= {AXI_ADDR_W{1'b0}};
@@ -391,12 +426,13 @@ module axi_lite_csr #(
             pg_addr  <= {PGA_W{1'b0}};
             pg_data  <= {PW_W{1'b0}};
             irq_en   <= 2'b00;
-            stat_clr <= 6'd0;
+            stat_clr <= 8'd0;
         end else begin
             // one-cycle outputs
-            start    <= 1'b0;
-            pg_en    <= 1'b0;
-            stat_clr <= 6'd0;
+            start     <= 1'b0;
+            img_start <= 1'b0;
+            pg_en     <= 1'b0;
+            stat_clr  <= 8'd0;
 
             if (s_axi_awvalid && s_axi_awready) begin
                 aw_addr <= s_axi_awaddr;
@@ -422,14 +458,18 @@ module axi_lite_csr #(
                     pg_data <= w_data;
                 end else begin
                     case (wr_reg)
-                    R_CTRL:       start    <= w_data[0] & w_strb[0];
+                    R_CTRL:       begin
+                                      start     <= w_data[0] & w_strb[0];
+                                      img_start <= w_data[1] & w_strb[0];
+                                  end
                     R_N_INSTR:    n_instr  <= mg_ni[NI_W-1:0];
                     R_IRQ_EN:     irq_en   <= mg_ie[1:0];
-                    R_STATUS_CLR: stat_clr <= w_data[5:0] & {6{w_strb[0]}};
+                    R_STATUS_CLR: stat_clr <= w_data[7:0] & {8{w_strb[0]}};
                     R_WGT_BASE:   wgt_base <= mg_wgt;
                     R_PB_BASE:    pb_base  <= mg_pb;
                     R_PM_BASE:    pm_base  <= mg_pm;
                     R_PS_BASE:    ps_base  <= mg_ps;
+                    R_IMG_BASE:   img_base <= mg_img;
                     default:      ;     // unreachable: wr_err covered the rest
                     endcase
                 end
@@ -479,6 +519,7 @@ module axi_lite_csr #(
                     R_PB_BASE:   s_axi_rdata <= pb_base;
                     R_PM_BASE:   s_axi_rdata <= pm_base;
                     R_PS_BASE:   s_axi_rdata <= ps_base;
+                    R_IMG_BASE:  s_axi_rdata <= img_base;
                     R_RESULT_LO: s_axi_rdata <= logits_q[0 +: 2*LOG_W];
                     R_RESULT_HI: s_axi_rdata <= logits_q[2*LOG_W +: 2*LOG_W];
                     R_ARGMAX:    s_axi_rdata <= {{(DATA_W-3){1'b0}},
@@ -520,9 +561,16 @@ module axi_lite_csr #(
             if (wr_bad_run && wr_start)
                 $display("  [FAULT] %m START written while running. REFUSED: top_seq would ignore it, but wgt_dma's start is unconditional and would reset its parameter index mid-run, so the run would finish with wrong biases. Answered SLVERR, at time %0t",
                          $time);
-            if (wr_bad_run && !wr_start)
-                $display("  [FAULT] %m AXI-Lite %0s write at 0x%h while running, answered SLVERR, at time %0t",
-                         wr_is_prog ? "program" : "config", aw_addr, $time);
+            if (wr_bad_run && wr_img)
+                $display("  [FAULT] %m LOAD_IMAGE written while %0s. REFUSED: the stem reads img_buffer from its first cycle, so overwriting the image under a run - or restarting a load already in flight - produces a feature map built partly from another picture. Answered SLVERR, at time %0t",
+                         running ? "running" : "an image load is in flight", $time);
+            if (wr_bad_run && img_busy && wr_start)
+                $display("  [FAULT] %m START written while the image is still loading. REFUSED: the run would begin on a half-written image. Answered SLVERR, at time %0t",
+                         $time);
+            if (wr_bad_run && !wr_start && !wr_img)
+                $display("  [FAULT] %m AXI-Lite %0s write at 0x%h while %0s, answered SLVERR, at time %0t",
+                         wr_is_prog ? "program" : "config", aw_addr,
+                         running ? "running" : "an image load is in flight", $time);
         end
         //  Qualified on the cycle the RESPONSE is formed, not on the capture
         //  cycle. An earlier version tested `rd_is_prog` when AR was accepted -
@@ -543,17 +591,26 @@ module axi_lite_csr #(
     end
 
     //  `start` must be exactly one cycle wide, or top_seq's S_IDLE admits the
-    //  run twice and wgt_dma resets its parameter index on the second.
-    reg start_q;
+    //  run twice and wgt_dma resets its parameter index on the second. The same
+    //  applies to img_start, which wgt_dma latches.
+    reg start_q, img_start_q;
     always @(posedge clock) begin
-        if (!rst_n) start_q <= 1'b0;
-        else begin
+        if (!rst_n) begin
+            start_q     <= 1'b0;
+            img_start_q <= 1'b0;
+        end else begin
             if (start && start_q) begin
                 $display("ERROR: %m `start` was asserted for more than one cycle at time %0t. top_seq and wgt_dma both take it as a pulse.",
                          $time);
                 $finish;
             end
-            start_q <= start;
+            if (img_start && img_start_q) begin
+                $display("ERROR: %m `img_start` was asserted for more than one cycle at time %0t. wgt_dma takes it as a pulse.",
+                         $time);
+                $finish;
+            end
+            start_q     <= start;
+            img_start_q <= img_start;
         end
     end
 `endif

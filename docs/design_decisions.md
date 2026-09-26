@@ -1498,3 +1498,110 @@ argmax over the 4 int16 logits is the predicted class.
   does. Or if the PS ever needs to *read* the program back for a bug report, which would mean
   giving `top_seq`'s program memory a read port — it has none today, which is why the aperture is
   write-only.
+
+### DD-032 — The image load: HWC in DDR, on the weight DMA's master
+- Status: Accepted
+- Date: 2026-09-26
+- Context: after DD-031 `accel_axi` had exactly one port group that was not an AXI interface, a
+  clock, a reset or an interrupt: `im_wr_*`, 41 bits, the image load. 224×224×3 = 147 KB that the
+  PS has to get into `img_buffer` before every inference. Two questions had to be answered
+  together — what layout the PS writes into DDR, and which master reads it.
+
+- **Decision 1: the DDR layout is HWC (interleaved), not CHW (planar).** The PS writes byte
+  `(y*IW + x)*CIN + c` for channel `c`.
+
+- **Decision 2: `wgt_dma` reads it, over the same AXI master as the weights.** No second master
+  and no arbiter. The module keeps its name.
+
+- Rationale for HWC — and it is the rare case where both sides get simpler:
+  1. **It is one sequential stream.** `img_buffer`'s write port takes `CIN*DATA_W` = 24 bits, one
+     pixel per entry, `wr_data[c*8 +: 8]` = channel `c`. With HWC, three *consecutive* DDR bytes
+     are exactly that word, so the image reuses the byte-granular realigner already in `wgt_dma`
+     with `need = CIN` and no new gather logic at all.
+  2. **CHW would need three concurrent streams 50,176 bytes apart** — precisely the AXI4
+     read-interleaving problem DD-030 had to solve for the parameter blob with per-tile staging,
+     and there the records were 4+4+1 bytes rather than 50 KB apart.
+  3. **It is also what the PS already has.** A JPEG decoder produces interleaved RGB. CHW would
+     force the PS to transpose what its decoder handed it in the right order, to make the
+     hardware's job harder.
+
+- **The contrast with DD-030 is the point of this entry.** That decision faced the same question —
+  interleave or keep planar — and answered it the other way. The difference is not taste:
+  - In DD-030 the artifact **already existed on disk**. `params_b.hex` / `params_m0.hex` /
+    `params_shift.hex` are written by `export.py` and *validated* by `gen_program.py` against each
+    layer's `pchan`. Inventing an interleaved fourth blob would have been a second encoding of
+    numbers that already had one, and this project has twice paid for that class of drift
+    (DD-019, and the stale `image_1` golden set found in Phase 4).
+  - Here the buffer is **produced at run time** by firmware that does not exist yet. There is no
+    artifact to preserve and no validator to keep in step, so the convenient layout is free.
+
+  The golden `software/golden/*/000_input.hex` stays CHW, untouched. `axi_ddr_model.svh`'s
+  `load_img` transposes when it fills the model — deliberately in the model rather than in the
+  testbench, because the model *is* the PS-side contract and the transpose belongs beside the
+  little-endian parameter packing it sits next to. `wgt_dma_tb` then computes its expectation from
+  the CHW golden *independently*, indexed the long way round, so a swapped index shows up as a
+  mismatch instead of cancelling out.
+
+- Rationale for one master rather than two:
+  1. **They are never concurrent, and one master makes that structural.** The image is loaded
+     *before* `start`; the weights are read *during* the run. With one master there is no bus to
+     contend for. Two masters behind a mux would be correct only for as long as the PS behaved,
+     and "correct while the software behaves" is what the CSR's guards exist to stop relying on.
+  2. **No duplicated realigner.** The two-beat window and the byte barrel shift are the fiddliest
+     logic in `wgt_dma`; a second copy is a second place for an off-by-one that only shows up on
+     an unaligned base.
+  3. Measured cost of the image phase: a state, a pixel counter, `need = CIN`, one write port.
+
+- **The name did not change, and that is deliberate.** `wgt_dma` now loads weights, parameters
+  *and* the image, which is broader than its name. DD-030, DD-031 and three dated lab-notebook
+  entries all refer to `wgt_dma`; rewriting dated records to tidy a name is worse than a name that
+  needs one sentence of explanation, and that sentence is in the module header.
+
+- **The image size is structural, not a register.** `CIN * IDEPTH` bytes and `IDEPTH` writes,
+  derived from the parameters `img_buffer` is built with, with an elaboration check tying them.
+  Deliberately *not* a CSR field: a PS that wrote the wrong pixel count would half-fill the image
+  buffer and the run would complete, on a tensor built partly from the previous picture. That is
+  the failure shape T-7 is about, and the fix is the same — do not let a number that can be wrong
+  decide a shape the hardware already knows. An `IMG_PIXELS` register is the extension point if a
+  variable input size is ever wanted, and it would need a bound check against `IDEPTH`.
+
+- **One new guard, and it is the same class as DD-031's START-while-running.** `START` is refused
+  while `img_busy`, and `LOAD_IMAGE` is refused while `running` or while a load is already in
+  flight. The stem reads `img_buffer` from its first cycle, so starting on a half-written image
+  produces a complete, plausible feature map built partly from another photograph, and nothing
+  downstream could notice. `img_busy` is high from the moment the request is *latched*, so there is
+  no window in which a polling PS can see "not busy" between writing LOAD_IMAGE and the load
+  beginning.
+
+  Related: `img_done` is a one-cycle pulse that fires **only on success**, rather than the CSR
+  deriving "loaded" from `img_busy` falling. `img_busy` also falls when a bus error abandons the
+  load, and those two must not read the same to a PS.
+
+- Alternatives considered:
+  - **The image through the AXI-Lite CSR**, as an auto-incrementing data register. It would have
+    made `accel_axi` a complete board-ready top a day earlier, with no new AXI logic at all.
+    Rejected as a stopgap that would then have to be removed: 50,176 single AXI-Lite writes is
+    1–2.5 ms against 5.8 ms of inference, 17–43% overhead, where the DMA is 50,176 cycles ≈
+    0.25 ms, about 4%. Measured: `wgt_dma_tb` case 12 does the whole image in 50,193 cycles,
+    **1.00 pixels per cycle even with the slave inserting R-channel holes** — the write rate is
+    floored by `img_buffer`'s single 24-bit port, not by the bus, since 3 bytes per cycle are
+    consumed out of 16 available.
+  - **A separate `img_dma.v` plus an AXI read mux.** Honest naming and smaller files, at the cost
+    of a duplicated AR generator, FIFO and realigner (~120 lines) and a mux whose correctness
+    depends on the PS never overlapping a load with a run.
+  - **Factoring out `axi_rd_stream.v`** shared by both — which is the condition `wgt_dma`'s own
+    header said would justify the split it originally declined. Still declined: the second consumer
+    lives in the same module and is covered by the same testbench, so a separable module would gain
+    a name and no coverage, and it would refactor 1,300 lines of verified RTL mid-feature.
+
+- Consequences: `accel_axi` drops from 354 to **313 port bits — 196 AXI4 master, 114 AXI-Lite
+  slave, and 3 for clock, reset and interrupt.** There is nothing else on it. That makes it
+  droppable into a block design wired to the PS's `S_AXI_HP` and `M_AXI_HPM`, and
+  `accel_axi_ooc.xdc` has no placeholder input delays left. `accel_sys` goes 499 → 493 (41 bits of
+  image out, 35 of image control in). The remaining gap to a board result is not RTL: it is the
+  implementation run that proves it fits and closes timing with the PS in the picture.
+- Revisit if: frame pipelining is ever wanted — loading image *n+1* while inference *n* runs would
+  make the two phases concurrent and break the "one master is enough" argument, needing either a
+  second master or a proper arbiter, plus a second image buffer. Or if the input size becomes
+  variable, per the `IMG_PIXELS` note above. Or if a camera replaces the SD-card path, in which
+  case the pixel source changes but the HWC layout is if anything more natural.

@@ -9,9 +9,10 @@
 //  testbench file would break; the -i include path it passes to xvlog is
 //  absolute. program_ops.svh is the same pattern for the same reason.
 //
-//  ---- four regions, not one flat array ----------------------------------
+//  ---- five regions, not one flat array ----------------------------------
 //
-//  The DMA reads four DDR regions at four independent base addresses (DD-030).
+//  The DMA reads five DDR regions at five independent base addresses - four for
+//  the weights and parameters (DD-030) and one for the image (DD-032).
 //  Modelling that as one byte array would mean allocating everything between
 //  the bases, so each region is its own array and the address decode picks one.
 //  An address in NO region answers DECERR - which is a real test, not a
@@ -28,6 +29,20 @@
 //  words read straight from the file, so if the DMA's field extraction and this
 //  convention disagree, the scoreboard says so rather than both being wrong in
 //  the same direction.
+//
+//  ---- and the image is TRANSPOSED here, on purpose ----------------------
+//
+//  software/golden/*/000_input.hex is channel-planar (CHW): byte c*IH*IW +
+//  y*IW + x. The DMA reads the image interleaved (HWC): byte (y*IW + x)*CIN + c.
+//  DD-032 records why the DDR layout is HWC - it makes the image one sequential
+//  stream for the DMA and it is what a JPEG decoder hands the PS anyway - and
+//  `load_img` below does the transpose so no new generated artifact is needed.
+//
+//  Doing it here rather than in the testbench is deliberate: this model IS the
+//  PS-side contract, so the transpose belongs next to the little-endian
+//  parameter packing it sits beside. The testbench keeps the golden in CHW and
+//  computes its expectation from that, so a transpose error shows up as a
+//  mismatch rather than cancelling out.
 //
 //  ---- what it checks about the master -----------------------------------
 //
@@ -83,6 +98,8 @@ module axi_ddr_model #(
     parameter [ADDR_W-1:0] PM_BASE  = 32'h2400_0000,
     parameter [ADDR_W-1:0] PS_BASE  = 32'h2800_0000,
     parameter              PN       = 19264,      // parameter entries
+    parameter [ADDR_W-1:0] IMG_BASE = 32'h3000_0000,
+    parameter              IMG_N    = 150528,     // CIN*IH*IW bytes, HWC
 
     parameter AR_LAT   = 4,        // cycles from AR accepted to the first beat
     parameter GAP_MASK = 0,        // 0 = no holes; 7 = a hole ~1 cycle in 8
@@ -118,6 +135,7 @@ module axi_ddr_model #(
     reg [7:0] pbmem [0:PN*4-1];       // params_b.hex,     little-endian
     reg [7:0] pmmem [0:PN*4-1];       // params_m0.hex,    little-endian
     reg [7:0] psmem [0:PN-1];         // params_shift.hex, one byte per line
+    reg [7:0] imem  [0:IMG_N-1];      // the image, HWC (transposed on load)
 
     // Staging for the two word-per-line files, so the little-endian split
     // happens here and not in whoever calls load().
@@ -149,6 +167,28 @@ module axi_ddr_model #(
         end
     endtask
 
+    // ---- the image: read CHW, store HWC ----------------------------------
+    //  chw_file is the golden 000_input.hex, one byte per line, channel-planar.
+    //  ih/iw/cin describe it. See the note in the header for why the transpose
+    //  is here and not in the testbench.
+    reg [7:0] chwbuf [0:IMG_N-1];
+
+    task automatic load_img(input string chw_file, input integer ih,
+                            input integer iw,      input integer cin);
+        integer y, x, c;
+        begin
+            for (li = 0; li < IMG_N; li = li + 1) begin
+                imem[li]   = 8'h00;
+                chwbuf[li] = 8'h00;
+            end
+            $readmemh(chw_file, chwbuf);
+            for (y = 0; y < ih; y = y + 1)
+                for (x = 0; x < iw; x = x + 1)
+                    for (c = 0; c < cin; c = c + 1)
+                        imem[(y*iw + x)*cin + c] = chwbuf[(c*ih + y)*iw + x];
+        end
+    endtask
+
     // ---- the address decode ----------------------------------------------
     //  {mapped, byte}. No output arguments, so it is safe to call from a
     //  combinational block in any tool.
@@ -162,6 +202,8 @@ module axi_ddr_model #(
                 return {1'b1, pmmem[a - PM_BASE]};
             if ((a >= PS_BASE) && (a < (PS_BASE + PN)))
                 return {1'b1, psmem[a - PS_BASE]};
+            if ((a >= IMG_BASE) && (a < (IMG_BASE + IMG_N)))
+                return {1'b1, imem[a - IMG_BASE]};
             return 9'd0;
         end
     endfunction

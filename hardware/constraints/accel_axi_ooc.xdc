@@ -9,20 +9,25 @@
 #    accel_top_ooc.xdc   672 load-port bits with a 0.5 ns placeholder, because
 #                        nothing drove them.
 #    accel_sys_ooc.xdc   those 672 became internal register-to-register paths.
-#                        pg_*, im_wr_* and the config pins kept placeholders.
-#    accel_axi_ooc.xdc   pg_* and the config pins are gone too. What is left is
-#                        two real AXI interfaces, an interrupt, and the image.
+#                        pg_* and the config pins kept placeholders. (im_wr_*
+#                        did too, until DD-032 moved the image onto the master.)
+#    accel_axi_ooc.xdc   pg_*, the config pins AND the image are gone too. What
+#                        is left is two real AXI interfaces and an interrupt.
 #
-#  Measured port bits: 846 -> 499 -> 354, of which 196 are the AXI4 master, 114
-#  the AXI-Lite slave, 41 the image load, and 3 are clock, reset and irq.
+#  Measured port bits: 846 -> 493 -> 313, of which 196 are the AXI4 master, 114
+#  the AXI-Lite slave, and 3 are clock, reset and irq. That is the whole list.
 #
-#  ---- so ONE placeholder remains, and it is 41 bits ----------------------
+#  ---- and NO placeholder remains -----------------------------------------
 #
-#  im_wr_*. The image load path is the next item of work (see accel_axi.v's
-#  header for why it was not folded into the CSR), and until it exists there is
-#  still no launch clock on the other side of those pins. Everything else in
-#  this file is either a genuine interface budget or an exception with a stated
-#  reason. That is the honest state: one placeholder, named, with its size.
+#  This is the first constraint file in the project with no invented number in
+#  it. Every input delay below is a budget for an interface that will genuinely
+#  be timed against the PS on a board, and the one exception (rst_n) has a stated
+#  reason that is a synchroniser rather than a guess.
+#
+#  The image was the last placeholder, 41 bits of im_wr_*, and DD-032 removed it
+#  by having wgt_dma read the image from DDR over the same master as the weights.
+#  Until then this file said "one placeholder remains, named, with its size";
+#  that sentence is now spent.
 #
 #  ---- why the AXI-Lite budget is the same as the AXI4 one -----------------
 #
@@ -65,9 +70,6 @@ set_input_delay  -clock clock 1.000 \
 set_output_delay -clock clock 1.000 \
     [get_ports {s_axi_awready s_axi_wready s_axi_bresp* s_axi_bvalid s_axi_arready \
                 s_axi_rdata* s_axi_rresp* s_axi_rvalid}]
-
-# ---- the one remaining placeholder: 41 bits of image load -------------------
-set_input_delay  -clock clock 0.500 [get_ports {im_wr_*}]
 
 # ---- the interrupt ---------------------------------------------------------
 # Goes to the PS's interrupt controller, which is not a per-cycle path. A budget

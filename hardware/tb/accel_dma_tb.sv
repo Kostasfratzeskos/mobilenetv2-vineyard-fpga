@@ -19,10 +19,11 @@
 //  be indistinguishable from the DMA being right.
 //
 //  What this file contains that accel_tb does not: the DDR map, the slave model,
-//  and the four base-address registers. What it does NOT contain that accel_tb
+//  and the five base-address registers. What it does NOT contain that accel_tb
 //  does: fill_stem_weights, fill_dw_weights, fill_pw_weights, fill_params,
 //  fill_logit_params, serve_load and the `dma` block - 170 lines of testbench
-//  that are now 800 lines of synthesisable RTL.
+//  that are now 800 lines of synthesisable RTL - NOR the image-load loop, since
+//  DD-032 the image comes from DDR over the same AXI master as the weights.
 //
 //  ---- what it can catch that wgt_dma_tb cannot --------------------------
 //
@@ -106,6 +107,7 @@ module accel_dma_tb;
     localparam [31:0] PB_BASE  = 32'h2000_0000;
     localparam [31:0] PM_BASE  = 32'h2400_0000;
     localparam [31:0] PS_BASE  = 32'h2800_0000;
+    localparam [31:0] IMG_BASE = 32'h3000_0000;
 
     // ---- DUT interface ----------------------------------------------------
     logic                      clock, rst_n;
@@ -116,9 +118,8 @@ module accel_dma_tb;
     logic [PGA_W-1:0]          pg_addr;
     logic [PGW-1:0]            pg_data;
 
-    logic                      im_wr_en;
-    logic [IA_W-1:0]           im_wr_addr;
-    logic [CIN*DATA_W-1:0]     im_wr_data;
+    logic                      img_start;
+    wire                       img_busy, img_done;
 
     wire [AXI_ID_W-1:0]   arid;
     wire [AXI_ADDR_W-1:0] araddr;
@@ -160,7 +161,8 @@ module accel_dma_tb;
         .wgt_base(WGT_BASE), .pb_base(PB_BASE),
         .pm_base(PM_BASE),   .ps_base(PS_BASE),
         .pg_en(pg_en), .pg_addr(pg_addr), .pg_data(pg_data),
-        .im_wr_en(im_wr_en), .im_wr_addr(im_wr_addr), .im_wr_data(im_wr_data),
+        .img_base(IMG_BASE), .img_start(img_start),
+        .img_busy(img_busy), .img_done(img_done),
         .m_axi_arid(arid), .m_axi_araddr(araddr), .m_axi_arlen(arlen),
         .m_axi_arsize(arsize), .m_axi_arburst(arburst), .m_axi_arlock(arlock),
         .m_axi_arcache(arcache), .m_axi_arprot(arprot),
@@ -177,6 +179,7 @@ module accel_dma_tb;
         .ADDR_W(AXI_ADDR_W), .DATA_W(AXI_DATA_W), .ID_W(AXI_ID_W),
         .WGT_BASE(WGT_BASE), .WGT_N(WBLOB),
         .PB_BASE(PB_BASE), .PM_BASE(PM_BASE), .PS_BASE(PS_BASE), .PN(PBLOB),
+        .IMG_BASE(IMG_BASE), .IMG_N(CIN*IH*IW),
         .AR_LAT(3), .GAP_MASK(0)
     ) u_ddr (
         .clock(clock), .rst_n(rst_n), .err_on(1'b0), .gaps_on(1'b0),
@@ -194,6 +197,9 @@ module accel_dma_tb;
     //  blobs are the SLAVE's, not this file's: nothing here needs to know what
     //  is in them, which is the difference from accel_tb.
     reg [31:0] prog     [0:511];
+    //  img_mem is still declared because program_ops.svh's load_input fills it,
+    //  and the golden checks share that file. Nothing here writes it into the
+    //  DUT any more - the DMA reads the image from the DDR model instead.
     reg [7:0]  img_mem  [0:NIN-1];
     reg [7:0]  gold_mem [0:MAXOUT-1];
     reg [15:0] gold_log [0:NLOG-1];
@@ -209,7 +215,7 @@ module accel_dma_tb;
     `include "accel_check.svh"
 
     // ======================================================================
-    integer i, y, x, c0;
+    integer i;
     initial begin
         load_op_table;
 
@@ -222,10 +228,14 @@ module accel_dma_tb;
                    "../../software/export/params_b.hex",
                    "../../software/export/params_m0.hex",
                    "../../software/export/params_shift.hex");
+        // The image goes into DDR too now, transposed to HWC by the model
+        // (DD-032). This testbench no longer touches img_buffer at all.
+        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+                       IH, IW, CIN);
 
         start = 0; n_instr = 0;
         pg_en = 0; pg_addr = 0; pg_data = 0;
-        im_wr_en = 0; im_wr_addr = 0; im_wr_data = 0;
+        img_start = 0;
         rst_n = 0;
         repeat (4) @(negedge clock);
         rst_n = 1;
@@ -249,20 +259,15 @@ module accel_dma_tb;
         end
         $display("loaded %0d program words", 8*N_OPS);
 
-        // ---- the image -----------------------------------------------
-        for (y = 0; y < IH; y++) begin
-            for (x = 0; x < IW; x++) begin
-                @(negedge clock);
-                for (c0 = 0; c0 < CIN; c0++)
-                    im_wr_data[c0*DATA_W +: DATA_W] = img_mem[(c0*IH + y)*IW + x];
-                im_wr_addr = y*IW + x;
-                im_wr_en   = 1'b1;
-                @(posedge clock);
-                @(negedge clock);
-                im_wr_en = 1'b0;
-            end
-        end
-        $display("loaded the %0dx%0d image", IH, IW);
+        // ---- the image, over AXI like everything else ----------------
+        @(negedge clock);
+        img_start = 1'b1;
+        @(negedge clock);
+        img_start = 1'b0;
+        @(posedge img_done);
+        @(negedge clock);
+        $display("loaded the %0dx%0d image over AXI4 (%0d pixels, DD-032)",
+                 IH, IW, IH*IW);
         $display("");
 
         // ---- go -------------------------------------------------------
