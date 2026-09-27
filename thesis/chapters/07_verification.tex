@@ -1,0 +1,97 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/04_VERIFICATION.md
+%          docs/references/rtl_review.md (the 43 findings)
+%          docs/claude_project/07_RTL_REVIEW_STATUS.md
+%          sim/** (31 testbenches)
+%
+% THIS CHAPTER IS THE THESIS'S METHODOLOGICAL CONTRIBUTION. It was §6.2 in the
+% first outline - four subsections inside the design chapter - which badly
+% understated it. Budget 12-15 pages.
+%
+% The claim to defend: bit-exactness is not a testing strategy, it is a design
+% method. It changes what questions can be asked. Write it so a committee
+% member who builds accelerators recognises something they do not do.
+% ===========================================================================
+\chapter{Verification Methodology}
+\label{ch:verification}
+
+\section{The Contract: Bit-Exactness Against Golden Vectors}
+\label{sec:bit-exact-contract}
+% The software model emits the exact integer output of every layer; every RTL
+% block and the assembled network reproduces those numbers bit for bit.
+% Four consequences, each worth a paragraph:
+%   1. there is never an argument about "close enough" - it matches or it is
+%      a bug;
+%   2. a failure localises to one layer instead of to "the network";
+%   3. the hardware-vs-software comparison in \cref{ch:evaluation} is not a
+%      separate experiment, it IS the test suite;
+%   4. every transformation in \cref{ch:timing} was provably a reassociation
+%      or a latency change and never a change of value, so one \thElements-element
+%      check regresses the entire timing campaign.
+% Point 4 is the one that made a 43-finding review executable in two days.
+% Say so explicitly - it is the strongest practical argument in the chapter.
+
+\section{Three Levels of Verification}
+\label{sec:three-levels}
+% unit -> integration -> system, and the important claim: each level found
+% bugs the level below STRUCTURALLY could not.
+%   - unit: one engine against a golden vector, no controller;
+%   - integration: a real layer, windows and addresses built by hand in the
+%     testbench - which is why those testbenches became the controller's
+%     specification;
+%   - system: accel_tb, the whole network, \thElements elements over
+%     \thInstructions instructions.
+% \DD{017} is the evidence: two busy bugs that no standalone testbench could
+% have found, which appeared the moment out_stage was shared.
+% Note also that each level was added BEFORE the phase that needed it.
+
+\section{Mutation Testing}
+\label{sec:mutation}
+% How do you know a passing testbench tests anything? Inject a fault and
+% require the suite to fail. pe_array was mutated three ways on 2026-09-11,
+% and the directed cases were designed so that random data could not hide a
+% symmetric wiring mistake.
+% This is the section that answers "your tests pass, but are they any good?" -
+% a question a committee will ask and most theses cannot answer.
+
+\section{Simulation Assertions}
+\label{sec:assertions}
+% The assertion layer catches what golden vectors structurally cannot: a
+% handshake violated, a FIFO overrun, an address out of range - failures that
+% do not change the final numbers on the passing path. Give an example where
+% an assertion fired on something the element comparison would have missed.
+
+\section{Guards Against Stale Artefacts}
+\label{sec:guards}
+% The \DD{019} aftermath, as process rather than as arithmetic
+% (\cref{sec:acc-bound} has the arithmetic). Three guards, each closing a
+% failure that actually occurred:
+%   - export.py recomputes the accumulator bound and exits non-zero if the
+%     network's worst case does not fit the ACC_W it reads out of the RTL;
+%   - gen_program.py refuses a checkpoint-hash mismatch and a MISSING hash -
+%     the missing case is the one that bit, because the export in git was five
+%     weeks older than the checkpoint on disk and neither artefact said so;
+%   - gen_program.py asserts the residual M <= 1 property.
+% The general statement: the project's defence against stale numbers is that
+% the build fails, not that someone remembers.
+
+\section{The External RTL Review}
+\label{sec:rtl-review}
+% 43 findings, and what happened to each (the full table belongs in
+% \cref{ch:decisions} or an appendix, not inline). What to draw out here:
+% several findings were closed DIFFERENTLY from how the review proposed,
+% because "is this number measured or bounded?" gave a better answer than the
+% recommendation - \DD{022} is the clearest case, where the path was decomposed
+% before the code and one register replaced a recommended grouped chain.
+% Be honest about the still-open ones (C-10, C-11, T-6, T-8, T-9, \DD{023});
+% \cref{sec:future} carries them.
+
+\section{What This Method Does Not Cover}
+\label{sec:verification-limits}
+% Required for honesty, and it pre-empts the obvious attack:
+%   - until \DD{033} the \thElements-element check started at 000_input.hex,
+%     so resize and quantisation were unverified (\cref{sec:preproc} closed it);
+%   - bit-exactness is checked on \thImagesVerified{} images, one per class, not on
+%     the validation set - it is a check of the ARITHMETIC, and
+%     \cref{sec:accuracy} is what measures the model;
+%   - simulation is not silicon: nothing here says the design works on a board.

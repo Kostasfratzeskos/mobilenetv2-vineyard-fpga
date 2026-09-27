@@ -1,0 +1,91 @@
+% ===========================================================================
+% ΕΚΤΕΤΑΜΕΝΗ ΕΛΛΗΝΙΚΗ ΠΕΡΙΛΗΨΗ
+%
+% WRITE THIS LAST. It mirrors the English chapters, so every edit to them is an
+% edit here. The section list below already follows the revised structure
+% (verification and integration as chapters of their own), not the first
+% outline - keep the two in step.
+%
+% SOURCE ADVANTAGE: docs/controller_design.md is already in Greek and covers
+% the architecture study, the roofline and the parallelism decision. Feed it
+% into §4 directly instead of translating it into English for \cref{ch:background}
+% and then back again.
+%
+% TYPESETTING NOTE: under LGR the Greek font has no Latin glyphs, so every
+% Latin run - MobileNetV2, FPGA, Vivado, int8, AXI - must be wrapped in
+% \textlatin{...} or it will come out as garbage. This is the single most
+% common way this chapter breaks.
+% ===========================================================================
+\chapter*{Εκτεταμένη Ελληνική Περίληψη}
+\label{ch:greek-summary}
+\addcontentsline{toc}{chapter}{Εκτεταμένη Ελληνική Περίληψη}
+\markboth{Εκτεταμένη Ελληνική Περίληψη}{}
+
+\selectlanguage{greek}
+
+\section{Εισαγωγή}
+% Κίνητρο, στόχοι, συνεισφορές. Αντιστοιχεί στο \cref{ch:introduction}.
+% Να αναφερθούν ρητά τα τρία επίπεδα στόχων (\textlatin{DD-004}).
+
+\section{Θεωρητικό Υπόβαθρο}
+
+\subsection{Συνελικτικά Νευρωνικά Δίκτυα και \textlatin{MobileNetV2}}
+% \cref{sec:cnn}, \cref{sec:mobilenetv2}.
+
+\subsection{Κβαντοποίηση Νευρωνικών Δικτύων}
+% \cref{sec:quantization}. Το σχήμα \textlatin{int8}, η αναδιπλωση του
+% \textlatin{batch normalization}, η επανακβαντοποίηση.
+
+\subsection{Προγραμματιζόμενες Πύλες Πεδίου (\textlatin{FPGAs})}
+% \cref{sec:fpga}.
+
+\subsection{Η Πλατφόρμα \textlatin{Zynq UltraScale+ MPSoC}}
+% \cref{sec:zynq}.
+
+\section{Μοντέλο Λογισμικού Αναφοράς και Ανάλυση Φόρτου}
+
+\subsection{Σύνολο Δεδομένων και Εκπαίδευση}
+% \cref{sec:dataset}, \cref{sec:training}. Να αναφερθεί η διαρροή δεδομένων
+% και ο επαναδιαχωρισμός ανά φύλλο - είναι ουσιαστικό εύρημα, όχι λεπτομέρεια.
+
+\subsection{Κβαντοποίηση σε \textlatin{int8}}
+% \cref{sec:ptq}.
+
+\subsection{Διανύσματα Αναφοράς και Μοντέλο σε \textlatin{C}}
+% \cref{sec:golden}, \cref{sec:c-model}. Εδώ διατυπώνεται το κεντρικό
+% συμβόλαιο της εργασίας: ακρίβεια bit προς bit.
+
+\section{Σχεδίαση του Επιταχυντή}
+% Πηγή: \textlatin{docs/controller\_design.md} - ήδη στα ελληνικά.
+
+\subsection{Αρχιτεκτονική του Επιταχυντή}
+% \cref{sec:arch-overview}.
+
+\subsection{Παραλληλοποίηση των Μονάδων Υπολογισμού}
+% \cref{sec:parallelism}. Ο πίνακας \textlatin{32x16}, η μονάδα
+% \textlatin{depthwise}, η μονάδα \textlatin{stem}.
+
+\subsection{Οργάνωση Μνήμης και Μονάδα Ελέγχου}
+% \cref{sec:memory}, \cref{sec:control}.
+
+\section{Μεθοδολογία Επαλήθευσης}
+% \cref{ch:verification}. ΝΕΑ ΕΝΟΤΗΤΑ σε σχέση με το αρχικό περίγραμμα, και
+% πρέπει να έχει βάρος ανάλογο του αγγλικού κεφαλαίου: είναι η κύρια
+% μεθοδολογική συνεισφορά.
+
+\section{Βελτιστοποίηση Χρονισμού}
+% \cref{ch:timing}. Η πορεία από τα \MHz{\thFmaxBase} στα
+% \MHz{\thFmaxPhaseFour}, με το μέτρημα σε κάθε βήμα.
+
+\section{Ολοκλήρωση με το Σύστημα Επεξεργασίας}
+% \cref{ch:integration}. \textlatin{DMA}, καταχωρητές \textlatin{AXI-Lite},
+% σχεδίαση σε επίπεδο πλακέτας, εφαρμογή στον επεξεργαστή, προεπεξεργασία.
+
+\section{Πειραματική Αξιολόγηση}
+% \cref{ch:evaluation}. Οι μετρημένοι αριθμοί και τα όριά τους - να δηλωθεί
+% ότι η συχνότητα είναι ζώνη τιμών και όχι μία τιμή.
+
+\section{Συμπεράσματα και Μελλοντικές Επεκτάσεις}
+% \cref{ch:conclusion}.
+
+\selectlanguage{english}

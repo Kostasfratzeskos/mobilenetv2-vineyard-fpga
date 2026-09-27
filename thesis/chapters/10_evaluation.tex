@@ -1,0 +1,101 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/05_RESULTS.md  (every measured number)
+%          docs/claude_project/08_OPEN_ITEMS.md §4 and §6 (the gaps and risks)
+%          build/impl_*/ and build/bd_187p5_explore/ via numbers.tex
+%
+% TWO BLOCKING GAPS before this chapter can be written honestly:
+%   1. ACCURACY ON grape_clean IS NOT MEASURED. The only accuracy numbers in
+%      the repository (100.00% float, 100.00% int8) are from the LEAKY split.
+%      Run evaluate.py on data/grape_clean/val with the current checkpoint,
+%      float and int8, and record the per-class breakdown. Expect well below
+%      100% - that is the honest result and it is more defensible.
+%   2. The \MHz{\thFmaxPhaseFour} figure is unattributed (\cref{sec:phase4}).
+% Neither is a big job. Both are load-bearing for this chapter.
+% ===========================================================================
+\chapter{Experimental Evaluation}
+\label{ch:evaluation}
+
+\section{Overall Performance and Resource Utilization}
+\label{sec:overall}
+% The headline table. Separate OUT-OF-CONTEXT from IN-CONTEXT explicitly -
+% they measure different things and mixing them would misreport your own data:
+%
+%   out of context, after the image path:
+%     accel_top  \MHz{\thFmaxAccelTop}  \thLutAccelTop{} LUT
+%     accel_sys  \MHz{\thFmaxAccelSys}  \thLutAccelSys{} LUT
+%     accel_axi  \MHz{\thFmaxAccelAxi}  \thLutAccelAxi{} LUT
+%   in context, ZCU104 block design:
+%     \MHz{\thClkBoard} constrained, WNS +\thWnsBoard{} ns, \thLutBoard{} LUT
+%
+% DSP is \thDspAccelAxi{} (\thDspPctAccelAxi\%) throughout; URAM \thUramAccelAxi{}.
+
+\subsection{Fmax Is a Band, Not a Point}
+\label{sec:fmax-band}
+% One of the more honest results in the thesis, so give it its own subsection.
+% Across seven post-route runs the figure spans roughly 197-208 MHz. The
+% ordering is NON-MONOTONIC IN LOGIC SIZE - the largest design is the fastest -
+% so the spread is the placer, not a cost of the DMA and the CSR. accel_top
+% reproduced EXACTLY on a re-run, which shows the flow is deterministic and the
+% spread is this design's sensitivity to small RTL changes rather than tool
+% noise: accel_sys moved +9.3 MHz from a change that only turned a port into an
+% internal net.
+% Conclusion to state: no point estimate from this flow is defensible, and all
+% seven launch from the same act_buffer URAM read (\cref{sec:dd023}) - only the
+% endpoint moves.
+
+\section{Sequential Optimization Impact Analysis}
+\label{sec:opt-impact}
+% \cref{ch:timing} presents each change with its measurement; this section is
+% the aggregate view - the cumulative curve and the cost in LUT/FF per MHz
+% gained. Do not repeat the narrative, reference it.
+
+\section{Throughput and Latency}
+\label{sec:throughput}
+% \thCycles{} cycles per inference, measured (feeder-busy) in simulation.
+% At \MHz{\thClkBoard}: \thLatencyBoard{} ms. Give the cycle model's prediction
+% alongside and report the error - it came within 7%, which is worth saying
+% because it is a validation of the model in \cref{sec:roofline-analysis}.
+% Weight loading is \thDmaLoadCycles{} cycles against \thCyclesCompute{} of
+% compute: \thLoadOverheadPct\% overhead, none of it hidden (C-11).
+
+\section{Correctness and Accuracy Assessment}
+\label{sec:correctness}
+
+\subsection{Hardware--Software Bit-Exactness}
+\label{sec:bit-exactness-result}
+% \thElements elements over \thInstructions instructions, exact, on
+% \thImagesVerified{} images - one per class, all four argmax outcomes
+% exercised, all ALL PASS. \thTestbenches/\thTestbenches{} testbenches passing.
+% This is the thesis's central result. \cref{ch:verification} is the method;
+% this is the number.
+
+\subsection{Classification Accuracy}
+\label{sec:accuracy}
+% BLOCKED - see the header of this file. Report float and int8 on the
+% leakage-free grape_clean split, the quantisation drop between them, and the
+% per-class breakdown / confusion matrix.
+% Report the leaky 100.00% too, as the thing that was wrong and how it was
+% found (\cref{sec:leakage}). A thesis that explains a retracted number is
+% stronger than one that never had it.
+% Separately: export.py --check 32 gives 32/32 agreement between the integer
+% pipeline and both the float and fake-quant models. That measures the
+% QUANTISATION, not the model, and the distinction should be explicit.
+
+\section{Power Consumption}
+\label{sec:power}
+% Vivado's post-route estimate, clearly labelled ESTIMATED (\cref{sec:overall}
+% is measured; do not let the two sit in one table without a marker).
+% Energy per inference is the comparable quantity for \cref{sec:comparison}.
+
+\section{Comparison with Baselines and Related Work}
+\label{sec:comparison}
+% RENAMED from "Comparison with the Reference Implementation", which was
+% ambiguous and too narrow. Three comparisons, in increasing order of risk:
+%   1. the bit-exact C model on the host CPU (\cref{sec:c-model}) - a fair,
+%      like-for-like baseline because it is the SAME arithmetic;
+%   2. the vendor DPU [xilinx_pg338] on the same device class - the "why not
+%      Vitis-AI?" question, which will be asked;
+%   3. the FPGA accelerators of \cref{sec:related-accel} - and here state the
+%      caveat before the table, not after: different networks, devices,
+%      precisions and reporting conventions make GOP/s comparisons weak. Say
+%      what is comparable (DSP efficiency, MAC/cycle/DSP) and what is not.

@@ -1,0 +1,39 @@
+% ===========================================================================
+% SOURCES: docs/design_decisions.md  (DD-001 .. DD-033, already written)
+%
+% THIS APPENDIX REPLACES "Appendix B: Source Code" from the first outline.
+% A source dump costs pages and is read by nobody; the repository is the
+% source. A decision log is the opposite: it is the cheapest appendix in the
+% thesis - the material exists - and the most useful one at a defence, because
+% every "why did you do it that way?" has a dated, measured answer.
+%
+% Format per entry, kept tight (a short paragraph each, not a page):
+%     DD-nnn | date | the decision | the alternatives | why | the measurement
+% Mark each supporting number as MEASURED, DERIVED or ESTIMATED. That
+% distinction is the project's own standard (\cref{sec:acc-bound}) and showing
+% it applied consistently across 33 decisions is itself an argument.
+%
+% Cross-reference the load-bearing ones from the body rather than repeating
+% them: DD-004 (\cref{sec:objectives}), DD-013/014 (\cref{sec:parallelism}),
+% DD-019 (\cref{sec:acc-bound}), DD-020..DD-026 (\cref{ch:timing}),
+% DD-030..DD-033 (\cref{ch:integration}).
+% ===========================================================================
+\chapter{Design Decision Log}
+\label{ch:decisions}
+
+\section{How to Read This Log}
+\label{sec:decisions-intro}
+% What a DD entry is, when one was written, and the rule that a number is
+% labelled by how it was obtained.
+
+\section{Software and Quantization (DD-001--DD-012)}
+\label{sec:decisions-sw}
+
+\section{Architecture (DD-013--DD-018)}
+\label{sec:decisions-arch}
+
+\section{Timing and Implementation (DD-019--DD-029)}
+\label{sec:decisions-timing}
+
+\section{System Integration (DD-030--DD-033)}
+\label{sec:decisions-integration}

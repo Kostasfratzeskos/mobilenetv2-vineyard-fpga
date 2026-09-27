@@ -1,0 +1,115 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/10_TIMELINE.md (the phase table)
+%          docs/claude_project/05_RESULTS.md §2, §5, §6
+%          docs/latency_map.md
+%          docs/lab_notebook.md  <-- STOPS AT PHASE 3. Write the Phase 4 and
+%            Phase 5 entries BEFORE writing this chapter; the notebook is the
+%            source and the gap is the project's main documentation debt.
+%          docs/design_decisions.md: DD-020..DD-026
+%          build/impl_*/  (every number here is a macro from numbers.tex)
+%
+% Each optimisation is presented WITH its measurement, deliberately: this
+% project's method was measure -> change -> measure, and splitting the changes
+% from their numbers (design in one chapter, results in another) flattens the
+% only narrative in the thesis that has real momentum -
+% \MHz{\thFmaxBase} to \MHz{\thFmaxPhaseFour}, 4.6x, every step attributed.
+% ===========================================================================
+\chapter{Timing Closure and Optimization}
+\label{ch:timing}
+
+\section{First Synthesis Results}
+\label{sec:first-synth}
+% 2026-09-13, the day the estimates stopped being estimates. Two runs:
+% run 1 did not fit (179% BRAM); run 2 fit with two attributes but timing got
+% WORSE (-17.357 ns), because forcing DSPs exposed a 27-deep unregistered
+% cascade. The conclusion that set the whole campaign: 250 MHz is not
+% reachable by constraint - it needs the MAC trees pipelined.
+
+\section{Methodology: A Reproducible Baseline}
+\label{sec:timing-method}
+% Before any optimisation: a fixed 4.000 ns constraint, a place-and-route flow
+% runnable from a shell (scripts/run_impl.sh), and docs/latency_map.md so a
+% pipeline change could be reasoned about across the five feeders that restate
+% each depth. State the Fmax convention from \cref{sec:cad-flow} once here and
+% use it for every number in the chapter.
+% Baseline: WNS \thWnsBase{} ns at 4.000 ns, i.e. \MHz{\thFmaxBase}.
+
+\section{Observability First}
+\label{sec:phase1}
+% Phase 1: T-1, T-2, T-5, T-3, T-4 and the assertion block. NO datapath
+% change and no latency change - the point being to make the next phase
+% debuggable. Cost +94 LUTs and zero DSP/BRAM/URAM, and came out ahead
+% post-route: \MHz{\thFmaxPhaseOne}.
+% The finding worth reporting: T-5 gates L-1, and the review's prescribed T-5
+% fix does not unblock it.
+
+\section{Synchronous Reset}
+\label{sec:sync-reset}
+% \DD{020}. 49 always blocks across 16 files, validated on ONE register first.
+% DPIR-2 warnings 10,940 -> 0; -2,038 LUTs and -1,743 FFs.
+% \MHz{\thFmaxSyncReset}. Small on the clock, large on everything after -
+% it is what made the later phases legible.
+
+\section{Pipelining the Compute Datapath}
+\label{sec:pipelining}
+
+\subsection{The MAC Lane and the Pointwise Array}
+\label{sec:pipeline-mac}
+% L-1, L-2, L-9, L-10, then A-3..A-6, then every constant that encoded the old
+% latency (\cref{sec:latency-contract}). \MHz{\thFmaxPhaseTwoA}.
+% \DD{021}: four use_dsp variants measured rather than argued; D chosen.
+
+\subsection{The Depthwise Engine}
+\label{sec:pipeline-dw}
+% A-2: dw_array gains clock/valid/valid_out so latency is a WIRE rather than a
+% constant restated in five places. \MHz{\thFmaxPhaseTwoB}.
+
+\subsection{The Stem Convolution}
+\label{sec:pipeline-stem}
+% conv3x3_std - the worst path in EVERY run of the project until this point.
+% \MHz{\thFmaxPhaseTwoC}, the single largest step in the campaign. Say why the
+% module that runs once per inference dominated the clock: it is a good
+% reminder that the critical path is not where the cycles are.
+
+\subsection{The Requantization Stage}
+\label{sec:pipeline-requant}
+% L-3, L-7, L-12 absorbed, L-10. \MHz{\thFmaxPhaseTwoD}, and the structural
+% result: the critical path LEAVES THE DATAPATH ENTIRELY and lands on the
+% act_buffer URAM read. Everything after this is memory, not arithmetic.
+
+\section{The Memory Path}
+\label{sec:phase3}
+% \DD{022}, A-1. The path was decomposed BEFORE the code was written, and the
+% decomposition said one register would do where the review recommended a
+% grouped chain. One register: \MHz{\thFmaxPhaseThree}. A-3 never fired.
+% This is the best example in the thesis of analysis beating a recommendation,
+% so give the decomposition itself, not just the outcome.
+
+\section{Correctness Pass}
+\label{sec:phase4}
+% C-5, C-12, L-6, L-13, L-14, L-15, T-10, \DD{024}, \DD{025}, \DD{026}.
+% Also found here: the stale image_1 golden default.
+% \MHz{\thFmaxPhaseFour}.
+% CAVEAT TO STATE PLAINLY: this figure has not been attributed to a specific
+% change (05_RESULTS.md §2). Either do the back-to-back re-run and attribute
+% it, or quote \MHz{\thFmaxPhaseThree} and say why. Do not quote an
+% unattributed number as a result.
+
+\section{The Remaining Bottleneck}
+\label{sec:dd023}
+% \DD{023}: act_buffer read latency 1 -> 2 would move it, and it touches five
+% feeders (\cref{sec:latency-contract}). DEFERRED BY DECISION, not by
+% difficulty - say which, because the difference is the whole point of keeping
+% a decision log.
+% Then the finding from \cref{sec:board-impl} that changes the conclusion: in
+% context the top three paths are wgt_dma's output register into the weight
+% buffers at ZERO logic levels - pure route - not the URAM. So the next move is
+% replicating that 216-bit register per destination buffer, which is far
+% cheaper than \DD{023}. No out-of-context run could have shown that.
+
+\section{Summary of the Progression}
+\label{sec:timing-summary}
+% One table: phase | change | WNS | Fmax | LUT | FF | DSP, straight from the
+% macros. Then the caveat that \cref{sec:fmax-band} develops: across seven
+% post-route runs the design's Fmax is a BAND of roughly 197-208 MHz, and no
+% point estimate from this flow is defensible.

@@ -1,0 +1,63 @@
+% ===========================================================================
+% Numbers that cannot (yet) be derived from a committed artefact.
+%
+% THE RULE: every macro here carries a comment naming where the number came
+% from and how it was obtained. If you cannot write that comment, you do not
+% know the number well enough to print it.
+%
+% This file is the exception, not the pattern. Anything derivable belongs in
+% scripts/thesis_numbers.py, which regenerates generated/numbers.tex from the
+% manifest and the Vivado reports. Whenever a number here becomes derivable -
+% a simulation that writes a machine-readable cycle count, an evaluation
+% script that writes a JSON - move it there and delete it from here.
+%
+% Marked [MEASURED] / [DERIVED] / [ESTIMATED] on the project's own standard
+% (see DD-019 and \cref{sec:acc-bound}).
+% ===========================================================================
+
+% --- verification ---------------------------------------------------------
+% [MEASURED] accel_tb, end-to-end run, 2026-09-22. Element count of the
+% full-network comparison against the golden vectors.
+\newcommand{\thElements}{6\,895\,780}
+% [MEASURED] scripts/gen_program.py output, software/export/program.txt.
+\newcommand{\thInstructions}{64}
+% [MEASURED] scripts/run_all_sims.sh, all passing as of 2026-09-24.
+\newcommand{\thTestbenches}{31}
+% [MEASURED] one image per class; all four argmax outcomes exercised.
+\newcommand{\thImagesVerified}{4}
+
+% --- throughput -----------------------------------------------------------
+% [MEASURED] accel_tb feeder-busy cycle count, 2026-09-13.
+% TODO: have the testbench write this to a file and move the macro into
+% thesis_numbers.py - it is the most-quoted number in the thesis that is still
+% transcribed by hand.
+\newcommand{\thCycles}{951\,833}
+% [MEASURED] compute cycles excluding weight load, from the same run.
+\newcommand{\thCyclesCompute}{952\,062}
+% [MEASURED] accel_dma_tb: whole-network weight load with the real DMA.
+\newcommand{\thDmaLoadCycles}{199\,285}
+% [MEASURED] the testbench task the DMA replaced, same workload.
+\newcommand{\thTaskLoadCycles}{325\,512}
+% [DERIVED] 199285 / 952062. NOTE: supersedes the 65% figure in review finding
+% C-11, which was computed against a fill rate nobody had measured. 65% still
+% stands for features.18.0 alone, the worst single layer.
+\newcommand{\thLoadOverheadPct}{17.3}
+% [DERIVED] \thCycles / \thClkBoard, i.e. 951833 / 187.5e6.
+\newcommand{\thLatencyBoard}{5.08}
+
+% --- per-module cost ------------------------------------------------------
+% [MEASURED] out-of-context synthesis, DD-031. Neither uses a DSP or a BRAM.
+\newcommand{\thLutCsr}{173}
+\newcommand{\thFfCsr}{354}
+\newcommand{\thLutDma}{1\,720}
+\newcommand{\thFfDma}{1\,396}
+
+% --- accuracy -------------------------------------------------------------
+% NOT MEASURED YET. \cref{sec:accuracy} is blocked on this.
+% Run evaluate.py on data/grape_clean/val with the current checkpoint
+% (\thCkptSha) for both float and int8, then fill these in and delete the
+% \TODO markers. The 100.00% figures in the repository are from the LEAKY
+% split and must not be quoted as results.
+\newcommand{\thAccFloat}{\TODO{float acc on grape\_clean}}
+\newcommand{\thAccInt}{\TODO{int8 acc on grape\_clean}}
+\newcommand{\thAccDrop}{\TODO{quantisation drop, pts}}

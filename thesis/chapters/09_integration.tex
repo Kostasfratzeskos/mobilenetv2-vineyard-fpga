@@ -1,0 +1,119 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/08_OPEN_ITEMS.md §2 (what was built, and when)
+%          docs/design_decisions.md: DD-030, DD-031, DD-032, DD-033
+%          hardware/rtl/axi/wgt_dma.v, axi_lite_csr.v
+%          hardware/rtl/top/accel_sys.v, accel_axi.v
+%          scripts/make_bd.tcl, scripts/run_bd.sh, scripts/make_sdcard.py
+%          firmware/** (driver, preprocessing, tests, stubs)
+%          build/bd_187p5_explore/
+%
+% This was §6.8 - one section - in the first outline. It is now a chapter
+% because the work is: an AXI4 master, a CSR block, a board design that closes
+% with a bitstream, a bare-metal application, and a preprocessing path that is
+% bit-exact on the host. That is the Core success tier (DD-004).
+% ===========================================================================
+\chapter{System Integration and the Embedded Application}
+\label{ch:integration}
+
+\section{From an Out-of-Context Core to a System}
+\label{sec:ooc-to-system}
+% Open with the problem, because it explains every design choice after it:
+% accel_top has 846 port bits against the package's ~300 PL user I/O, which is
+% WHY every early number was out of context. Most of those bits were the load
+% side, and they were pins only because nothing drove them.
+% The progression, as a table:
+%     accel_top  846 port bits
+%     accel_sys  493   (wgt_dma absorbed 672 of them)
+%     accel_axi  313   (196 AXI4 master + 114 AXI-Lite + 3 clock/reset/irq)
+% accel_axi has no non-AXI ports at all.
+
+\section{Weight DMA and AXI Interfaces}
+\label{sec:dma}
+% \DD{030}. Read-only AXI4 master, 128-bit RDATA, INCR bursts split at the
+% 4 KB boundary and capped at 256 beats, four outstanding ARs.
+% Two results:
+%   - proven by accel_dma_tb: the whole \thInstructions-op network, \thElements
+%     elements bit-exact, with NO testbench task between ld_req and the weight
+%     buffers;
+%   - it is FASTER than the task it replaces - \thDmaLoadCycles{} load cycles
+%     against \thTaskLoadCycles{} - because it sustains one bank write per cycle.
+% T-7 closed with it: ld_pchan carried three meanings, and ld_op is the fix.
+
+\section{AXI-Lite Control Registers}
+\label{sec:csr}
+% \DD{031}. 13 registers, a 512-word program aperture, an irq line, six SLVERR
+% guards. Proven by accel_axi_tb driving the entire network over nothing but
+% two AXI interfaces, result read back over AXI-Lite.
+% Cost: \thLutCsr{} LUT, \thFfCsr{} FF, no DSP and no BRAM.
+
+\section{The Image Path}
+\label{sec:image-path}
+% \DD{032}. Weights, parameters AND the image on one read master - they are
+% never concurrent, so there is no arbiter. HWC in DDR, 1.00 pixels/cycle,
+% about 0.25 ms.
+% Worth a sentence: axi_lite_csr_tb REGRESSED on the image ports and was right
+% to - a good miniature of \cref{sec:bit-exact-contract} in action.
+
+\section{Constraints Without Invented Numbers}
+\label{sec:xdc}
+% A short section, and a real methodological point. accel_top_ooc.xdc asked to
+% "tighten these once the DMA is real"; in accel_sys_ooc.xdc the load ports are
+% not tightened, they are GONE - internal register-to-register paths with no
+% input delay and no exception. That is strictly stronger than the 0.5 ns
+% budget they had, because a budget is an assumption about a launch clock and a
+% register-to-register path is a measurement.
+% After \DD{032}, accel_axi_ooc.xdc is the first constraint file in the project
+% with no invented number in it.
+
+\section{Board-Level Implementation}
+\label{sec:board-impl}
+% scripts/make_bd.tcl: ZCU104 block design - PS + DDR4 + SmartConnect +
+% accel_axi. Closes at \MHz{\thClkBoard} with WNS +\thWnsBoard{} ns, and
+% produces a bitstream and an XSA.
+% \thLutBoard{} LUT (\thLutPctBoard\%), \thBramBoard{} BRAM, \thUramBoard{} URAM,
+% \thDspBoard{} DSP.
+%
+% Two findings no out-of-context run could have produced, and they are the
+% reason this section exists:
+%   1. THE PL CLOCK GRID IS COARSE. 1500 MHz over an integer divider gives only
+%      150 / 166.7 / 187.5 / 214.3 / 250 MHz, and requesting 200 yields 187.5
+%      SILENTLY. Quote \MHz{\thClkBoard}, the constrained clock, not the
+%      achievable \MHz{\thFmaxBoard} - see \cref{sec:cad-flow}.
+%   2. THE CRITICAL PATH MOVED. In context the top three paths are wgt_dma's
+%      output register into the weight buffers at zero logic levels - pure
+%      route - not act_buffer's URAM (\cref{sec:dd023}).
+% Against accel_axi alone post-route (\MHz{\thFmaxAccelAxi}), the full system
+% costs about 8% of the clock: much less than "the board is the unknown" implied.
+
+\section{The Processing System Application}
+\label{sec:ps-app}
+% firmware/. The driver (accel_drv.c), the CSR map (accel_csr.h), the image
+% source (img_src.c), the platform layer (plat_zynq.c).
+% The sequence: SD card -> DDR -> PL -> result.
+% Report that it is verified WITHOUT A BOARD: test_csr_map.c, test_drv_seq.c
+% and test_preproc.c run on the host against stubs, and `make lint`
+% compile-checks the bare-metal sources. Say what that does and does not buy
+% (\cref{sec:verification-limits}).
+
+\section{Preprocessing on the Target}
+\label{sec:preproc-target}
+% \DD{033}, from the hardware side; \cref{sec:preproc} has the algorithm.
+% The point to make here: this was the last unverified link in the chain. The
+% \thElements-element bit-exactness began at 000_input.hex, so until this
+% existed the thesis could not claim an image-to-class result even in
+% simulation - only a tensor-to-class one.
+
+\section{Staging the SD Card}
+\label{sec:sdcard}
+% scripts/make_sdcard.py stages the card with a KNOWN ANSWER, not just the
+% blobs - so a board bring-up can fail loudly rather than plausibly. One
+% paragraph; it is a small script with a good idea in it.
+
+\section{What Remains for a Board Run}
+\label{sec:board-remaining}
+% Be exact and unhedged. There is no more accelerator RTL and no more Vivado
+% work between here and bring-up. What is untested is hardware itself: DDR
+% training, the application on silicon, and real inference.
+% If a board run happens before submission, this section becomes a result and
+% moves into \cref{ch:evaluation}. If it does not, this is the honest state and
+% \cref{sec:future} carries it.

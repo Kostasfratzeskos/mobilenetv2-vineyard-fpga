@@ -1,0 +1,144 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/02_SOFTWARE_AND_QUANTIZATION.md
+%          docs/phase2_export_explained.md
+%          docs/references/ReferenceModelExplained.md
+%          software/export/manifest.json, scripts/analyze_workload.py
+%          docs/design_decisions.md: DD-009, DD-010, DD-011, DD-019
+%
+% START HERE. This is the first chapter to write: the work is finished, it has
+% not changed since 2026-07-24, and it is documented better than any other
+% part of the project.
+% ===========================================================================
+\chapter{Software Reference Model and Workload Analysis}
+\label{ch:software}
+
+\section{Dataset}
+\label{sec:dataset}
+% The four classes: \thClassList. Sources, counts, the split.
+
+\subsection{Data Leakage and Leaf-Level Resplit}
+\label{sec:leakage}
+% Tell this straight: the first split reported 100.00% float and 100.00% int8,
+% and those numbers were wrong because augmented duplicates of the same leaf
+% appeared in both train and validation. scripts/resplit_dataset.py resplits by
+% leaf. The honest accuracy on grape_clean is lower and it is the one reported
+% in \cref{sec:accuracy}.
+%
+% This belongs in the thesis rather than being quietly dropped: it is a
+% failure mode endemic to the plant-disease literature (\cref{sec:related-plant})
+% and finding it in your own work is the evidence that the measurement
+% discipline is real.
+
+\section{Model Training}
+\label{sec:training}
+% Transfer learning from ImageNet, the schedule, the augmentation, the
+% checkpoint. Record the checkpoint hash: \thCkptSha{} (truncated; the manifest
+% carries all 64 hex digits). Every result in this thesis is against that one
+% checkpoint, and saying so is what makes the rest reproducible.
+
+\section{Post-Training Quantization to int8}
+\label{sec:ptq}
+
+\subsection{Quantization Scheme}
+\label{sec:quant-scheme}
+% Per-channel weights, per-tensor activations; the scales in the manifest; the
+% m0/shift fixed-point requantiser. Use the notation from \cref{sec:uniform-quant}.
+
+\subsection{Residual Addition}
+\label{sec:residual-add}
+% \DD{009}. Two inputs at different scales into one output scale. Include the
+% property gen_program.py asserts on every run (residual M <= 1) and say why a
+% property checked by a script beats a property checked by a reviewer.
+
+\subsection{Global Average Pooling}
+\label{sec:gap}
+% \DD{010}. The integer mean and its rounding - exact, because
+% \cref{ch:verification} compares it element by element.
+
+\subsection{Integer Logits and Argmax}
+\label{sec:logits}
+% \DD{011}. The int16 classifier tail; why argmax on integer logits is
+% identical to argmax on the dequantised ones.
+
+\section{Parameter Export and Golden Vectors}
+\label{sec:export}
+
+\subsection{Export Format and Manifest}
+\label{sec:manifest}
+% What export.py emits: int8 weights, int32 bias, m0/shift per channel, and a
+% manifest of \thManifestOps{} ops carrying ckpt_sha256. Note the guard:
+% gen_program.py refuses a hash mismatch AND a missing hash. The second case is
+% the one that actually bit (\cref{sec:acc-bound}).
+
+\subsection{Golden Vectors}
+\label{sec:golden}
+% The central artefact of the thesis. The exporter emits the exact integer
+% output of every layer; the hardware is required to reproduce them bit for
+% bit. State the contract here in one sentence and let \cref{ch:verification}
+% build the method on it.
+
+\subsection{Provable Accumulator Bound}
+\label{sec:acc-bound}
+% THE \DD{019} STORY. Structure it as: what was done, why it was reasonable,
+% why it was wrong, what replaced it.
+%
+%   ACC_W = 21 was justified by a MEASUREMENT: max|acc+bias| = 20,888 against
+%   a limit of +-1,048,576, a 50x margin. Five weeks later the model was
+%   retrained and one channel of features.3.conv.0.0 acquired a bias of
+%   1,184,089 - which does not fit a 21-bit signed accumulator on its own, for
+%   ANY input. The hardware wrapped negative, ReLU6 clamped to zero, and
+%   2,215,904 of \thElements elements were wrong downstream, silently.
+%
+%   The fix was not ACC_W = 26. It was replacing the measurement with a bound
+%   the exporter recomputes on every run and exits non-zero on:
+%
+\begin{equation}
+  \lvert \mathrm{acc} + b \rvert \;\le\;
+  \Bigl( \sum_{\mathrm{taps}} \lvert w_{oc,\mathrm{tap}} \rvert \Bigr)
+  \cdot \max \lvert a \rvert \;+\; \lvert b_{oc} \rvert
+  \label{eq:acc-bound}
+\end{equation}
+%
+%   max|a| is a property of the number format, not of the data, so no image can
+%   exceed it. Land the general lesson, because it recurs in \cref{ch:timing}
+%   and \cref{sec:risks}: a retrain invalidates measurements, not bounds.
+
+\section{Bit-Exact C Reference Model}
+\label{sec:c-model}
+% Op by op, the same integer arithmetic as the exporter, in C. It is the
+% executable specification the RTL is written against, and it is also what
+% runs on the PS in \cref{ch:integration}.
+
+\section{Input Preprocessing}
+\label{sec:preproc}
+% \DD{033}. NEW SECTION - not in the original outline, and it closes a real
+% hole: the \thElements-element bit-exactness started at 000_input.hex, so
+% resize and quantisation were outside every check in the project until this
+% was written. Cover the resize, the normalisation, the rounding mode
+% (and why fenv.h rather than a C99 version test), and the bit-exactness
+% against the golden input tensor.
+% Verified on the host without a board - see firmware/test/test_preproc.c.
+
+\section{Workload Analysis}
+\label{sec:workload}
+
+\subsection{MAC Distribution per Layer Type}
+\label{sec:mac-dist}
+% \thMacsConv{} MACs in the convolution layers. The distribution is the whole
+% argument for the architecture in \cref{ch:architecture}:
+%   pointwise \thPwMacPct\% | depthwise \thDwMacPct\% | stem \thStemMacPct\%
+% Say which total you are quoting and why - \thMacs{} includes the GAP
+% accumulations, which are additions without a multiply.
+% Generate the table and the figure from scripts/analyze_workload.py.
+
+\subsection{Roofline Analysis}
+\label{sec:roofline-analysis}
+% The model from \cref{sec:roofline}, applied. Weights are \thWeightMB{} MB and
+% activations stay on chip, so the design is compute-bound - which is what
+% licenses spending \thDspPctAccelAxi\% of the DSPs on one array.
+
+\section{Identifying the Operations to Accelerate}
+\label{sec:what-to-accelerate}
+% The conclusion the chapter has been building to, and the bridge into
+% \cref{ch:architecture}: pointwise first and biggest, depthwise separately
+% because its dataflow differs, the stem once, everything else shared.

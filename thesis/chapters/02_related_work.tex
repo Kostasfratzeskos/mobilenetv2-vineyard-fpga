@@ -1,0 +1,59 @@
+% ===========================================================================
+% SOURCES: docs/references/*.pdf (the papers are already in the repository)
+%          docs/controller_design.md sections 1-2 (the Angel-Eye / WP486 study
+%          that chose this architecture) - in Greek, translate as you go
+%
+% WRITE THIS AFTER the design chapters. "Positioning" is a claim about what you
+% built, so it cannot be written before you have written what you built.
+% ===========================================================================
+\chapter{Related Work}
+\label{ch:related}
+
+\section{Deep Learning for Plant Disease Detection}
+\label{sec:related-plant}
+% PlantVillage [hughes2015plantvillage] and the CNN baseline
+% [mohanty2016plantdisease]; the grapevine IoT service [morellos2024iot].
+% The point to land: the accuracy problem is largely solved in software, and
+% the open problem is doing it in the field within a power budget. That is the
+% gap this thesis addresses, and it is why the thesis is an architecture
+% contribution rather than a modelling one.
+%
+% Be explicit about the dataset-leakage issue here as well as in
+% \cref{sec:leakage}: published accuracies on PlantVillage-derived splits are
+% frequently inflated by augmented duplicates of the same leaf. This thesis
+% found exactly that in its own first split and resplit the data by leaf.
+
+\section{CNN Accelerators on FPGAs}
+\label{sec:related-accel}
+% Organise by what each one decided, not chronologically:
+%   - loop tiling / design-space exploration: [zhang2015optimizing],
+%     [ma2017optimizing]
+%   - embedded end-to-end flows: [qiu2016goingdeeper], [guo2018angeleye]
+%   - framework generators: [umuroglu2017finn], [venieris2016fpgaconvnet],
+%     [duarte2018hls4ml]
+%   - depthwise-separable specifically: [bai2018dwsep]
+%   - dataflow taxonomy and the energy argument: [chen2017eyeriss],
+%     [sze2017efficient]
+%   - the vendor answer: the Xilinx DPU [xilinx_pg338]
+% Angel-Eye [guo2018angeleye] deserves the most space: it is the closest
+% comparable (embedded Zynq, quantised, instruction-driven) and it is what
+% controller_design.md actually studied before choosing this architecture.
+
+\section{Positioning of This Thesis}
+\label{sec:positioning}
+% Three honest distinctions, none of them "ours is faster":
+%
+%   1. VERIFICATION. Most of the accelerator literature reports accuracy after
+%      quantisation. This design reports bit-exactness against its own software
+%      reference - \thElements elements over \thInstructions instructions - which
+%      is a strictly stronger and much rarer claim. \cref{ch:verification}.
+%
+%   2. HAND-WRITTEN RTL over HLS [xilinx_pg338, venieris2016fpgaconvnet]. Say
+%      plainly that this costs development time and buys control; cite the
+%      timing work in \cref{ch:timing} as the evidence that the control was
+%      worth having, since the 4.6x Fmax improvement came from decisions at a
+%      level HLS does not expose.
+%
+%   3. SCOPE. A single network, fully specialised, rather than a general
+%      framework. The instruction set exists (\cref{ch:isa}) but it compiles one
+%      model. Say so; it is a limitation, not a feature.

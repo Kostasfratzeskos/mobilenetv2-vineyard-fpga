@@ -1,0 +1,84 @@
+% ---------------------------------------------------------------------------
+% Packages and settings.
+%
+% This is the part that the official NTUA template will want to own. When the
+% .cls/.sty arrive from the school, keep whatever the template provides and
+% delete the duplicate from here; the chapter files under chapters/ do not
+% depend on anything in this file beyond \chapter, \section and the usual
+% float environments, so they carry over untouched.
+% ---------------------------------------------------------------------------
+
+% --- language -------------------------------------------------------------
+% The manuscript is English; the extended summary and the front matter are
+% Greek. babel's `greek' option with LGR is the classic NTUA/pdflatex setup and
+% is what the template PDF was typeset with. Switch a block of Greek on with
+% \selectlanguage{greek} (greek_summary.tex does this already).
+\usepackage[LGR,T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[greek,english]{babel}
+% Modern monotonic Greek is babel's default for `greek' and is what you want.
+% Do NOT add \languageattribute{greek}{ancient} or {polutoniko}.
+%
+% Under LGR the Greek font has no Latin glyphs: every Latin run inside Greek
+% text (MobileNetV2, FPGA, AXI, int8) must be wrapped in \textlatin{...}.
+
+% --- mathematics and symbols ----------------------------------------------
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+
+% --- figures and tables ---------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{figures/}{generated/}}
+\usepackage{booktabs}     % \toprule/\midrule/\bottomrule - no vertical rules
+\usepackage{multirow}
+\usepackage{siunitx}      % \SI{202}{\mega\hertz}, aligned numeric columns
+\sisetup{group-separator={,}, detect-weight=true}
+\usepackage{subcaption}
+\usepackage{float}
+
+% --- code listings --------------------------------------------------------
+% Verilog and C both appear in the text. Keep listings short: whole modules
+% belong in the repository, not in the manuscript.
+\usepackage{listings}
+\usepackage{xcolor}
+\definecolor{lstkw}{rgb}{0.10,0.25,0.60}
+\definecolor{lstcomment}{rgb}{0.35,0.45,0.35}
+\definecolor{lstbg}{rgb}{0.975,0.975,0.975}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{lstkw}\bfseries,
+  commentstyle=\color{lstcomment}\itshape,
+  backgroundcolor=\color{lstbg},
+  frame=single, rulecolor=\color{black!20},
+  numbers=left, numberstyle=\tiny\color{black!45},
+  breaklines=true, captionpos=b, columns=fullflexible,
+  showstringspaces=false,
+}
+\lstdefinestyle{verilog}{language=Verilog}
+\lstdefinestyle{c}{language=C}
+
+% --- cross references -----------------------------------------------------
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+\crefname{chapter}{Chapter}{Chapters}
+\crefname{section}{Section}{Sections}
+\crefname{figure}{Figure}{Figures}
+\crefname{table}{Table}{Tables}
+\crefname{listing}{Listing}{Listings}
+
+% --- the numbers ----------------------------------------------------------
+% Generated from the repository by scripts/thesis_numbers.py; regenerate with
+% `make numbers`. Never type one of these figures into the text by hand - see
+% the header of that script for why.
+\input{generated/numbers}
+% Numbers that cannot be derived from a committed artefact. Each one carries a
+% comment naming its source. If a figure is in neither file, it does not go in
+% the text.
+\input{manual_numbers}
+
+% --- shorthands -----------------------------------------------------------
+\newcommand{\DD}[1]{DD-#1}                       % \DD{019} -> DD-019
+\newcommand{\file}[1]{\texttt{#1}}               % a path or an identifier
+\newcommand{\MHz}[1]{\SI{#1}{\mega\hertz}}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}

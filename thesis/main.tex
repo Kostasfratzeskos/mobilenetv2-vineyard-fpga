@@ -1,0 +1,87 @@
+% ===========================================================================
+% Vineyard Disease Detection on an FPGA Platform
+% Diploma thesis - NTUA, School of ECE, Microprocessors and Digital Systems Lab
+%
+% Build:  make          (or: latexmk -pdf main.tex)
+%
+% ---------------------------------------------------------------------------
+% REPLACING THIS FILE WITH THE OFFICIAL TEMPLATE
+%
+% This preamble exists so the manuscript compiles today. It is NOT the school
+% template - that has to come from the supervisor as .cls/.tex sources (the
+% PDF is a render and cannot be used as a source).
+%
+% When it arrives:
+%   1. keep the template's own main file and its document class;
+%   2. keep its title page, approval page and copyright page - do not retype
+%      them, they are prescribed;
+%   3. \input the same chapter files listed below, in the same order;
+%   4. merge preamble.tex into the template's preamble, dropping anything the
+%      template already provides.
+% Nothing under chapters/ depends on this file, so step 3 is the whole port.
+% ===========================================================================
+
+% `book' rather than `report' for \frontmatter/\mainmatter and the roman/arabic
+% page-numbering split the school template uses.
+\documentclass[11pt,a4paper,twoside,openright]{book}
+
+\usepackage[a4paper,inner=3.5cm,outer=2.5cm,top=3cm,bottom=3cm]{geometry}
+\input{preamble}
+
+\begin{document}
+
+% ---------------------------------------------------------------------------
+% Front matter. Prescribed by the school - replace wholesale with the
+% template's versions, do not retype.
+% ---------------------------------------------------------------------------
+\frontmatter\pagenumbering{roman}
+
+\input{frontmatter/titlepage}      % placeholder; use the template's
+
+\input{frontmatter/abstract_gr}    % Perilipsi + Lexeis Kleidia
+\input{frontmatter/abstract_en}    % Abstract + Keywords
+\input{frontmatter/acknowledgements}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+% ---------------------------------------------------------------------------
+% Extended Greek summary. Written LAST: it mirrors the English chapters, so
+% every edit to them is an edit here.
+% ---------------------------------------------------------------------------
+\input{chapters/greek_summary}
+
+% ---------------------------------------------------------------------------
+% Main matter.
+% ---------------------------------------------------------------------------
+\mainmatter\pagenumbering{arabic}
+
+\input{chapters/01_introduction}
+\input{chapters/02_related_work}
+\input{chapters/03_background}
+\input{chapters/04_setup_tools}
+\input{chapters/05_software_model}
+\input{chapters/06_architecture}
+\input{chapters/07_verification}
+\input{chapters/08_timing_closure}
+\input{chapters/09_integration}
+\input{chapters/10_evaluation}
+\input{chapters/11_conclusion}
+
+% ---------------------------------------------------------------------------
+% Appendices.
+% ---------------------------------------------------------------------------
+\appendix
+\input{chapters/app_a_isa}
+\input{chapters/app_b_decisions}
+\input{chapters/app_c_reproduction}
+
+% ---------------------------------------------------------------------------
+% Bibliography. IEEEtran matches the reference style in the template PDF; if
+% it is not installed, `unsrt' is the closest thing in a base TeX Live.
+% ---------------------------------------------------------------------------
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

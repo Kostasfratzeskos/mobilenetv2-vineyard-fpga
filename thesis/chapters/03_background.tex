@@ -1,0 +1,143 @@
+% ===========================================================================
+% SOURCES: docs/controller_design.md (Greek - the roofline and the parallelism
+%            study are here; reuse the Greek text for the extended summary
+%            rather than translating twice)
+%          docs/references/MobileNetOrigPaper.pdf, 1712.05877v1.pdf (Jacob),
+%            wp486-deep-learning-int8.pdf, ug579-ultrascale-dsp.pdf,
+%            ug1085-zynq-ultrascale-trm.pdf
+%
+% DISCIPLINE FOR THIS CHAPTER: background earns its place only where a later
+% chapter depends on it. Every subsection below should end up cited from
+% chapters 5-10. If one is not, cut it - a thesis is not a textbook.
+% ===========================================================================
+\chapter{Background and Technical Foundations}
+\label{ch:background}
+
+\section{Convolutional Neural Networks}
+\label{sec:cnn}
+
+\subsection{Convolutional Layers}
+\label{sec:conv-layers}
+% Keep short. The loop nest defined here is reused verbatim in
+% \cref{sec:tiling} and \cref{ch:architecture}, so fix the notation now:
+% OH, OW, IC, OC, KH, KW, stride, padding - and use it everywhere after.
+
+\subsection{Training and Transfer Learning}
+\label{sec:transfer}
+% ImageNet pretraining [deng2009imagenet] -> fine-tuning on 4 grape classes.
+% Only as much as \cref{sec:training} needs.
+
+\section{The MobileNetV2 Architecture}
+\label{sec:mobilenetv2}
+
+\subsection{Depthwise Separable Convolution}
+\label{sec:dwsep}
+% [howard2017mobilenets]. Give the MAC-count argument, because it is what
+% justifies having two separate engines in \cref{ch:architecture}: the
+% pointwise convolutions carry \thPwMacPct\% of the MACs and the depthwise
+% ones \thDwMacPct\%, which is why they get 512 MACs/cycle and 16 channels
+% respectively rather than equal budgets.
+
+\subsection{Inverted Residual Blocks and Linear Bottlenecks}
+\label{sec:inverted-residual}
+% [sandler2018mobilenetv2]. The residual connection is what forces the
+% requantisation question in \cref{sec:residual-add}; flag that forward.
+
+\subsection{Network Structure}
+\label{sec:mbv2-structure}
+% The table of blocks. Generate it from software/export/manifest.json rather
+% than copying it from the paper - this thesis runs a 4-class variant, and the
+% classifier is \thClasses{} outputs, not 1000.
+
+\section{Quantization of Neural Networks}
+\label{sec:quantization}
+
+\subsection{Uniform Quantization}
+\label{sec:uniform-quant}
+% [jacob2018quantization], [krishnamoorthi2018whitepaper]. Define scale and
+% zero-point once, here, in the notation \cref{sec:quant-scheme} will use.
+
+\subsection{Per-Tensor and Per-Channel Quantization}
+\label{sec:per-channel}
+
+\subsection{Batch Normalization Folding}
+\label{sec:bn-folding}
+% [ioffe2015batchnorm] for BN itself; folding is what produces the large
+% per-channel biases that broke ACC_W in \DD{019}. Set that up here and pay it
+% off in \cref{sec:acc-bound}.
+
+\subsection{Integer-Only Inference and Requantization}
+\label{sec:requant-theory}
+% The fixed-point multiplier (m0, shift) and rounding. This is the single most
+% load-bearing subsection in the chapter: \cref{sec:requant-lanes} implements
+% it and \cref{ch:verification} checks it bit for bit, so the rounding rule
+% must be stated exactly, not approximately.
+
+\section{Field-Programmable Gate Arrays}
+\label{sec:fpga}
+
+\subsection{FPGA Architecture}
+\label{sec:fpga-arch}
+% [betz1999architecture]. Brief.
+
+\subsection{DSP48E2 Slices}
+\label{sec:dsp48}
+% [xilinx_ug579]. The internal pipeline registers matter to \cref{ch:timing}
+% and the int8 packing question matters to \DD{021} - cover both, skip the rest.
+
+\subsection{Block RAM and UltraRAM}
+\label{sec:bram-uram}
+% [xilinx_ug573]. URAM read latency is the reason 250 MHz was not reached
+% (\DD{023}); give it enough space that \cref{sec:dd023} can just refer back.
+
+\subsection{FPGA CAD Flow and Timing Analysis}
+\label{sec:cad-flow}
+% [xilinx_ug901]. Define WNS, slack and Fmax here, and define how this thesis
+% computes Fmax from WNS: Fmax = 1000/(T - WNS). State the caveat that for a
+% MET constraint this is a capability and the operating clock is the
+% constrained one - \cref{sec:board-impl} depends on that distinction.
+
+\subsection{Hardware Description Languages}
+\label{sec:hdl}
+% [ieee2001verilog]. Why Verilog-2001 specifically.
+
+\subsection{High-Level Synthesis}
+\label{sec:hls}
+% Present fairly, then say why this thesis did not use it. \cref{sec:positioning}
+% and \cref{ch:timing} carry the argument; do not repeat it here.
+
+\subsection{Comparison of FPGAs with CPUs, GPUs and ASICs}
+\label{sec:fpga-vs}
+% [sze2017efficient]. Keep to the energy-per-inference framing that
+% \cref{sec:power} will return to.
+
+\section{The Zynq UltraScale+ MPSoC}
+\label{sec:zynq}
+
+\subsection{Processing System and Programmable Logic}
+\label{sec:ps-pl}
+% [xilinx_ug1085], [xilinx_ds891]. Include the PL clocking arrangement: the
+% grid is coarse (1500 MHz over an integer divider gives 150 / 166.7 / 187.5 /
+% 214.3 / 250 MHz only), and requesting 200 silently yields 187.5. That fact
+% is a result in \cref{sec:board-impl}, so it needs a home in the background.
+
+\subsection{The AXI Protocol Family}
+\label{sec:axi}
+% [arm_axi], [arm_axistream], [xilinx_pg021]. Cover exactly what wgt_dma and
+% axi_lite_csr use: INCR bursts, the 4 KB boundary rule, the 256-beat cap,
+% outstanding transactions, and AXI-Lite's error responses. Nothing else.
+
+\section{Design Principles of CNN Accelerators}
+\label{sec:accel-principles}
+
+\subsection{Loop Tiling and Unrolling}
+\label{sec:tiling}
+% [zhang2015optimizing], [ma2017optimizing]. Define Tm, Tn, Tc in the notation
+% \cref{sec:pw-array} uses, so DD-013 (32x16) and DD-014 (Tc=16) can be stated
+% as choices in that space rather than re-derived.
+
+\subsection{The Roofline Model}
+\label{sec:roofline}
+% [williams2009roofline]. docs/controller_design.md already contains the
+% roofline for this design; \cref{sec:roofline-analysis} presents the result,
+% so keep this to the model itself.

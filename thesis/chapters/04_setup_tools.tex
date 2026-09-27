@@ -1,0 +1,66 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/11_REPO_MAP.md
+%          scripts/README.md, scripts/run_*.sh, scripts/*.tcl
+%          firmware/README.md, firmware/Makefile
+%
+% KEEP THIS CHAPTER SHORT - 4 to 6 pages. It is the chapter most likely to
+% bloat into product descriptions nobody reads. The test for every sentence:
+% does a reader need it to reproduce or to judge a result in chapter 10?
+% ===========================================================================
+\chapter{Experimental Setup and Development Tools}
+\label{ch:setup}
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{The ZCU104 Evaluation Board}
+\label{sec:zcu104}
+% [xilinx_ug1267]. The part is XCZU7EV-ffvc1156-2-e. Give the resource table
+% once, here, and refer back to it from every utilisation result:
+%   DSP48E2 1728 | CLB LUT 230400 | CLB FF 460800 | BRAM 312 | URAM 96
+% \cref{sec:ps-pl} covers the architecture; this covers the board.
+
+\subsection{Host Development System}
+\label{sec:host}
+% CPU, RAM, OS. This matters for exactly one number - the CPU baseline in
+% \cref{sec:comparison} - so state it precisely and move on.
+
+\section{Development Tools}
+\label{sec:tools}
+
+\subsection{Vivado Design Suite 2022.2}
+\label{sec:vivado}
+% Version 2022.2.2 exactly. Note that synthesis and implementation are driven
+% from scripts (scripts/synth.tcl, scripts/impl.tcl, run via run_synth.sh and
+% run_impl.sh), not from the GUI, and say why: a result that cannot be
+% regenerated from a shell is not a measurement. scripts/make_project.tcl
+% exists for GUI inspection and is not the shipping flow.
+
+\subsection{Vivado Simulator (xsim)}
+\label{sec:xsim}
+% Driven by scripts/run_sim.sh and scripts/run_all_sims.sh.
+
+\subsection{PyTorch}
+\label{sec:pytorch}
+% [paszke2019pytorch]. Training and post-training quantisation only - the
+% integer pipeline that the hardware matches is the exporter's, not PyTorch's.
+
+\subsection{C Toolchain}
+\label{sec:c-toolchain}
+% Two distinct toolchains, and the distinction is worth one sentence each:
+% the host gcc that builds the bit-exact reference model and the firmware unit
+% tests, and the aarch64 bare-metal toolchain for the PS application.
+
+\subsection{Automation Scripts and Version Control}
+\label{sec:automation}
+% The point of this subsection is the methodology, not the file list. Say:
+% every architectural number is recomputed by analyze_workload.py from the
+% manifest rather than hard-coded; every figure in this manuscript comes from
+% scripts/thesis_numbers.py for the same reason; the checkpoint is tracked in
+% Git LFS and its SHA-256 is carried in the manifest so a golden set can never
+% again be silently older than the weights it claims to describe (\DD{019}).
+
+\subsection{Vitis Unified Software Platform}
+\label{sec:vitis}
+% Where the XSA from \cref{sec:board-impl} goes, and how the PS application is
+% built against it.

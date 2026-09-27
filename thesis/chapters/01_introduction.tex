@@ -1,0 +1,48 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/01_PROJECT_BRIEF.md
+%          docs/design_decisions.md (DD-004, the tiered scope)
+%
+% WRITE THIS LAST but one. The introduction promises what the thesis delivers,
+% and you cannot write the promise honestly until chapters 5-10 exist.
+% ===========================================================================
+\chapter{Introduction}
+\label{ch:introduction}
+
+\section{Motivation}
+\label{sec:motivation}
+% Vineyard disease detection as an agricultural problem; why inference has to
+% happen in the field rather than in a datacentre (connectivity, latency,
+% power); why an FPGA rather than a CPU, a GPU or a phone.
+% Ground this in [morellos2024iot] - the IoT grapevine-monitoring service is
+% the application context this thesis accelerates.
+
+\section{Objectives and Scope}
+\label{sec:objectives}
+% State the tiered scope from DD-004 explicitly and early - Foundation / Core /
+% Stretch. It is unusual to publish one's own success criteria in a thesis and
+% it is the honest thing to do here, because the tiering is what made the
+% result defensible when the board work ran late.
+%
+% State also the deliberate constraint: hand-written Verilog-2001, not HLS and
+% not a vendor IP core. Say why (layer-level control and understanding), and
+% forward-reference \cref{sec:hls} where the alternative is discussed.
+
+\section{Contributions}
+\label{sec:contributions}
+% Claim only what is measured. A defensible list:
+%   1. an int8 MobileNetV2 accelerator, hand-written RTL, \thDspAccelAxi DSPs,
+%      bit-exact against its software reference over \thElements elements;
+%   2. a verification method built on golden vectors that makes "close enough"
+%      an impossible answer (\cref{ch:verification});
+%   3. a measured timing-closure progression, \MHz{\thFmaxBase} to
+%      \MHz{\thFmaxPhaseFour} out of context, each step attributed
+%      (\cref{ch:timing});
+%   4. a complete PS integration - DMA, CSR, block design, bit-exact C
+%      preprocessing - closing at \MHz{\thClkBoard} in context
+%      (\cref{ch:integration}).
+% Do not claim a board result unless one exists by submission.
+
+\section{Thesis Outline}
+\label{sec:outline}
+% One short paragraph per chapter. Write it from the final table of contents,
+% not from this skeleton.

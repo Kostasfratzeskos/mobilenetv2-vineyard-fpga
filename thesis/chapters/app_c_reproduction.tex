@@ -1,0 +1,49 @@
+% ===========================================================================
+% SOURCES: docs/claude_project/11_REPO_MAP.md
+%          scripts/README.md, firmware/README.md, README.md
+%
+% The other half of what "Appendix B: Source Code" was trying to do, done
+% usefully: not the code, but enough to re-run it.
+% ===========================================================================
+\chapter{Building and Reproducing the Results}
+\label{ch:reproduction}
+
+\section{Repository Layout}
+\label{sec:repo-layout}
+% One table, one line per top-level directory. From 11_REPO_MAP.md.
+
+\section{Reproducing the Software Model}
+\label{sec:repro-sw}
+% Training, quantisation, export. State the checkpoint hash (\thCkptSha) and
+% that it is tracked in Git LFS - a reader who gets a different hash is not
+% reproducing this thesis and should know immediately.
+
+\section{Running the Simulations}
+\label{sec:repro-sim}
+% scripts/run_sim.sh for one testbench, run_all_sims.sh for all
+% \thTestbenches. Say what a pass looks like (ALL PASS and the element count),
+% so the claim in \cref{sec:bit-exactness-result} is checkable rather than
+% quotable.
+
+\section{Synthesis and Implementation}
+\label{sec:repro-impl}
+% run_synth.sh and run_impl.sh, with TOP and PERIOD. Note that every number in
+% \cref{ch:timing} and \cref{ch:evaluation} came from these two scripts, and
+% that the outputs land in build/<run>/ with the reports the numbers were
+% parsed from.
+
+\section{The Block Design and the Bitstream}
+\label{sec:repro-bd}
+% run_bd.sh, make_bd.tcl, and where the XSA and the bitstream land.
+
+\section{Building and Staging the PS Application}
+\label{sec:repro-ps}
+% firmware/Makefile: the host unit tests, `make lint', and the bare-metal
+% build. Then make_sdcard.py and the known-answer file it stages.
+
+\section{Regenerating the Numbers in This Document}
+\label{sec:repro-numbers}
+% scripts/thesis_numbers.py -> thesis/generated/numbers.tex, and the rule that
+% every figure in the manuscript comes from there or from manual_numbers.tex.
+% Worth one honest paragraph on why: a number copied by hand is true only until
+% the thing it measured changes, which is \DD{019} restated for prose.
