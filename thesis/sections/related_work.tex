@@ -7,7 +7,7 @@
 % built, so it cannot be written before you have written what you built.
 % ===========================================================================
 \chapter{Related Work}
-\label{ch:related}
+\label{chap:related}
 
 \section{Deep Learning for Plant Disease Detection}
 \label{sec:related-plant}
@@ -19,7 +19,7 @@
 % contribution rather than a modelling one.
 %
 % Be explicit about the dataset-leakage issue here as well as in
-% \cref{sec:leakage}: published accuracies on PlantVillage-derived splits are
+% Section~\ref{sec:leakage}: published accuracies on PlantVillage-derived splits are
 % frequently inflated by augmented duplicates of the same leaf. This thesis
 % found exactly that in its own first split and resplit the data by leaf.
 
@@ -46,14 +46,14 @@
 %   1. VERIFICATION. Most of the accelerator literature reports accuracy after
 %      quantisation. This design reports bit-exactness against its own software
 %      reference - \thElements elements over \thInstructions instructions - which
-%      is a strictly stronger and much rarer claim. \cref{ch:verification}.
+%      is a strictly stronger and much rarer claim. Chapter~\ref{chap:verification}.
 %
 %   2. HAND-WRITTEN RTL over HLS [xilinx_pg338, venieris2016fpgaconvnet]. Say
 %      plainly that this costs development time and buys control; cite the
-%      timing work in \cref{ch:timing} as the evidence that the control was
+%      timing work in Chapter~\ref{chap:timing} as the evidence that the control was
 %      worth having, since the 4.6x Fmax improvement came from decisions at a
 %      level HLS does not expose.
 %
 %   3. SCOPE. A single network, fully specialised, rather than a general
-%      framework. The instruction set exists (\cref{ch:isa}) but it compiles one
+%      framework. The instruction set exists (Chapter~\ref{appendix:isa}) but it compiles one
 %      model. Say so; it is a limitation, not a feature.

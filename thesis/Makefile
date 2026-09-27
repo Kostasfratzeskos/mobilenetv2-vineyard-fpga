@@ -3,7 +3,7 @@
 #
 #   make            numbers + figures + the PDF
 #   make numbers    regenerate generated/numbers.tex from the repository
-#   make figures    figures/*.svg -> figures/*.pdf (needs Inkscape on PATH)
+#   make figures    images/*/*.svg -> .pdf (needs Inkscape on PATH)
 #   make pdf        latexmk only
 #   make watch      rebuild on save
 #   make todo       list every TODO marker left in the manuscript
@@ -19,11 +19,12 @@ PYTHON    ?= python
 LATEXMK   ?= latexmk
 INKSCAPE  ?= inkscape
 
-SVG := $(wildcard figures/*.svg)
+# Graphics follow the template's layout: images/<chapter-name>/<file>.
+SVG := $(wildcard images/*/*.svg)
 PDF := $(SVG:.svg=.pdf)
 
 TEX := $(MAIN).tex preamble_additions.tex manual_numbers.tex \
-       $(wildcard sections/*.tex) $(wildcard frontmatter/*.tex)
+       $(wildcard sections/*.tex)
 
 .PHONY: all pdf numbers figures watch todo wc clean distclean
 
@@ -53,12 +54,12 @@ generated/numbers.tex:
 # -shell-escape and the `svg' package at build time.
 figures: $(PDF)
 
-figures/%.pdf: figures/%.svg
+images/%.pdf: images/%.svg
 	$(INKSCAPE) $< --export-type=pdf --export-filename=$@
 
 # --- writing aids ---------------------------------------------------------
 todo:
-	@grep -rn "TODO" sections/ frontmatter/ manual_numbers.tex || echo "no TODOs left"
+	@grep -rn "TODO" sections/ manual_numbers.tex || echo "no TODOs left"
 
 wc:
 	@which texcount > /dev/null 2>&1 \

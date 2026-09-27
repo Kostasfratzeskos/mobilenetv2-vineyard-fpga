@@ -7,12 +7,12 @@
 %          hardware/rtl/**
 %
 % This chapter describes WHAT WAS BUILT and why. It does NOT contain the
-% timing-closure narrative (\cref{ch:timing}) or the verification method
-% (\cref{ch:verification}) - both were split out so this chapter stays
+% timing-closure narrative (Chapter~\ref{chap:timing}) or the verification method
+% (Chapter~\ref{chap:verification}) - both were split out so this chapter stays
 % readable. Resist pulling them back in.
 % ===========================================================================
 \chapter{Accelerator Architecture}
-\label{ch:architecture}
+\label{chap:architecture}
 
 \section{Proposed Accelerator Architecture}
 \label{sec:arch-overview}
@@ -27,7 +27,7 @@
 % produce results; addressing, windowing and sequencing live in the feeders and
 % the controller. Two consequences worth stating, because they pay off later:
 % every engine is unit-testable against a golden vector with no controller
-% present (\cref{ch:verification}), and the integration testbenches that build
+% present (Chapter~\ref{chap:verification}), and the integration testbenches that build
 % windows by hand became the specification of the controller.
 
 \section{Parallelizing the Compute Engines}
@@ -36,19 +36,19 @@
 \subsection{Pointwise Convolution: A \texorpdfstring{$32 \times 16$}{32x16} MAC Array}
 \label{sec:pw-array}
 % \DD{013}. Tm=32 output lanes x Tn=16 input channels = 512 MAC/cycle, chosen
-% against the tiling space of \cref{sec:tiling} and the \thPwMacPct\% MAC share
-% of \cref{sec:mac-dist}. Output-stationary; accumulation over ceil(IC/Tn)
+% against the tiling space of Section~\ref{sec:tiling} and the \thPwMacPct\% MAC share
+% of Section~\ref{sec:mac-dist}. Output-stationary; accumulation over ceil(IC/Tn)
 % cycles. Broadcast activations, per-lane weights.
 \begin{figure}[t]
   \centering
-  % figures/pe_array.pdf is produced from the SVG by `make figures', which
+  % images/accelerator-design/pe_array.pdf is produced from the SVG by `make figures', which
   % needs Inkscape. The guard keeps the manuscript compiling on a machine that
   % does not have it yet - a missing figure should not stop you writing.
-  \IfFileExists{figures/pe_array.pdf}{%
-    \includegraphics[width=\linewidth]{pe_array.pdf}%
+  \IfFileExists{images/accelerator-design/pe_array.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/pe_array.pdf}%
   }{%
     \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
-      \texttt{figures/pe\_array.pdf} not built --- run \texttt{make figures}
+      \texttt{images/accelerator-design/pe\_array.pdf} not built --- run \texttt{make figures}
     \vspace{2em}}}%
   }
   \caption{The pointwise MAC array. The $T_m = 32$ lanes share one broadcast of
@@ -71,7 +71,7 @@
 \subsection{Requantization Lanes}
 \label{sec:requant-lanes}
 % The shared out_stage. \DD{016}: sharing it took the predicted DSP count from
-% ~634 to 442. Implements \cref{sec:requant-theory} exactly.
+% ~634 to 442. Implements Section~\ref{sec:requant-theory} exactly.
 
 \subsection{Datapath Widths}
 \label{sec:widths}
@@ -85,7 +85,7 @@
 \subsection{On-Chip Activations and Off-Chip Weights}
 \label{sec:mem-split}
 % Activations never leave the chip; weights stream from DDR. Justify from
-% \cref{sec:roofline-analysis}: \thWeightMB{} MB of weights against activations
+% Section~\ref{sec:roofline-analysis}: \thWeightMB{} MB of weights against activations
 % that fit in URAM.
 
 \subsection{Activation Pool and Static Allocation}
@@ -95,7 +95,7 @@
 
 \subsection{Weight, Parameter and Image Buffers}
 \label{sec:buffers}
-% Sizes, banking, and the address-width headroom noted in \cref{sec:risks}:
+% Sizes, banking, and the address-width headroom noted in Section~\ref{sec:risks}:
 % features.18.0 uses 800 of 1024 entries, and the classifier is small only
 % because this model has \thClasses{} classes.
 
@@ -111,7 +111,7 @@
 \subsection{Instruction Format and Program Compiler}
 \label{sec:isa-format}
 % scripts/gen_program.py compiles manifest.json to the program. Full encoding
-% in \cref{ch:isa}; here, only the shape and the six opcodes.
+% in Chapter~\ref{appendix:isa}; here, only the shape and the six opcodes.
 
 \subsection{Feeders and Handshaking}
 \label{sec:feeders}
@@ -126,12 +126,12 @@
 % \DD{016}, \DD{017}. out_stage shared across engines; res_feeder needs no
 % multiplier; gap_feeder needs no DSP; the classifier needs no feeder at all.
 % \DD{017} - two busy bugs that appeared only when sharing became real - is
-% evidence for \cref{sec:three-levels} and should be cross-referenced there.
+% evidence for Section~\ref{sec:three-levels} and should be cross-referenced there.
 
 \section{Latency as a Contract}
 \label{sec:latency-contract}
 % SOURCE: docs/latency_map.md. Pipeline depths are restated in five feeders, so
 % a kernel cannot change in isolation. This is the structural fact that made
-% the timing work in \cref{ch:timing} expensive, and A-2 (dw_array exporting
+% the timing work in Chapter~\ref{chap:timing} expensive, and A-2 (dw_array exporting
 % valid/valid_out so latency is a wire rather than a constant) is the fix
-% pattern. Put the latency table here and refer to it from \cref{ch:timing}.
+% pattern. Put the latency table here and refer to it from Chapter~\ref{chap:timing}.

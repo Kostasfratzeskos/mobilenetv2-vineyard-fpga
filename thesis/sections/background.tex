@@ -11,7 +11,7 @@
 % chapters 5-10. If one is not, cut it - a thesis is not a textbook.
 % ===========================================================================
 \chapter{Background and Technical Foundations}
-\label{ch:background}
+\label{chap:background}
 
 \section{Convolutional Neural Networks}
 \label{sec:cnn}
@@ -19,13 +19,13 @@
 \subsection{Convolutional Layers}
 \label{sec:conv-layers}
 % Keep short. The loop nest defined here is reused verbatim in
-% \cref{sec:tiling} and \cref{ch:architecture}, so fix the notation now:
+% Section~\ref{sec:tiling} and Chapter~\ref{chap:architecture}, so fix the notation now:
 % OH, OW, IC, OC, KH, KW, stride, padding - and use it everywhere after.
 
 \subsection{Training and Transfer Learning}
 \label{sec:transfer}
 % ImageNet pretraining [deng2009imagenet] -> fine-tuning on 4 grape classes.
-% Only as much as \cref{sec:training} needs.
+% Only as much as Section~\ref{sec:training} needs.
 
 \section{The MobileNetV2 Architecture}
 \label{sec:mobilenetv2}
@@ -33,7 +33,7 @@
 \subsection{Depthwise Separable Convolution}
 \label{sec:dwsep}
 % [howard2017mobilenets]. Give the MAC-count argument, because it is what
-% justifies having two separate engines in \cref{ch:architecture}: the
+% justifies having two separate engines in Chapter~\ref{chap:architecture}: the
 % pointwise convolutions carry \thPwMacPct\% of the MACs and the depthwise
 % ones \thDwMacPct\%, which is why they get 512 MACs/cycle and 16 channels
 % respectively rather than equal budgets.
@@ -41,7 +41,7 @@
 \subsection{Inverted Residual Blocks and Linear Bottlenecks}
 \label{sec:inverted-residual}
 % [sandler2018mobilenetv2]. The residual connection is what forces the
-% requantisation question in \cref{sec:residual-add}; flag that forward.
+% requantisation question in Section~\ref{sec:residual-add}; flag that forward.
 
 \subsection{Network Structure}
 \label{sec:mbv2-structure}
@@ -55,7 +55,7 @@
 \subsection{Uniform Quantization}
 \label{sec:uniform-quant}
 % [jacob2018quantization], [krishnamoorthi2018whitepaper]. Define scale and
-% zero-point once, here, in the notation \cref{sec:quant-scheme} will use.
+% zero-point once, here, in the notation Section~\ref{sec:quant-scheme} will use.
 
 \subsection{Per-Tensor and Per-Channel Quantization}
 \label{sec:per-channel}
@@ -64,13 +64,13 @@
 \label{sec:bn-folding}
 % [ioffe2015batchnorm] for BN itself; folding is what produces the large
 % per-channel biases that broke ACC_W in \DD{019}. Set that up here and pay it
-% off in \cref{sec:acc-bound}.
+% off in Section~\ref{sec:acc-bound}.
 
 \subsection{Integer-Only Inference and Requantization}
 \label{sec:requant-theory}
 % The fixed-point multiplier (m0, shift) and rounding. This is the single most
-% load-bearing subsection in the chapter: \cref{sec:requant-lanes} implements
-% it and \cref{ch:verification} checks it bit for bit, so the rounding rule
+% load-bearing subsection in the chapter: Section~\ref{sec:requant-lanes} implements
+% it and Chapter~\ref{chap:verification} checks it bit for bit, so the rounding rule
 % must be stated exactly, not approximately.
 
 \section{Field-Programmable Gate Arrays}
@@ -82,20 +82,20 @@
 
 \subsection{DSP48E2 Slices}
 \label{sec:dsp48}
-% [xilinx_ug579]. The internal pipeline registers matter to \cref{ch:timing}
+% [xilinx_ug579]. The internal pipeline registers matter to Chapter~\ref{chap:timing}
 % and the int8 packing question matters to \DD{021} - cover both, skip the rest.
 
 \subsection{Block RAM and UltraRAM}
 \label{sec:bram-uram}
 % [xilinx_ug573]. URAM read latency is the reason 250 MHz was not reached
-% (\DD{023}); give it enough space that \cref{sec:dd023} can just refer back.
+% (\DD{023}); give it enough space that Section~\ref{sec:dd023} can just refer back.
 
 \subsection{FPGA CAD Flow and Timing Analysis}
 \label{sec:cad-flow}
 % [xilinx_ug901]. Define WNS, slack and Fmax here, and define how this thesis
 % computes Fmax from WNS: Fmax = 1000/(T - WNS). State the caveat that for a
 % MET constraint this is a capability and the operating clock is the
-% constrained one - \cref{sec:board-impl} depends on that distinction.
+% constrained one - Section~\ref{sec:board-impl} depends on that distinction.
 
 \subsection{Hardware Description Languages}
 \label{sec:hdl}
@@ -103,13 +103,13 @@
 
 \subsection{High-Level Synthesis}
 \label{sec:hls}
-% Present fairly, then say why this thesis did not use it. \cref{sec:positioning}
-% and \cref{ch:timing} carry the argument; do not repeat it here.
+% Present fairly, then say why this thesis did not use it. Section~\ref{sec:positioning}
+% and Chapter~\ref{chap:timing} carry the argument; do not repeat it here.
 
 \subsection{Comparison of FPGAs with CPUs, GPUs and ASICs}
 \label{sec:fpga-vs}
 % [sze2017efficient]. Keep to the energy-per-inference framing that
-% \cref{sec:power} will return to.
+% Section~\ref{sec:power} will return to.
 
 \section{The Zynq UltraScale+ MPSoC}
 \label{sec:zynq}
@@ -119,7 +119,7 @@
 % [xilinx_ug1085], [xilinx_ds891]. Include the PL clocking arrangement: the
 % grid is coarse (1500 MHz over an integer divider gives 150 / 166.7 / 187.5 /
 % 214.3 / 250 MHz only), and requesting 200 silently yields 187.5. That fact
-% is a result in \cref{sec:board-impl}, so it needs a home in the background.
+% is a result in Section~\ref{sec:board-impl}, so it needs a home in the background.
 
 \subsection{The AXI Protocol Family}
 \label{sec:axi}
@@ -133,11 +133,11 @@
 \subsection{Loop Tiling and Unrolling}
 \label{sec:tiling}
 % [zhang2015optimizing], [ma2017optimizing]. Define Tm, Tn, Tc in the notation
-% \cref{sec:pw-array} uses, so DD-013 (32x16) and DD-014 (Tc=16) can be stated
+% Section~\ref{sec:pw-array} uses, so DD-013 (32x16) and DD-014 (Tc=16) can be stated
 % as choices in that space rather than re-derived.
 
 \subsection{The Roofline Model}
 \label{sec:roofline}
 % [williams2009roofline]. docs/controller_design.md already contains the
-% roofline for this design; \cref{sec:roofline-analysis} presents the result,
+% roofline for this design; Section~\ref{sec:roofline-analysis} presents the result,
 % so keep this to the model itself.

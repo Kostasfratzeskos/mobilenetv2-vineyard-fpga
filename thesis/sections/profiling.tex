@@ -10,7 +10,7 @@
 % part of the project.
 % ===========================================================================
 \chapter{Software Reference Model and Workload Analysis}
-\label{ch:software}
+\label{chap:software}
 
 \section{Dataset}
 \label{sec:dataset}
@@ -22,10 +22,10 @@
 % and those numbers were wrong because augmented duplicates of the same leaf
 % appeared in both train and validation. scripts/resplit_dataset.py resplits by
 % leaf. The honest accuracy on grape_clean is lower and it is the one reported
-% in \cref{sec:accuracy}.
+% in Section~\ref{sec:accuracy}.
 %
 % This belongs in the thesis rather than being quietly dropped: it is a
-% failure mode endemic to the plant-disease literature (\cref{sec:related-plant})
+% failure mode endemic to the plant-disease literature (Section~\ref{sec:related-plant})
 % and finding it in your own work is the evidence that the measurement
 % discipline is real.
 
@@ -42,7 +42,7 @@
 \subsection{Quantization Scheme}
 \label{sec:quant-scheme}
 % Per-channel weights, per-tensor activations; the scales in the manifest; the
-% m0/shift fixed-point requantiser. Use the notation from \cref{sec:uniform-quant}.
+% m0/shift fixed-point requantiser. Use the notation from Section~\ref{sec:uniform-quant}.
 
 \subsection{Residual Addition}
 \label{sec:residual-add}
@@ -53,7 +53,7 @@
 \subsection{Global Average Pooling}
 \label{sec:gap}
 % \DD{010}. The integer mean and its rounding - exact, because
-% \cref{ch:verification} compares it element by element.
+% Chapter~\ref{chap:verification} compares it element by element.
 
 \subsection{Integer Logits and Argmax}
 \label{sec:logits}
@@ -68,13 +68,13 @@
 % What export.py emits: int8 weights, int32 bias, m0/shift per channel, and a
 % manifest of \thManifestOps{} ops carrying ckpt_sha256. Note the guard:
 % gen_program.py refuses a hash mismatch AND a missing hash. The second case is
-% the one that actually bit (\cref{sec:acc-bound}).
+% the one that actually bit (Section~\ref{sec:acc-bound}).
 
 \subsection{Golden Vectors}
 \label{sec:golden}
 % The central artefact of the thesis. The exporter emits the exact integer
 % output of every layer; the hardware is required to reproduce them bit for
-% bit. State the contract here in one sentence and let \cref{ch:verification}
+% bit. State the contract here in one sentence and let Chapter~\ref{chap:verification}
 % build the method on it.
 
 \subsection{Provable Accumulator Bound}
@@ -100,14 +100,14 @@
 \end{equation}
 %
 %   max|a| is a property of the number format, not of the data, so no image can
-%   exceed it. Land the general lesson, because it recurs in \cref{ch:timing}
-%   and \cref{sec:risks}: a retrain invalidates measurements, not bounds.
+%   exceed it. Land the general lesson, because it recurs in Chapter~\ref{chap:timing}
+%   and Section~\ref{sec:risks}: a retrain invalidates measurements, not bounds.
 
 \section{Bit-Exact C Reference Model}
 \label{sec:c-model}
 % Op by op, the same integer arithmetic as the exporter, in C. It is the
 % executable specification the RTL is written against, and it is also what
-% runs on the PS in \cref{ch:integration}.
+% runs on the PS in Chapter~\ref{chap:integration}.
 
 \section{Input Preprocessing}
 \label{sec:preproc}
@@ -125,7 +125,7 @@
 \subsection{MAC Distribution per Layer Type}
 \label{sec:mac-dist}
 % \thMacsConv{} MACs in the convolution layers. The distribution is the whole
-% argument for the architecture in \cref{ch:architecture}:
+% argument for the architecture in Chapter~\ref{chap:architecture}:
 %   pointwise \thPwMacPct\% | depthwise \thDwMacPct\% | stem \thStemMacPct\%
 % Say which total you are quoting and why - \thMacs{} includes the GAP
 % accumulations, which are additions without a multiply.
@@ -133,12 +133,12 @@
 
 \subsection{Roofline Analysis}
 \label{sec:roofline-analysis}
-% The model from \cref{sec:roofline}, applied. Weights are \thWeightMB{} MB and
+% The model from Section~\ref{sec:roofline}, applied. Weights are \thWeightMB{} MB and
 % activations stay on chip, so the design is compute-bound - which is what
 % licenses spending \thDspPctAccelAxi\% of the DSPs on one array.
 
 \section{Identifying the Operations to Accelerate}
 \label{sec:what-to-accelerate}
 % The conclusion the chapter has been building to, and the bridge into
-% \cref{ch:architecture}: pointwise first and biggest, depthwise separately
+% Chapter~\ref{chap:architecture}: pointwise first and biggest, depthwise separately
 % because its dataflow differs, the stem once, everything else shared.

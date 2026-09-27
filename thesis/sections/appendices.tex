@@ -1,7 +1,11 @@
 % ===========================================================================
-% The appendices, wrapped in the environment from the template's
-% \usepackage[toc,page]{appendix} - that is what puts the divider page in and
-% adds the group to the table of contents.
+% The appendices.
+%
+% The template's own appendices.tex uses \appendix followed by \chapter* plus
+% an explicit \addcontentsline per appendix - NOT the appendices environment
+% from \usepackage[toc,page]{appendix}, even though that package is loaded.
+% Matched here so the table of contents comes out the way the supervisor's
+% other theses do.
 %
 % Appendix B replaces "Source Code" from the first outline. A source dump
 % costs pages and is read by nobody; the repository is the source. The
@@ -9,10 +13,8 @@
 % in docs/design_decisions.md - and the most useful one at a defence.
 % ===========================================================================
 
-\begin{appendices}
+\appendix
 
 \input{sections/app_a_isa}
 \input{sections/app_b_decisions}
 \input{sections/app_c_reproduction}
-
-\end{appendices}

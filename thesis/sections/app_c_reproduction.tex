@@ -5,8 +5,9 @@
 % The other half of what "Appendix B: Source Code" was trying to do, done
 % usefully: not the code, but enough to re-run it.
 % ===========================================================================
-\chapter{Building and Reproducing the Results}
-\label{ch:reproduction}
+\chapter*{Appendix C: Building and Reproducing the Results}
+\label{appendix:reproduction}
+\addcontentsline{toc}{chapter}{Appendix C: Building and Reproducing the Results}
 
 \section{Repository Layout}
 \label{sec:repo-layout}
@@ -22,13 +23,13 @@
 \label{sec:repro-sim}
 % scripts/run_sim.sh for one testbench, run_all_sims.sh for all
 % \thTestbenches. Say what a pass looks like (ALL PASS and the element count),
-% so the claim in \cref{sec:bit-exactness-result} is checkable rather than
+% so the claim in Section~\ref{sec:bit-exactness-result} is checkable rather than
 % quotable.
 
 \section{Synthesis and Implementation}
 \label{sec:repro-impl}
 % run_synth.sh and run_impl.sh, with TOP and PERIOD. Note that every number in
-% \cref{ch:timing} and \cref{ch:evaluation} came from these two scripts, and
+% Chapter~\ref{chap:timing} and Chapter~\ref{chap:evaluation} came from these two scripts, and
 % that the outputs land in build/<run>/ with the reports the numbers were
 % parsed from.
 

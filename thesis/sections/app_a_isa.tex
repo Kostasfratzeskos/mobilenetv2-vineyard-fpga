@@ -6,8 +6,9 @@
 % Generate the encoding table from gen_program.py rather than transcribing it.
 % An appendix that disagrees with the assembler is worse than no appendix.
 % ===========================================================================
-\chapter{Accelerator Instruction Set}
-\label{ch:isa}
+\chapter*{Appendix A: Accelerator Instruction Set}
+\label{appendix:isa}
+\addcontentsline{toc}{chapter}{Appendix A: Accelerator Instruction Set}
 
 \section{Instruction Format}
 \label{sec:isa-encoding}
@@ -18,7 +19,7 @@
 \label{sec:isa-opcodes}
 % The six opcodes, one subsection or table row each: what it computes, which
 % engine it drives, which feeder, and its latency contract
-% (\cref{sec:latency-contract}).
+% (Section~\ref{sec:latency-contract}).
 % Note that `save' costs zero cycles and zero instructions, which is why the
 % manifest's \thManifestOps{} ops compile to \thInstructions{} instructions.
 
@@ -27,4 +28,4 @@
 % The full \thInstructions-instruction listing for this network, from
 % software/export/program.txt. This is the right thing to put in an appendix:
 % it is generated, it is short, and it lets a reader follow
-% \cref{sec:sequencer} against real code.
+% Section~\ref{sec:sequencer} against real code.

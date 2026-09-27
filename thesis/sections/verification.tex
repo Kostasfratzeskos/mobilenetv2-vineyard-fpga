@@ -13,7 +13,7 @@
 % member who builds accelerators recognises something they do not do.
 % ===========================================================================
 \chapter{Verification Methodology}
-\label{ch:verification}
+\label{chap:verification}
 
 \section{The Contract: Bit-Exactness Against Golden Vectors}
 \label{sec:bit-exact-contract}
@@ -23,9 +23,9 @@
 %   1. there is never an argument about "close enough" - it matches or it is
 %      a bug;
 %   2. a failure localises to one layer instead of to "the network";
-%   3. the hardware-vs-software comparison in \cref{ch:evaluation} is not a
+%   3. the hardware-vs-software comparison in Chapter~\ref{chap:evaluation} is not a
 %      separate experiment, it IS the test suite;
-%   4. every transformation in \cref{ch:timing} was provably a reassociation
+%   4. every transformation in Chapter~\ref{chap:timing} was provably a reassociation
 %      or a latency change and never a change of value, so one \thElements-element
 %      check regresses the entire timing campaign.
 % Point 4 is the one that made a 43-finding review executable in two days.
@@ -64,7 +64,7 @@
 \section{Guards Against Stale Artefacts}
 \label{sec:guards}
 % The \DD{019} aftermath, as process rather than as arithmetic
-% (\cref{sec:acc-bound} has the arithmetic). Three guards, each closing a
+% (Section~\ref{sec:acc-bound} has the arithmetic). Three guards, each closing a
 % failure that actually occurred:
 %   - export.py recomputes the accumulator bound and exits non-zero if the
 %     network's worst case does not fit the ACC_W it reads out of the RTL;
@@ -78,20 +78,20 @@
 \section{The External RTL Review}
 \label{sec:rtl-review}
 % 43 findings, and what happened to each (the full table belongs in
-% \cref{ch:decisions} or an appendix, not inline). What to draw out here:
+% Chapter~\ref{appendix:decisions} or an appendix, not inline). What to draw out here:
 % several findings were closed DIFFERENTLY from how the review proposed,
 % because "is this number measured or bounded?" gave a better answer than the
 % recommendation - \DD{022} is the clearest case, where the path was decomposed
 % before the code and one register replaced a recommended grouped chain.
 % Be honest about the still-open ones (C-10, C-11, T-6, T-8, T-9, \DD{023});
-% \cref{sec:future} carries them.
+% Section~\ref{sec:future} carries them.
 
 \section{What This Method Does Not Cover}
 \label{sec:verification-limits}
 % Required for honesty, and it pre-empts the obvious attack:
 %   - until \DD{033} the \thElements-element check started at 000_input.hex,
-%     so resize and quantisation were unverified (\cref{sec:preproc} closed it);
+%     so resize and quantisation were unverified (Section~\ref{sec:preproc} closed it);
 %   - bit-exactness is checked on \thImagesVerified{} images, one per class, not on
 %     the validation set - it is a check of the ARITHMETIC, and
-%     \cref{sec:accuracy} is what measures the model;
+%     Section~\ref{sec:accuracy} is what measures the model;
 %   - simulation is not silicon: nothing here says the design works on a board.

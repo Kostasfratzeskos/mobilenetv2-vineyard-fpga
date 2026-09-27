@@ -4,9 +4,9 @@
 %
 % This is the supervisor's template, unchanged except for three things, each
 % marked <<< ADDED >>> below:
-%   1. \input{preamble_additions} - the few packages and all the number macros
-%      this manuscript needs on top of the template. Kept in a separate file so
-%      the template's own preamble stays diffable against the original.
+%   1. \input{preamble_additions} - siunitx, plus all the number macros this
+%      manuscript needs on top of the template. Kept in a separate file so the
+%      template's own preamble stays diffable against the original.
 %   2. \hypersetup title/author/subject - the template shipped with the
 %      previous author's metadata, which would otherwise end up embedded in
 %      the submitted PDF.
@@ -157,9 +157,9 @@
     \def\en#1{#1}%
 }
 
-% <<< ADDED >>> Everything this manuscript needs beyond the template: cleveref
-% and siunitx, \graphicspath, and the generated number macros. Loaded last so
-% cleveref comes after hyperref, which it requires.
+% <<< ADDED >>> Everything this manuscript needs beyond the template: siunitx
+% and the generated number macros. Loaded last so it can override nothing by
+% accident.
 \input{preamble_additions}
 
 \begin{document}

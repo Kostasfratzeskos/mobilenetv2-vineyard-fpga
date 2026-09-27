@@ -13,7 +13,7 @@
 % bit-exact on the host. That is the Core success tier (DD-004).
 % ===========================================================================
 \chapter{System Integration and the Embedded Application}
-\label{ch:integration}
+\label{chap:integration}
 
 \section{From an Out-of-Context Core to a System}
 \label{sec:ooc-to-system}
@@ -52,7 +52,7 @@
 % never concurrent, so there is no arbiter. HWC in DDR, 1.00 pixels/cycle,
 % about 0.25 ms.
 % Worth a sentence: axi_lite_csr_tb REGRESSED on the image ports and was right
-% to - a good miniature of \cref{sec:bit-exact-contract} in action.
+% to - a good miniature of Section~\ref{sec:bit-exact-contract} in action.
 
 \section{Constraints Without Invented Numbers}
 \label{sec:xdc}
@@ -78,10 +78,10 @@
 %   1. THE PL CLOCK GRID IS COARSE. 1500 MHz over an integer divider gives only
 %      150 / 166.7 / 187.5 / 214.3 / 250 MHz, and requesting 200 yields 187.5
 %      SILENTLY. Quote \MHz{\thClkBoard}, the constrained clock, not the
-%      achievable \MHz{\thFmaxBoard} - see \cref{sec:cad-flow}.
+%      achievable \MHz{\thFmaxBoard} - see Section~\ref{sec:cad-flow}.
 %   2. THE CRITICAL PATH MOVED. In context the top three paths are wgt_dma's
 %      output register into the weight buffers at zero logic levels - pure
-%      route - not act_buffer's URAM (\cref{sec:dd023}).
+%      route - not act_buffer's URAM (Section~\ref{sec:dd023}).
 % Against accel_axi alone post-route (\MHz{\thFmaxAccelAxi}), the full system
 % costs about 8% of the clock: much less than "the board is the unknown" implied.
 
@@ -93,11 +93,11 @@
 % Report that it is verified WITHOUT A BOARD: test_csr_map.c, test_drv_seq.c
 % and test_preproc.c run on the host against stubs, and `make lint`
 % compile-checks the bare-metal sources. Say what that does and does not buy
-% (\cref{sec:verification-limits}).
+% (Section~\ref{sec:verification-limits}).
 
 \section{Preprocessing on the Target}
 \label{sec:preproc-target}
-% \DD{033}, from the hardware side; \cref{sec:preproc} has the algorithm.
+% \DD{033}, from the hardware side; Section~\ref{sec:preproc} has the algorithm.
 % The point to make here: this was the last unverified link in the chain. The
 % \thElements-element bit-exactness began at 000_input.hex, so until this
 % existed the thesis could not claim an image-to-class result even in
@@ -115,5 +115,5 @@
 % work between here and bring-up. What is untested is hardware itself: DDR
 % training, the application on silicon, and real inference.
 % If a board run happens before submission, this section becomes a result and
-% moves into \cref{ch:evaluation}. If it does not, this is the honest state and
-% \cref{sec:future} carries it.
+% moves into Chapter~\ref{chap:evaluation}. If it does not, this is the honest state and
+% Section~\ref{sec:future} carries it.

@@ -13,8 +13,8 @@ make todo       # what is still unwritten
 `main.tex` **is** the template's `main.tex`, changed in three places, each marked
 `<<< ADDED >>>`:
 
-1. `\input{preamble_additions}` at the end of the preamble — the two packages and all
-   the number macros this manuscript needs. Keeping them in their own file means a new
+1. `\input{preamble_additions}` at the end of the preamble — siunitx and all the
+   number macros this manuscript needs. Keeping them in their own file means a new
    version of the template costs you three marked lines, not a preamble merge.
 2. The `\hypersetup` title, author and subject. The template shipped with the previous
    author's metadata (*Dataflow Optimized Reconfigurable Acceleration for FEM-based CFD
@@ -23,22 +23,39 @@ make todo       # what is still unwritten
 3. Three extra `\input` lines — verification, timing closure and integration are
    chapters of their own. See *Structure* below.
 
-**Still missing: `sections/template.tex`.** That is the template's prescribed front
-matter — title page, approval page, copyright page — and only its `main.tex` was
-available when this was built. `sections/template.tex` here is a placeholder that
-pulls in `frontmatter/`. When you get the real one, overwrite it, move your abstract
-and acknowledgement text in, and delete `frontmatter/` entirely; nothing else refers
-to those four files.
+`sections/template.tex` is the template's prescribed front matter — title page,
+approval page, copyright page, both abstracts, acknowledgements and the contents
+lists — with the names, title, committee and dates changed to yours. The structure
+and wording are the school's; do not restyle them. Three things there still need
+filling in: the two other committee members and their ranks, the approval date, and
+the abstracts themselves.
+
+### Conventions taken from the template's example chapters
+
+These are the supervisor's house style, followed throughout the scaffold:
+
+- **Labels** are `chap:`, `sec:`, `ssec:`, `sssec:`, `tab:`, `fig:`, `eq:`, `alg:`.
+- **Cross references are written out**: `Chapter~\ref{chap:timing}`,
+  `Figure~\ref{fig:pe-array}`. cleveref is *not* loaded and *not* used.
+- **Graphics live at `images/<chapter-name>/<file>`**, referenced by full path.
+  The template sets no `\graphicspath`.
+- **Appendices** use `\appendix` then `\chapter*{Appendix A: …}` with an explicit
+  `\addcontentsline`, not the `appendices` environment — even though the `appendix`
+  package is loaded.
+- **Greek** goes in `\textgreek{…}` inside English text; a whole Greek chapter uses
+  `\selectlanguage{greek}` with Latin runs in `\en{…}`.
+
+**Missing asset:** `images/template/pyrforos.png`, the NTUA seal the title page wants.
+The two `\includegraphics` for it are commented out until the file is there.
 
 ## Structure
 
 | | |
 |:--|:--|
 | `main.tex` | the template's, plus three marked additions |
-| `preamble_additions.tex` | siunitx, cleveref, `\graphicspath`, the number macros, shorthands |
-| `frontmatter/` | placeholder title page, the two abstracts, acknowledgements |
-| `sections/` | one file per chapter, plus the Greek extended summary and three appendices |
-| `figures/` | SVG sources; `make figures` converts them to PDF |
+| `preamble_additions.tex` | siunitx, the number macros, shorthands |
+| `sections/` | front matter (`template.tex`), one file per chapter, the Greek summary, three appendices |
+| `images/` | SVG sources under `images/<chapter>/`; `make figures` converts them to PDF |
 | `references.bib` | 36 entries, transcribed from the template's bibliography |
 | `generated/numbers.tex` | **generated** — every measured figure, as LaTeX macros |
 | `manual_numbers.tex` | the few figures that are not yet derivable, each with its source |
