@@ -1605,3 +1605,116 @@ argmax over the 4 int16 logits is the predicted class.
   second master or a proper arbiter, plus a second image buffer. Or if the input size becomes
   variable, per the `IMG_PIXELS` note above. Or if a camera replaces the SD-card path, in which
   case the pixel source changes but the HWC layout is if anything more natural.
+
+### DD-033 — Preprocessing in C: bit-exact, because the dataset turned out to make it possible
+- Status: Accepted
+- Date: 2026-09-27
+- Context: the project's headline verification claim is "6,895,780 elements bit-exact", and it was
+  measured **from `software/golden/<set>/000_input.hex` onward** — i.e. from the already-quantised
+  input tensor. Everything in front of that tensor (JPEG decode, `Resize(256)`,
+  `CenterCrop(224)`, `ToTensor`, `Normalize`, quantise) was done by torchvision on a PC and covered
+  by no check anywhere. `firmware/README.md` said so and called it a gap worth naming. With the PS
+  application in place, that gap was the last thing standing between the repository and an
+  end-to-end claim.
+
+- **The decision turned on a measurement, and the measurement changed the decision.** The expected
+  outcome was *not* bit-exactness. `Resize(256)` on a PIL image uses Pillow's antialiased
+  resampler, whose filter support scales with the reduction ratio; reimplementing it in C to the
+  last bit is not a reasonable thing to attempt, and a first probe confirmed a naive bilinear
+  differs from it substantially. So the plan was a **bounded difference** — implement a
+  reasonable resize in C, characterise the error, and state it honestly.
+
+  Then: **all 13,089 images in `data/grape` and `data/grape_clean` are 256×256.** Every one.
+  `Resize(256)` is therefore the *identity*, and `CenterCrop(224)` is a pure integer crop at offset
+  `(256−224)/2 = 16`. **No pixel is ever interpolated in this pipeline.** The front end is a crop
+  plus a per-pixel map, and both are exactly reproducible in C.
+
+  That is the whole entry. Had the measurement not been taken, the repository would contain a
+  resampler, a tolerance, and a weaker claim — all of it unnecessary.
+
+- What was built:
+  - **`firmware/src/preproc.c`** — crop at offset 16, then
+    `q = clamp(round((p/255 − mean[c]) / std[c] / input_scale), −128, 127)`, written in the
+    manifest's order rather than folded into one constant (the fused form is algebraically equal
+    and not bit-equal). Output is HWC, which DD-032 already chose for the DMA's sake and which pays
+    again here: both buffers are walked forwards.
+  - **`scripts/gen_preproc_vectors.py`** — the measurement, kept as a tracked script rather than a
+    scratch probe, because it is what the design rests on. It re-derives each golden set's
+    `000_input.hex` from its source JPEG and reports the match; all five reproducible sets come out
+    bit-exact, 150,528 values each. It also writes `000_rgb256.bin`, the decoded source image, as
+    the C test's input vector.
+  - **`firmware/test/test_preproc.c`** — 16 cases. Case 5 is the one that matters: all 150,528
+    values equal to the tracked golden set's tensor.
+
+- **The 768-entry table is not an optimisation with a correctness cost.** The map depends only on
+  `(channel, byte)`, and both are finite, so there are exactly 3 × 256 = 768 possible results.
+  Tabulating them is the arithmetic *evaluated over its entire domain*, not an approximation of it —
+  and the hot loop becomes a byte load and a byte store, 768 float operations instead of 150,528.
+  Because "it is the same function" is the entire justification, `preproc_self_test` checks all 768
+  entries against the direct double computation, and `main.c` calls it at start-up.
+
+- **A claim this repository previously made twice, and which is false.** Both `firmware/README.md`
+  and the first draft of `preproc.c`'s header warned that `floor(x + 0.5)` differs from
+  `torch.round` "enough to flip a borderline classification". The domain is 768 points, so this was
+  settled by enumeration rather than argument: **the two spellings agree at every one of them**, and
+  the nearest approach to a `.5` tie is `6.4e-05` — about `3e11` double ulp away. Substituting
+  `floor(x + 0.5)` passes the golden check bit-for-bit, which was verified by doing it.
+
+  `lrint` is kept anyway, for a reason that survives scrutiny where the old one did not: it matches
+  the reference **by construction** rather than by a margin, and that margin is a property of *this*
+  `input_scale`. Requantise the model and a value could land on a tie, at which point code that was
+  only accidentally right becomes wrong in a way no test here would predict.
+
+  What *does* bite is a different concern entirely: a target FPU left in **round-toward-zero**.
+  Truncation differs from rounding across most of the domain rather than only at ties, and a host
+  test can never catch it because the host is in `FE_TONEAREST`. Hence the `fegetround` check.
+
+- **What is deliberately still not claimed**, because the honest boundary matters more than a
+  bigger number:
+  - **The JPEG decode.** `libjpeg`'s IDCT is not bit-defined; two conforming decoders may differ in
+    the last bit, so there is nothing to be exact *against*. It stays on the PC
+    (`scripts/send_image.py`), and the board is handed decoded RGB. One clearly-bounded step,
+    outside the embedded path rather than hidden inside it.
+  - **Any image that is not 256×256.** `preproc_rgb` takes `w` and `h` *precisely so that it can
+    refuse one*. A camera or an arbitrary photograph would need a resampler that no check here
+    covers, and the tempting fallback — a naive bilinear — is exactly the thing already measured not
+    to match Pillow. A refusal is a visible failure; a plausible wrong tensor is not. This is the
+    same reasoning as DD-032's refusal to make the image size a CSR field.
+
+- Alternatives considered:
+  - **Leave preprocessing on the PC permanently.** It was already there and already correct. Rejected
+    because it leaves the deployed system unable to classify an image without a PC running
+    torchvision, which undercuts the point of an embedded accelerator — and because the measurement
+    above made the C version cheap.
+  - **Implement a full Pillow-compatible resampler**, so arbitrary images work. Rejected as
+    substantial work (support scaling, per-axis passes, fixed-point coefficient tables) for a
+    capability nothing in this project needs: the dataset does not require it, and the refusal path
+    makes its absence loud rather than silent. Noted as the extension point if a camera is ever
+    fitted.
+  - **Fixed-point instead of double.** Tempting on an A53 and unnecessary — the table means only 768
+    float operations run per boot, so the hot loop has no arithmetic in it at all. Fixed-point would
+    have risked a different answer for no measurable gain.
+  - **Hand-writing the constants into a C header.** Rejected for the reason DD-030 gives about the
+    blobs: a second copy of a scale is how a deployed tensor ends up silently different from the one
+    the goldens were made with. `firmware/include/quant_params.h` is generated by
+    `gen_program.py --emit` from `manifest.json`. It is *also* committed, since the Vitis build and
+    `make test` both need it — so `test_preproc` checks every constant in it against the manifest,
+    the way `test_csr_map` checks `accel_csr.h` against the RTL. Verified to bite: permuting two
+    class names fails, and so does moving the scale.
+
+- Consequences: the verification chain now joins end to end — **RGB in → the golden tensor → 6.9 M
+  elements bit-exact → the argmax** — with the JPEG decode named as the one link outside it.
+  `img_src` carries a format per frame instead of assuming one (UART magic `'IMG1'`/`'IMG2'` with the
+  length checked against it; SD infers from the file length; DDR takes a build-time knob), and
+  `send_image.py --rgb` sends decoded RGB for the board to preprocess. `--rgb` and `--image` reach
+  the same tensor by completely different routes — C on the board versus torchvision on the PC — so
+  on a live board they are a cross-check on each other.
+
+  Verified to bite, since a test that cannot fail is worse than none: crop offset 16 → 15 breaks
+  142,927 of 150,528 values; RGB → BGR breaks 97,576.
+
+- Revisit if: a camera replaces the file path, which is the case that needs a verified resampler and
+  is the reason the refusal exists. Or if the model is requantised — `test_preproc`'s manifest check
+  will catch a stale header, but the `lrint` margin above should be re-measured rather than assumed
+  to survive. Or if the input size becomes variable, which would interact with DD-032's note about
+  `IMG_PIXELS`.

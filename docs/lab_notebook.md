@@ -1945,3 +1945,151 @@ wrote quant_scales.json  (53 layers)
   XSA are artifacts that a board run would consume, and the accelerator is verified against the
   software model in simulation over its real interfaces - but the sentence "it has never run on a
   board" is still true and stays true until someone programs it.
+
+### 2026-09-27 - Preprocessing: the input gap closes, and a measurement changed the plan
+
+The PS application could drive the accelerator but not *prepare* its input. `main.c` expected an
+image that was already 224×224×3 int8, quantised with `export.py`'s scale, and
+`scripts/send_image.py` did the front end on the PC. So the repository's headline claim —
+**6,895,780 elements bit-exact** — was measured from `software/golden/<set>/000_input.hex` onward,
+with the decode, resize, crop, normalise and quantise in front of it covered by nothing at all.
+`firmware/README.md` said so and called it a gap worth naming. This closes it.
+
+#### The plan I started with was wrong, and one measurement replaced it
+
+`predict.py`'s pipeline is `Resize(256) → CenterCrop(224) → ToTensor → Normalize`. `Resize` on a PIL
+image uses Pillow's **antialiased** resampler, whose filter support scales with the reduction ratio.
+Reimplementing that in C to the last bit is not a reasonable thing to attempt, and a probe confirmed
+a textbook bilinear differs from it substantially. So the intended deliverable was a **bounded
+difference**: a reasonable C resize, the error characterised, the claim stated honestly as an
+approximation.
+
+Then I checked the dataset instead of assuming it:
+
+```
+all 13,089 images in data/grape + data/grape_clean : 256x256
+```
+
+Every one. Which means `Resize(256)` is the **identity** and `CenterCrop(224)` is a pure integer
+crop at offset `(256−224)/2 = 16`. **No pixel is ever interpolated in this pipeline.** The front end
+is a crop plus a per-pixel map, and both are exactly reproducible in C.
+
+Had I not checked, the repository would now contain a resampler, a tolerance and a weaker claim, all
+of it unnecessary. Worth recording as the general lesson: the expensive design was avoided by
+measuring the input, not by being clever about the algorithm.
+
+#### It reproduces the golden tensors exactly
+
+`scripts/gen_preproc_vectors.py` re-derives each golden set's `000_input.hex` in Python from its
+source JPEG:
+
+```
+manifest: crop 224, input_scale 0.020787402987480164
+          centre crop at offset 16 of a 256x256 source (no resampling)
+
+  blackrot_0376    BIT-EXACT, 150,528 values  -> 000_rgb256.bin (196,608 bytes)
+  blight_1461      BIT-EXACT, 150,528 values  -> 000_rgb256.bin (196,608 bytes)
+  esca_4399        BIT-EXACT, 150,528 values  -> 000_rgb256.bin (196,608 bytes)
+  healthy_6067     BIT-EXACT, 150,528 values  -> 000_rgb256.bin (196,608 bytes)
+  healthy_hl6025   BIT-EXACT, 150,528 values  -> 000_rgb256.bin (196,608 bytes)
+  image_1          source image not present, skipped
+
+5 golden tensor(s) reproduced bit-exactly from the source JPEG
+```
+
+and `firmware/test/test_preproc.c` then does the same thing **in C**, 16 cases, against the tracked
+set:
+
+```
+  ok    all 150,528 values match the golden tensor bit-exactly
+  ok    QP_CLASS_NAMES matches the manifest's classes, in order
+16 checks, 0 failed
+```
+
+The vector is not invented for the test, which is the point: `000_rgb256.bin` is the decoded source
+JPEG of a real golden set and `000_input.hex` is the tensor that set's whole 64-layer trace was
+produced from. **RGB in → the golden tensor → 6.9 M elements bit-exact → the argmax.**
+
+#### The 768-entry table is the arithmetic, not an approximation of it
+
+The map depends only on `(channel, byte)`, both finite, so there are exactly 3 × 256 = 768 possible
+results. Tabulating them is the function *evaluated over its whole domain* — 768 float operations
+per boot instead of 150,528, and the hot loop becomes a byte load and a byte store. Since "it is the
+same function" is the entire justification, `preproc_self_test` checks all 768 entries against the
+direct double computation, and `main.c` calls it at start-up.
+
+#### Verified to bite — and one mutation that did not
+
+Three mutations, because a test that cannot fail is worse than none:
+
+| mutation | result |
+|:--|:--|
+| crop offset 16 → 15 | **FAILS** — 142,927 of 150,528 values differ |
+| RGB → BGR | **FAILS** — 97,576 differ, max \|diff\| 32 |
+| `lrint` → `floor(x + 0.5)` | **passes** |
+
+That third one **corrects a claim this repository made twice** — in `firmware/README.md` and in my
+own first draft of `preproc.c`'s header: that `floor(x + 0.5)` would differ from `torch.round`
+"enough to flip a borderline classification". The domain is 768 points, so I enumerated it instead
+of arguing: **the two agree at every one**, and the nearest approach to a `.5` tie is `6.4e-05`,
+about `3e11` double ulp away. `lrint` is kept for a reason that survives scrutiny — it matches by
+*construction* rather than by a margin, and that margin belongs to this particular `input_scale`.
+
+What *does* matter is a different thing entirely: a target FPU in **round-toward-zero**. Truncation
+differs from rounding across most of the domain, not just at ties, and a host test can never catch
+it because the host is in `FE_TONEAREST`. Hence the `fegetround` check in `preproc_self_test`.
+
+A side note on testing the test: my first attempt to break the manifest check edited the scale's
+17th digit and it still passed — because `0.020787402987480164` and `...165` are the *same double*.
+`%.17g` round-trips, but not every digit edit is a value change. The check is exact equality and is
+sound; the mutation wasn't one.
+
+#### What is deliberately still not claimed
+
+- **The JPEG decode.** `libjpeg`'s IDCT is not bit-defined; two conforming decoders may differ in
+  the last bit, so there is nothing to be exact *against*. It stays on the PC and the board is
+  handed decoded RGB. One bounded step, outside the embedded path rather than hidden inside it.
+- **Any image that is not 256×256.** `preproc_rgb` takes `w` and `h` *so that it can refuse one*. A
+  camera would need a resampler no check here covers, and the tempting fallback is exactly the naive
+  bilinear already measured not to match Pillow. A refusal is a visible failure; a plausible wrong
+  tensor is not.
+
+#### `make lint`: nothing compile-checked the baremetal sources, and two of them could not compile
+
+While wiring preprocessing into `img_src.c` and `main.c` I noticed I had changed ~100 lines of C
+that **nothing on the host compiles** — those files need `xilffs`, `xuartps` and `xil_cache` from a
+Vitis BSP, so `firmware/Makefile` excluded them entirely. About 600 lines with no check that they
+were even well-formed.
+
+`make lint` now compiles them with `-fsyntax-only` against declaration-only stubs in
+`firmware/test/stubs/`. The first run found that `main.c` and `plat_zynq.c` **could not compile at
+all**:
+
+```
+main.c:75    *  address map to build/bd_*/address_map.rpt; XPAR_* from the BSP ...
+             error: unknown type name 'the'
+```
+
+A glob in a path inside a block comment — the `*/` in `bd_*/` closes the comment, so the prose after
+it was parsed as C. Both files had been broken since they were written, and a Vitis build would have
+been the first thing to notice, on a board, while looking for something else. It also caught
+`xil_printf` being called on an implicit declaration.
+
+Same failure shape as the DD-032 testbench regression: four new ports left unconnected, a warning
+nobody read, nine checks failing for a reason that took a while to find. The cheapest possible
+check, run automatically, beats a careful reading.
+
+#### Where this leaves things
+
+`img_src` now carries a format per frame instead of assuming one — UART magic `'IMG1'`/`'IMG2'` with
+the length checked against it, SD inferring from the file length, DDR taking a build-time knob — and
+`send_image.py --rgb` sends decoded RGB for the board to preprocess. Its payload is byte-identical to
+the vector `test_preproc` verifies, so the PC and the board agree on the wire format.
+
+`--rgb` and `--image` reach the same tensor by completely different routes, C on the board versus
+torchvision on the PC. Off-board they are proven to agree bit-for-bit; on a board they become a
+cross-check on each other, which is the first thing to run when one exists.
+
+Recorded as **DD-033**. Still outstanding project-wide: the accuracy measurement on `grape_clean`
+in float and int8 — the only accuracy numbers in the repository are 100.00% from the *leaky* split,
+which is not a result — and `docs/latency_map.md` §6 still stops at Phase 2d.
