@@ -440,6 +440,91 @@ def emit_blobs(ops):
     return wlines, b_lines, m0_lines, sh_lines, problems
 
 
+# --- the same blobs, packed for the PS --------------------------------------
+#  The .hex files are what the SIMULATION reads: $readmemh wants one value per
+#  line of ASCII. The PS wants the opposite - bytes it can fread straight into
+#  DDR and hand the accelerator a pointer to - and the difference is not small:
+#  8.8 MB of ASCII against 2.6 MB of data, plus 2.2 million lines of parsing on
+#  an A53 at boot for no benefit.
+#
+#  ---- why this is not the thing DD-030 warned about ---------------------
+#
+#  DD-030 rejected a packed parameter format because it would have been a FOURTH
+#  hand-maintained encoding of numbers that export.py already wrote and this
+#  script already validated. These files are the opposite: they are derived HERE,
+#  in the same run, from the same lists that produce the .hex, and checked
+#  against them before being written. There is no second source of truth to keep
+#  in step - if the .hex is right the .bin is right, by construction.
+#
+#  That is also why they are written by --emit rather than a separate flag. A
+#  flag you can forget is a way for the two to diverge.
+#
+#  ---- the layout the DMA and the CSR expect -----------------------------
+#
+#    weights.bin        one byte per weight, in blob order. ld_off indexes it.
+#    params_b.bin       int32 LITTLE-ENDIAN per channel
+#    params_m0.bin      int32 little-endian per channel
+#    params_shift.bin   one byte per channel
+#    program.bin        uint32 little-endian per instruction word
+#
+#  Little-endian throughout, which is what an ARM memcpy of a uint32 array
+#  produces and what hardware/tb/axi_ddr_model.svh models for the parameter
+#  blob - so the PS-side layout and the simulated one are the same statement.
+def emit_bins(wlines, b_lines, m0_lines, sh_lines, prog_words):
+    """Pack the blobs the PS loads. Returns [(name, bytes)] and any problems."""
+    problems = []
+
+    def bytes_from_hex1(lines, what):
+        out = bytearray()
+        for i, ln in enumerate(lines):
+            v = int(ln, 16)
+            if not 0 <= v <= 0xFF:
+                problems.append(f"{what} line {i}: {ln} is not one byte")
+                v &= 0xFF
+            out.append(v)
+        return bytes(out)
+
+    def bytes_from_hex4(lines, what):
+        out = bytearray()
+        for i, ln in enumerate(lines):
+            v = int(ln, 16) & 0xFFFFFFFF
+            out += v.to_bytes(4, "little")
+        if len(out) != 4 * len(lines):
+            problems.append(f"{what}: packed {len(out)} bytes for {len(lines)} words")
+        return bytes(out)
+
+    blobs = [
+        ("weights.bin",      bytes_from_hex1(wlines,   "weights")),
+        ("params_b.bin",     bytes_from_hex4(b_lines,  "params_b")),
+        ("params_m0.bin",    bytes_from_hex4(m0_lines, "params_m0")),
+        ("params_shift.bin", bytes_from_hex1(sh_lines, "params_shift")),
+        ("program.bin",      bytes_from_hex4(prog_words, "program")),
+    ]
+
+    #  Round-trip every one of them back to the text the simulation reads. This
+    #  is the check that makes the .bin a derivation rather than a second
+    #  encoding: if it ever stops matching, this fails at generation time rather
+    #  than as a wrong answer on a board.
+    for (name, blob), lines, width in (
+            (blobs[0], wlines,     1),
+            (blobs[1], b_lines,    4),
+            (blobs[2], m0_lines,   4),
+            (blobs[3], sh_lines,   1),
+            (blobs[4], prog_words, 4)):
+        if len(blob) != width * len(lines):
+            problems.append(f"{name}: {len(blob)} bytes for {len(lines)} values "
+                            f"of {width}")
+            continue
+        for i, ln in enumerate(lines):
+            got = int.from_bytes(blob[i*width:(i+1)*width], "little")
+            if got != (int(ln, 16) & ((1 << (8*width)) - 1)):
+                problems.append(f"{name} value {i}: packed 0x{got:x}, "
+                                f"hex says {ln}")
+                break
+
+    return blobs, problems
+
+
 # --- the testbench's view of the program ------------------------------------
 #  accel_tb walks all 64 ops and compares each against its golden vector. It
 #  needs two things per op that the instruction word does not carry: the exact
@@ -754,6 +839,29 @@ def main():
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
             print(f"wrote {path} ({len(lines):,} lines)")
+
+        # ---- and the same data packed for the PS (firmware/) -------------
+        #  Re-encoded from the same ops/tensors the .hex was written from, so
+        #  the two cannot disagree about the program either.
+        prog_words = [f"{w:08x}" for op in ops for w in encode(op, tensors)]
+        bins, bin_problems = emit_bins(wlines, b_lines, m0_lines, sh_lines,
+                                       prog_words)
+        if bin_problems:
+            print()
+            print(f"PACKED BLOBS INVALID - {len(bin_problems)} problems:")
+            for e in bin_problems[:10]:
+                print("  " + e)
+            sys.exit(1)
+        print()
+        total = 0
+        for name, blob in bins:
+            path = os.path.join(OUT_DIR, name)
+            with open(path, "wb") as fh:
+                fh.write(blob)
+            total += len(blob)
+            print(f"wrote {path} ({len(blob):,} bytes)")
+        print(f"  packed total {total:,} bytes "
+              f"- what the PS copies to DDR (firmware/README.md)")
 
         emit_tb_include(ops, args.golden_dir, manifest)
 
