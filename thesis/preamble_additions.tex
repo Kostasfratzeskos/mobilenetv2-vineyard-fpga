@@ -1,0 +1,48 @@
+% ===========================================================================
+% What this manuscript needs on top of the supervisor's template.
+%
+% Kept separate so main.tex stays diffable against the original template: if
+% the supervisor issues a new version, you re-apply three marked lines rather
+% than re-merging a preamble.
+%
+% Everything here was checked against the template's own package list - none
+% of it is a duplicate. Deliberately NOT added: subcaption (the template uses
+% subfig and the two conflict), and any listings/xcolor/geometry setup, which
+% the template already owns.
+% ===========================================================================
+
+% --- packages the template does not load ---------------------------------
+\usepackage{siunitx}   % \SI{202}{\mega\hertz}, and aligned numeric columns
+\sisetup{group-separator={,}, detect-weight=true}
+
+% cleveref must come after hyperref, which is why this file is \input at the
+% very end of the preamble. \cref{ch:timing} prints "Chapter 8" and keeps the
+% word and the number in step when chapters move - which they will.
+\usepackage{cleveref}
+\crefname{chapter}{Chapter}{Chapters}
+\crefname{section}{Section}{Sections}
+\crefname{figure}{Figure}{Figures}
+\crefname{table}{Table}{Tables}
+
+% --- where figures live ---------------------------------------------------
+% `make figures' converts figures/*.svg to PDF; generated/ is for anything a
+% script emits.
+\graphicspath{{figures/}{generated/}}
+
+% --- the numbers ----------------------------------------------------------
+% Generated from the repository by scripts/thesis_numbers.py; regenerate with
+% `make numbers'. No measured figure is typed into the text - see
+% thesis/README.md for why this exists.
+\input{generated/numbers}
+
+% Figures that are not yet derivable from a committed artefact. Each macro
+% there carries a comment naming its source and whether it is measured,
+% derived or estimated. If a number is in neither file, it does not go in the
+% text.
+\input{manual_numbers}
+
+% --- shorthands -----------------------------------------------------------
+\newcommand{\DD}[1]{DD-#1}          % \DD{019} -> DD-019
+\newcommand{\file}[1]{\texttt{#1}}  % a path or an identifier
+\newcommand{\MHz}[1]{\SI{#1}{\mega\hertz}}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}

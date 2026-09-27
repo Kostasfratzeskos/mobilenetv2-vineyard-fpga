@@ -8,27 +8,38 @@ make numbers    # regenerate generated/numbers.tex from the repository
 make todo       # what is still unwritten
 ```
 
-## Before anything else: get the real template
+## Relationship to the supervisor's template
 
-`main.tex` and `preamble.tex` are a **placeholder** so the manuscript compiles today.
-They are not the school template — that has to come from the supervisor as `.cls`/`.tex`
-sources. The PDF in circulation is a render and cannot be used as a source.
+`main.tex` **is** the template's `main.tex`, changed in three places, each marked
+`<<< ADDED >>>`:
 
-When it arrives: keep the template's main file, document class and prescribed front
-matter (title page, approval page, copyright page — do not retype these), `\input` the
-same chapter files in the same order, and merge `preamble.tex` into its preamble.
-Nothing under `chapters/` depends on the placeholder, so that is the whole port.
+1. `\input{preamble_additions}` at the end of the preamble — the two packages and all
+   the number macros this manuscript needs. Keeping them in their own file means a new
+   version of the template costs you three marked lines, not a preamble merge.
+2. The `\hypersetup` title, author and subject. The template shipped with the previous
+   author's metadata (*Dataflow Optimized Reconfigurable Acceleration for FEM-based CFD
+   Simulations*, Ferikoglou Aggelos), which would otherwise be embedded in your
+   submitted PDF.
+3. Three extra `\input` lines — verification, timing closure and integration are
+   chapters of their own. See *Structure* below.
+
+**Still missing: `sections/template.tex`.** That is the template's prescribed front
+matter — title page, approval page, copyright page — and only its `main.tex` was
+available when this was built. `sections/template.tex` here is a placeholder that
+pulls in `frontmatter/`. When you get the real one, overwrite it, move your abstract
+and acknowledgement text in, and delete `frontmatter/` entirely; nothing else refers
+to those four files.
 
 ## Structure
 
 | | |
 |:--|:--|
-| `main.tex` | document order; swap for the template's |
-| `preamble.tex` | packages, language, shorthands |
-| `frontmatter/` | title page, the two abstracts, acknowledgements |
-| `chapters/` | one file per chapter, plus the Greek extended summary and three appendices |
+| `main.tex` | the template's, plus three marked additions |
+| `preamble_additions.tex` | siunitx, cleveref, `\graphicspath`, the number macros, shorthands |
+| `frontmatter/` | placeholder title page, the two abstracts, acknowledgements |
+| `sections/` | one file per chapter, plus the Greek extended summary and three appendices |
 | `figures/` | SVG sources; `make figures` converts them to PDF |
-| `refs.bib` | 36 entries, transcribed from the template's bibliography |
+| `references.bib` | 36 entries, transcribed from the template's bibliography |
 | `generated/numbers.tex` | **generated** — every measured figure, as LaTeX macros |
 | `manual_numbers.tex` | the few figures that are not yet derivable, each with its source |
 
@@ -59,8 +70,10 @@ a testbench that writes its cycle count to a file — move it and delete it from
 
 ## Order of writing
 
-Chapters 5 → 6 → 7 → 8 → 9 → 10 first: that work is finished and documented. Then 3 and
-4, then 2, then 1 and 11. The Greek summary **last**, because it mirrors the English
+`profiling` → `accelerator_design` → `verification` → `timing_closure` → `integration`
+→ `exper_eval` first: that work is finished and documented. Then `background` and
+`exper_setup_dev_tools`, then `related_work`, then `introduction` and
+`conclusion_and_future_work`. `extended_greek` **last**, because it mirrors the English
 chapters and writing it early guarantees rework.
 
 Two gaps block Chapter 10 and neither is a big job:

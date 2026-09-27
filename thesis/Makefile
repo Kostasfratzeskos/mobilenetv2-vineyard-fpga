@@ -22,8 +22,8 @@ INKSCAPE  ?= inkscape
 SVG := $(wildcard figures/*.svg)
 PDF := $(SVG:.svg=.pdf)
 
-TEX := $(MAIN).tex preamble.tex manual_numbers.tex \
-       $(wildcard chapters/*.tex) $(wildcard frontmatter/*.tex)
+TEX := $(MAIN).tex preamble_additions.tex manual_numbers.tex \
+       $(wildcard sections/*.tex) $(wildcard frontmatter/*.tex)
 
 .PHONY: all pdf numbers figures watch todo wc clean distclean
 
@@ -32,7 +32,7 @@ all: numbers figures pdf
 # --- the PDF --------------------------------------------------------------
 pdf: $(MAIN).pdf
 
-$(MAIN).pdf: $(TEX) refs.bib generated/numbers.tex $(PDF)
+$(MAIN).pdf: $(TEX) references.bib generated/numbers.tex $(PDF)
 	$(LATEXMK) -pdf -interaction=nonstopmode -halt-on-error $(MAIN).tex
 
 watch:
@@ -58,7 +58,7 @@ figures/%.pdf: figures/%.svg
 
 # --- writing aids ---------------------------------------------------------
 todo:
-	@grep -rn "TODO" chapters/ frontmatter/ manual_numbers.tex || echo "no TODOs left"
+	@grep -rn "TODO" sections/ frontmatter/ manual_numbers.tex || echo "no TODOs left"
 
 wc:
 	@which texcount > /dev/null 2>&1 \

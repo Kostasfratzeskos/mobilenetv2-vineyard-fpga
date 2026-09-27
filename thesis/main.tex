@@ -1,87 +1,188 @@
 % ===========================================================================
 % Vineyard Disease Detection on an FPGA Platform
-% Diploma thesis - NTUA, School of ECE, Microprocessors and Digital Systems Lab
+% Diploma thesis - NTUA, School of ECE
 %
-% Build:  make          (or: latexmk -pdf main.tex)
+% This is the supervisor's template, unchanged except for three things, each
+% marked <<< ADDED >>> below:
+%   1. \input{preamble_additions} - the few packages and all the number macros
+%      this manuscript needs on top of the template. Kept in a separate file so
+%      the template's own preamble stays diffable against the original.
+%   2. \hypersetup title/author/subject - the template shipped with the
+%      previous author's metadata, which would otherwise end up embedded in
+%      the submitted PDF.
+%   3. three extra \input lines - verification, timing closure and integration
+%      are chapters of their own. See thesis/README.md for why.
 %
-% ---------------------------------------------------------------------------
-% REPLACING THIS FILE WITH THE OFFICIAL TEMPLATE
-%
-% This preamble exists so the manuscript compiles today. It is NOT the school
-% template - that has to come from the supervisor as .cls/.tex sources (the
-% PDF is a render and cannot be used as a source).
-%
-% When it arrives:
-%   1. keep the template's own main file and its document class;
-%   2. keep its title page, approval page and copyright page - do not retype
-%      them, they are prescribed;
-%   3. \input the same chapter files listed below, in the same order;
-%   4. merge preamble.tex into the template's preamble, dropping anything the
-%      template already provides.
-% Nothing under chapters/ depends on this file, so step 3 is the whole port.
+% Build: make
 % ===========================================================================
 
-% `book' rather than `report' for \frontmatter/\mainmatter and the roman/arabic
-% page-numbering split the school template uses.
-\documentclass[11pt,a4paper,twoside,openright]{book}
+\documentclass[twoside,12pt,a4paper,openright]{report}
+\setcounter{secnumdepth}{4}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{mwe}
+\usepackage{titlesec}
+\usepackage{alphabeta}
+\usepackage{listings}
+\usepackage{multicol}
+\usepackage[LGR, T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage[toc, page]{appendix}
+\usepackage{emptypage}
+\usepackage{afterpage}
+\usepackage{caption}
+\usepackage{epstopdf}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amssymb,amsmath,amsfonts}
+\usepackage{tabularx}
+\usepackage{subfig}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{pifont} % http://ctan.org/pkg/pifont
+\usepackage[inline]{enumitem}
+%\usepackage[algo2e,linesnumbered,ruled,vlined]{algorithm2e}
+\usepackage[greek,english]{babel}
+\usepackage[top=2cm, bottom=2cm,left=2cm,right=2cm]{geometry}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{notoccite}
+\usepackage{listings}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
 
-\usepackage[a4paper,inner=3.5cm,outer=2.5cm,top=3cm,bottom=3cm]{geometry}
-\input{preamble}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{colortbl}
+\usepackage{tcolorbox}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+%%%%%%%%%%%%%%%%%%%%%%
+% for test only %
+\usepackage{blindtext}
+%%%%%%%%%%%%%%%%%%%%%%
+
+\hypersetup{
+    unicode=true,                     % non-Latin characters in bookmarks
+    pdffitwindow=true,                % page fit to window when opened
+    pdfnewwindow=true,                % links in new window
+    pdfkeywords={},                   % list of keywords
+    colorlinks=true,                  % false: boxed links; true: colored links
+    linkcolor=black,                  % color of internal links
+    citecolor=black,                  % color of links to bibliography
+    filecolor=black,                  % color of file links
+    urlcolor=black,                   % color of external links
+    % <<< ADDED >>> was the previous author's thesis metadata; it would have
+    % been embedded in the submitted PDF.
+    pdftitle={Vineyard Disease Detection on an FPGA Platform},  % title
+    pdfauthor={Fratzeskos Konstantinos},                        % author
+    pdfsubject={Diploma Thesis}                                 % subject
+}
+\DeclareMathOperator{\Tr}{Tr}
+\newcommand{\en}[1]{\foreignlanguage{english}{#1}}
+\providecommand{\keywords}[1]{\textbf{Keywords---} #1}
+\providecommand{\elkeywords}[1]{\textbf{\textgreek{Λέξεις Κλειδιά}---} #1}
+
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+\newcommand{\AK}[1]{\textcolor{green}{#1}}
+\newcommand{\AF}[1]{\textcolor{red}{#1}}
+\newcommand{\SX}[1]{\textcolor{blue}{#1}}
+
+\lstset{
+    language=C,                      % Language of the code
+    basicstyle=\ttfamily\footnotesize,% Style of the code (e.g., font size)
+    keywordstyle=\color{blue},        % Keywords in blue
+    commentstyle=\color{gray},        % Comments in gray
+    stringstyle=\color{orange},       % Strings in orange
+    numberstyle=\tiny\color{gray},    % Line numbers in gray
+    numbers=left,                     % Line numbers on the left
+    stepnumber=1,                     % Line number step
+    numbersep=5pt,                    % Distance between line numbers and code
+    frame=single,                     % Adds a frame around the code
+    tabsize=4,                        % Sets tabulation width
+    captionpos=b,                     % Position of the caption (b for bottom)
+    breaklines=true,                  % Allows breaking long lines
+    breakatwhitespace=false,          % Breaks lines at white space
+    showspaces=false,                 % Do not display spaces as a special character
+    showstringspaces=false,           % Do not display string spaces
+    showtabs=false,                   % Do not display tabs
+}
+
+
+
+
+% Make \textgreek{...} long, so it may span several paragraphs
+\makeatletter
+\long\def\lgr@font@long#1{%
+    \ifmmode\nfss@text{\greektext#1}%
+    \else\hmode@bgroup\greektext#1\egroup\fi}
+\DeclareRobustCommand{\textgreek}{\lgr@font@long}
+\makeatother
+
+% Let hyperref cope with \textgreek/\en inside bookmarks & PDF strings
+\pdfstringdefDisableCommands{%
+    \def\textgreek#1{#1}%
+    \def\en#1{#1}%
+}
+
+% <<< ADDED >>> Everything this manuscript needs beyond the template: cleveref
+% and siunitx, \graphicspath, and the generated number macros. Loaded last so
+% cleveref comes after hyperref, which it requires.
+\input{preamble_additions}
 
 \begin{document}
+\selectlanguage{english}
 
-% ---------------------------------------------------------------------------
-% Front matter. Prescribed by the school - replace wholesale with the
-% template's versions, do not retype.
-% ---------------------------------------------------------------------------
-\frontmatter\pagenumbering{roman}
 
-\input{frontmatter/titlepage}      % placeholder; use the template's
+\input{sections/template.tex}
+\input{sections/extended_greek}
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/background.tex}
+\input{sections/exper_setup_dev_tools}
+\input{sections/profiling}
+\input{sections/accelerator_design}
+\input{sections/verification}              % <<< ADDED >>>
+\input{sections/timing_closure}            % <<< ADDED >>>
+\input{sections/integration}               % <<< ADDED >>>
+\input{sections/exper_eval}
+\input{sections/conclusion_and_future_work}
+\input{sections/appendices}
 
-\input{frontmatter/abstract_gr}    % Perilipsi + Lexeis Kleidia
-\input{frontmatter/abstract_en}    % Abstract + Keywords
-\input{frontmatter/acknowledgements}
-
-\tableofcontents
-\listoffigures
-\listoftables
-
-% ---------------------------------------------------------------------------
-% Extended Greek summary. Written LAST: it mirrors the English chapters, so
-% every edit to them is an edit here.
-% ---------------------------------------------------------------------------
-\input{chapters/greek_summary}
-
-% ---------------------------------------------------------------------------
-% Main matter.
-% ---------------------------------------------------------------------------
-\mainmatter\pagenumbering{arabic}
-
-\input{chapters/01_introduction}
-\input{chapters/02_related_work}
-\input{chapters/03_background}
-\input{chapters/04_setup_tools}
-\input{chapters/05_software_model}
-\input{chapters/06_architecture}
-\input{chapters/07_verification}
-\input{chapters/08_timing_closure}
-\input{chapters/09_integration}
-\input{chapters/10_evaluation}
-\input{chapters/11_conclusion}
-
-% ---------------------------------------------------------------------------
-% Appendices.
-% ---------------------------------------------------------------------------
-\appendix
-\input{chapters/app_a_isa}
-\input{chapters/app_b_decisions}
-\input{chapters/app_c_reproduction}
-
-% ---------------------------------------------------------------------------
-% Bibliography. IEEEtran matches the reference style in the template PDF; if
-% it is not installed, `unsrt' is the closest thing in a base TeX Live.
-% ---------------------------------------------------------------------------
 \bibliographystyle{IEEEtran}
-\bibliography{refs}
+\bibliography{references}
+
 
 \end{document}
