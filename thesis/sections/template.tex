@@ -6,10 +6,11 @@
 % template. Only the names, the title, the committee and the dates are
 % changed. Do not restyle any of it.
 %
+% The NTUA seal is images/template/pyrforos.svg, converted to PDF by
+% `make figures'. The template's original referenced a .png; vector is better
+% in print and matches how every other figure here is handled.
+%
 % STILL TO FILL IN:
-%   - images/template/pyrforos.png (the NTUA seal) is NOT in this repository.
-%     The template expects it at that path; until it is there the two
-%     \includegraphics below are commented out and the pages build without it.
 %   - the two examining-committee members besides the supervisor, and their
 %     ranks, once they are known;
 %   - the exact approval date (the template PDF has it as "ηη Νοεμβρίου");
@@ -19,7 +20,12 @@
 \begin{titlepage}
 	\thispagestyle{empty}
 	\begin{center}
-		% \includegraphics[width=40mm]{images/template/pyrforos.png}
+		% The guard keeps the manuscript compiling before `make figures' has
+		% run; the seal is required on the submitted title page, so check that
+		% it is actually there before handing the PDF in.
+		\IfFileExists{images/template/pyrforos.pdf}{%
+			\includegraphics[width=40mm]{images/template/pyrforos.pdf}%
+		}{\rule{0pt}{40mm}}
 	\end{center}
     \begin{minipage}[t]{1.0\textwidth}
     	\begin{center}
@@ -75,7 +81,9 @@
     \afterpage{\blankpage}
     \thispagestyle{empty}
 	\begin{minipage}{0.18\textwidth}
-		% \includegraphics[width=28mm]{images/template/pyrforos.png}
+		\IfFileExists{images/template/pyrforos.pdf}{%
+			\includegraphics[width=28mm]{images/template/pyrforos.pdf}%
+		}{\rule{0pt}{28mm}}
 	\end{minipage}
 	\begin{minipage}{0.82\textwidth}
 		\textgreek{\small ΕΘΝΙΚΟ ΜΕΤΣΟΒΙΟ ΠΟΛΥΤΕΧΝΕΙΟ} \\

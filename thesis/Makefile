@@ -7,6 +7,7 @@
 #   make pdf        latexmk only
 #   make watch      rebuild on save
 #   make todo       list every TODO marker left in the manuscript
+#   make check      pre-submission: seal, TODOs, generated numbers
 #   make wc         word count of the body text
 #   make clean      remove build artefacts, keep the PDF
 #   make distclean  remove the PDF and the generated figures too
@@ -26,7 +27,7 @@ PDF := $(SVG:.svg=.pdf)
 TEX := $(MAIN).tex preamble_additions.tex manual_numbers.tex \
        $(wildcard sections/*.tex)
 
-.PHONY: all pdf numbers figures watch todo wc clean distclean
+.PHONY: all pdf numbers figures watch todo check wc clean distclean
 
 all: numbers figures pdf
 
@@ -60,6 +61,19 @@ images/%.pdf: images/%.svg
 # --- writing aids ---------------------------------------------------------
 todo:
 	@grep -rn "TODO" sections/ manual_numbers.tex || echo "no TODOs left"
+
+# Run before handing the PDF in. The title page's seal is behind an
+# \IfFileExists guard so drafts still build without it - which means a missing
+# seal is silent, and silent is exactly how it reaches the printer.
+check:
+	@test -f images/template/pyrforos.svg \
+	  || echo "MISSING: images/template/pyrforos.svg (the NTUA seal)"
+	@test -f images/template/pyrforos.pdf \
+	  || echo "MISSING: images/template/pyrforos.pdf - run 'make figures'"
+	@grep -rqn "TODO" sections/ manual_numbers.tex \
+	  && echo "TODOs remain - run 'make todo'" || true
+	@test -f generated/numbers.tex \
+	  || echo "MISSING: generated/numbers.tex - run 'make numbers'"
 
 wc:
 	@which texcount > /dev/null 2>&1 \

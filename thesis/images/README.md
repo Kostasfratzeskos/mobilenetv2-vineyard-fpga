@@ -9,10 +9,11 @@
 | αρχείο | τι δείχνει | πηγή RTL |
 |:--|:--|:--|
 | `accelerator-design/pe_array.svg` | ο pointwise MAC array: Tm=32 lanes x Tn=16 MACs, broadcast activations, per-lane weights, accumulation σε ceil(IC/Tn) κύκλους | `hardware/rtl/kernels/pe_array.v`, `mac_lane.v` |
+| `template/pyrforos.svg` | ο Προμηθέας Πυρφόρος, το έμβλημα του ΕΜΠ· χρησιμοποιείται δύο φορές στη σελίδα τίτλου (40mm και 28mm) | — |
 
-**Λείπει:** `template/pyrforos.png`, το έμβλημα του ΕΜΠ που ζητάει το
-`sections/template.tex`. Μέχρι να μπει, τα δύο `\includegraphics` της σελίδας
-τίτλου είναι σχολιασμένα.
+Το πρότυπο ζητούσε `pyrforos.png`· εδώ χρησιμοποιείται το `.pdf` που παράγεται
+από το `.svg`, γιατί είναι διανυσματικό και ακολουθεί τον ίδιο δρόμο με τα
+υπόλοιπα σχήματα.
 
 ## Μετατροπή σε PDF
 

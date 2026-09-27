@@ -45,8 +45,9 @@ These are the supervisor's house style, followed throughout the scaffold:
 - **Greek** goes in `\textgreek{…}` inside English text; a whole Greek chapter uses
   `\selectlanguage{greek}` with Latin runs in `\en{…}`.
 
-**Missing asset:** `images/template/pyrforos.png`, the NTUA seal the title page wants.
-The two `\includegraphics` for it are commented out until the file is there.
+The NTUA seal lives at `images/template/pyrforos.svg` and is converted to PDF by
+`make figures`, like every other figure. The template's original referenced a `.png`;
+vector prints better and needs no second pipeline.
 
 ## Structure
 
