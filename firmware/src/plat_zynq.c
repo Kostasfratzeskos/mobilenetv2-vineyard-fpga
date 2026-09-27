@@ -2,7 +2,7 @@
  *  plat_zynq.c  -  the four platform hooks, for a baremetal ZU+ APU
  *
  *  Not built by firmware/Makefile: it needs a standalone BSP generated from
- *  build/bd_*/accel_bd_wrapper.xsa. See README.md for the Vitis side. The host
+ *  build/bd_<cfg>/accel_bd_wrapper.xsa. See README.md for the Vitis side. The
  *  tests supply their own versions of these four functions, which is what lets
  *  accel_drv.c be tested on a PC.
  *
