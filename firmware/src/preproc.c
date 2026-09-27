@@ -30,9 +30,32 @@
 
 #include <math.h>
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
-#include <fenv.h>
-#define PREPROC_HAVE_FENV 1
+/*  __has_include, not a __STDC_VERSION__ test. The question is whether this
+ *  toolchain HAS fenv.h, not whether it speaks C99 - and a bare-metal newlib or
+ *  a freestanding build can be C11 and still not ship it. Testing the language
+ *  version would turn a missing header into a build error on the target, which
+ *  is the one place this file has not yet been compiled.
+ *
+ *  If it is absent the rounding-mode check is skipped rather than faked, and
+ *  PREPROC_NO_FENV_CHECK below makes that visible instead of silent. */
+#if defined(__has_include)
+#  if __has_include(<fenv.h>)
+#    include <fenv.h>
+#    define PREPROC_HAVE_FENV 1
+#  endif
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+#  include <fenv.h>
+#  define PREPROC_HAVE_FENV 1
+#endif
+
+#ifndef PREPROC_HAVE_FENV
+/*  Deliberately noisy. The check this disables is the only thing that can catch
+ *  a target FPU left truncating instead of rounding, and losing it silently is
+ *  how the board would quantise differently from the goldens with nothing to
+ *  show for it. -DPREPROC_NO_FENV_CHECK acknowledges that trade on purpose. */
+#  ifndef PREPROC_NO_FENV_CHECK
+#    warning "no <fenv.h>: the rounding-mode check is disabled. See preproc.h."
+#  endif
 #endif
 
 /*  Indexed [channel][byte]. int8 rather than a wider type so that the inner
