@@ -36,33 +36,43 @@
  *  DD-032 explains why that layout and not channel-planar; the short version is
  *  that it makes the DMA one sequential read AND it is what a decoder produces.
  *
- *  ---- what this file does NOT do yet ------------------------------------
+ *  ---- preprocessing, and what is still outside the check ----------------
  *
- *  It does not PREPROCESS. It expects an image that is already 224x224x3 int8,
- *  quantised with the same scale export.py used. Decoding a JPEG, resizing,
- *  centre-cropping, normalising by the ImageNet mean/std and quantising is a
- *  separate piece of work, and a bigger one than this file - `predict.py` does
- *  it with torchvision and nothing in C does it at all yet.
+ *  A source may hand over either format, and says which:
  *
- *  That gap is worth stating plainly because it is also a gap in the project's
- *  verification: "6,895,780 elements bit-exact" is measured from
- *  software/golden/*/000_input.hex onward, i.e. from the quantised tensor. The
- *  resize and the quantisation in front of it are not covered by any check in
- *  this repository. Preprocessing has to be written AND verified against
- *  torchvision before an end-to-end claim means anything.
+ *      IMG_FMT_Q8      224x224x3 int8, already quantised. Straight to the DMA.
+ *      IMG_FMT_RGB256  256x256x3 uint8 RGB, decoded but not preprocessed.
+ *                      preproc_rgb crops, normalises and quantises it here.
+ *
+ *  firmware/src/preproc.c does that front end bit-exactly, and
+ *  firmware/test/test_preproc.c proves it: the C code reproduces a tracked
+ *  golden set's 000_input.hex exactly, all 150,528 values, from the decoded
+ *  source JPEG. Since 000_input.hex is where accel_axi_tb.sv's 6,895,780-element
+ *  check STARTS, the two halves now join: RGB in, the golden tensor, 6.9 M
+ *  elements bit-exact, the argmax.
+ *
+ *  What is still outside any check is the JPEG DECODE, which stays on the PC.
+ *  libjpeg's IDCT is not bit-defined, so two decoders may legitimately differ in
+ *  the last bit, and there is nothing to be exact against. Naming it is the
+ *  point: it is one clearly-bounded step, outside the embedded path rather than
+ *  hidden inside it.
+ *
+ *  An image that is not 256x256 is REFUSED rather than resampled - see preproc.h
+ *  for why (no resampler here is verified against Pillow's antialiased one).
  *==========================================================================*/
 #include <stdio.h>
 #include <string.h>
 
 #include "accel_drv.h"
 #include "img_src.h"
+#include "preproc.h"
 
 #include "ff.h"              /* xilffs */
 #include "xil_cache.h"
 #include "xparameters.h"
 
 /*  Where the CSR lives. scripts/make_bd.tcl places it here and writes the
- *  address map to build/bd_*/address_map.rpt; XPAR_* from the BSP is the same
+ *  address map to build/bd_<cfg>/address_map.rpt; XPAR_* from the BSP is the
  *  number, and using it means a change in the block design reaches this file
  *  through the BSP rather than by someone remembering to edit a literal. */
 #ifdef XPAR_ACCEL_AXI_0_BASEADDR
@@ -90,11 +100,24 @@ static uint8_t  blob_pb[PB_BYTES]    __attribute__((aligned(ACCEL_ALIGN)));
 static uint8_t  blob_pm[PM_BYTES]    __attribute__((aligned(ACCEL_ALIGN)));
 static uint8_t  blob_ps[PS_BYTES]    __attribute__((aligned(ACCEL_ALIGN)));
 static uint8_t  image[ACCEL_IMG_BYTES] __attribute__((aligned(ACCEL_ALIGN)));
+
+/*  What a source delivers, before any preprocessing. Sized for the larger of the
+ *  two formats, so one buffer serves both.
+ *
+ *  Kept separate from `image` rather than preprocessing in place. In-place would
+ *  in fact be safe - the read pointer runs at least 12,336 bytes ahead of the
+ *  write pointer for every row - but it costs 192 KB of a 2 GB DDR to not have to
+ *  rely on that, and `image` is the buffer the DMA reads and the one that gets
+ *  flushed, so keeping it holding only finished data is worth more than the
+ *  space. */
+static uint8_t  frame[IMG_SRC_BUF_BYTES] __attribute__((aligned(ACCEL_ALIGN)));
 static uint32_t program[ACCEL_PROG_WORDS];
 
-static const char *CLASS_NAME[ACCEL_N_CLASSES] = {
-    "Black Rot", "ESCA", "Healthy", "Leaf Blight"
-};
+/*  From quant_params.h, which scripts/gen_program.py generates from
+ *  manifest.json - so the label printed here cannot drift from the class order
+ *  the model was trained with. That ordering is not a detail: getting it wrong
+ *  renames every prediction and changes no number anywhere. */
+static const char *CLASS_NAME[QP_N_CLASSES] = QP_CLASS_NAMES;
 
 static FATFS fs;
 
@@ -143,7 +166,7 @@ static void report(const accel_result_t *r, uint32_t cycles_unknown)
     for (i = 0; i < (int)ACCEL_N_CLASSES; i++)
         printf(" %6d", r->logit[i]);
     printf("\n  class : %u = %s\n", r->argmax,
-           (r->argmax < ACCEL_N_CLASSES) ? CLASS_NAME[r->argmax] : "?");
+           (r->argmax < QP_N_CLASSES) ? CLASS_NAME[r->argmax] : "?");
 }
 
 int main(void)
@@ -163,6 +186,22 @@ int main(void)
     printf("\n");
     printf("MobileNetV2 grape-leaf classifier - PS application\n");
     printf("  CSR at 0x%08x\n", (unsigned)CSR_BASE);
+
+    /*  768 operations, and the only check that can catch a target runtime whose
+     *  FPU rounds differently from the machine the goldens were made on. A host
+     *  test cannot: the host is in round-to-nearest. Truncation instead of
+     *  rounding would shift much of the input tensor by one step and report
+     *  nothing, so this runs before anything else can depend on it. */
+    {
+        preproc_status_t ps = preproc_self_test();
+        if (ps != PREPROC_OK) {
+            printf("  ERROR: preprocessing self-test failed: %s\n",
+                   preproc_strerror(ps));
+            return 1;
+        }
+    }
+    printf("  preprocessing self-test passed (768 table entries, "
+           "round-to-nearest)\n");
 
     if (f_mount(&fs, "0:/", 1) != FR_OK) {
         printf("  ERROR: cannot mount the SD card\n");
@@ -202,10 +241,27 @@ int main(void)
 
     /*  One iteration per image. Only the image changes; the blobs stay. */
     for (;;) {
-        int got = img_src_next(&src, image, sizeof image);
+        img_fmt_t fmt;
+        int got = img_src_next(&src, frame, sizeof frame, &fmt);
         if (got < 0) {
             printf("image source closed after %u inference(s)\n", n);
             break;
+        }
+
+        if (fmt == IMG_FMT_RGB256) {
+            /*  The board's own front end: crop, normalise, quantise. Verified
+             *  bit-exact against the golden tensor by
+             *  firmware/test/test_preproc.c. */
+            preproc_status_t ps = preproc_rgb(frame, QP_SRC_SIZE, QP_SRC_SIZE,
+                                              (size_t)got,
+                                              (int8_t *)image, sizeof image);
+            if (ps != PREPROC_OK) {
+                printf("  ERROR preprocessing: %s\n", preproc_strerror(ps));
+                continue;
+            }
+        } else {
+            /*  Already quantised - straight through. */
+            memcpy(image, frame, sizeof image);
         }
 
         s = accel_load_image(&acc, image, sizeof image);

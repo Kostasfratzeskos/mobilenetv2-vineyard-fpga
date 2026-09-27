@@ -32,7 +32,17 @@
 #define IMG_SRC_MEM_ADDR 0x10000000u
 #endif
 
+/*  A JTAG-loaded buffer has no length to infer its format from, so it is stated
+ *  here rather than guessed. Q8 by default because IMG_SRC_MEM exists for first
+ *  bring-up, and the point of that is to have nothing at all between the PC and
+ *  the DMA - including this preprocessing. Use
+ *  -DIMG_SRC_MEM_FMT=IMG_FMT_RGB256 to preload a decoded 256x256 image. */
+#ifndef IMG_SRC_MEM_FMT
+#define IMG_SRC_MEM_FMT IMG_FMT_Q8
+#endif
+
 #include "ff.h"
+#include "xil_printf.h"
 #include "xparameters.h"
 #include "xuartps.h"
 
@@ -82,19 +92,26 @@ static int uart_read_exact(uint8_t *dst, size_t n)
     return 0;
 }
 
-/*  Resynchronise on the 4-byte magic. Without this, one spurious byte at
- *  power-up offsets every frame that follows for the rest of the session. */
-static void uart_wait_magic(void)
+/*  Resynchronise on the 4-byte magic, and report which format it announced.
+ *  Without this, one spurious byte at power-up offsets every frame that follows
+ *  for the rest of the session.
+ *
+ *  'IMG1' is an already-quantised tensor; 'IMG2' is decoded RGB that the board
+ *  preprocesses itself. Scanning for both in the same pass rather than for one
+ *  and then the other keeps the resynchronisation property: whichever arrives, a
+ *  garbage prefix is skipped and the frame is still found. */
+static void uart_wait_magic(img_fmt_t *fmt)
 {
-    static const uint8_t want[4] = { 'I', 'M', 'G', '1' };
+    static const uint8_t m_q8[4]  = { 'I', 'M', 'G', '1' };
+    static const uint8_t m_rgb[4] = { 'I', 'M', 'G', '2' };
     uint8_t win[4] = { 0, 0, 0, 0 };
 
     for (;;) {
         uint8_t b;
         uart_read_exact(&b, 1);
         win[0] = win[1]; win[1] = win[2]; win[2] = win[3]; win[3] = b;
-        if (memcmp(win, want, 4) == 0)
-            return;
+        if (memcmp(win, m_q8, 4) == 0)  { *fmt = IMG_FMT_Q8;     return; }
+        if (memcmp(win, m_rgb, 4) == 0) { *fmt = IMG_FMT_RGB256; return; }
     }
 }
 
@@ -104,30 +121,39 @@ static uint32_t le32(const uint8_t *p)
          | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-static int uart_next(uint8_t *buf, size_t len)
+static int uart_next(uint8_t *buf, size_t cap, img_fmt_t *fmt)
 {
     uint8_t  hdr[4];
-    uint32_t n, sum = 0, want_sum;
-    size_t   i;
+    uint32_t n, sum, want_sum;
+    size_t   i, want_len;
 
     for (;;) {
-        uart_wait_magic();
+        sum = 0;
+        uart_wait_magic(fmt);
+        want_len = IMG_FMT_BYTES(*fmt);
 
         uart_read_exact(hdr, 4);
         n = le32(hdr);
-        if (n != (uint32_t)len) {
-            /*  Not a short read - a frame for a different image size. Say so
-             *  and resynchronise rather than truncating it into the buffer. */
-            xil_printf("  image frame says %u bytes, expected %u - dropped\r\n",
-                       (unsigned)n, (unsigned)len);
+        if (n != (uint32_t)want_len) {
+            /*  Not a short read - the length contradicts the format the magic
+             *  announced. The two are deliberately redundant: a sender and a
+             *  receiver that disagree about the format produce a dropped frame
+             *  and this message, instead of 196,608 RGB bytes being read as a
+             *  quantised tensor, which would be a plausible image and a
+             *  confident wrong class. */
+            xil_printf("  %s frame says %u bytes, expected %u - dropped\r\n",
+                       (*fmt == IMG_FMT_RGB256) ? "RGB" : "int8",
+                       (unsigned)n, (unsigned)want_len);
             continue;
         }
+        if (want_len > cap)         /* unreachable with IMG_SRC_BUF_BYTES */
+            return -1;
 
-        uart_read_exact(buf, len);
+        uart_read_exact(buf, want_len);
         uart_read_exact(hdr, 4);
         want_sum = le32(hdr);
 
-        for (i = 0; i < len; i++)
+        for (i = 0; i < want_len; i++)
             sum += buf[i];
 
         if (sum != want_sum) {
@@ -138,26 +164,50 @@ static int uart_next(uint8_t *buf, size_t len)
                        (unsigned)sum, (unsigned)want_sum);
             continue;
         }
-        return (int)len;
+        return (int)want_len;
     }
 }
 
 /* ======================================================================
  *  SD file
  * ====================================================================== */
-static int file_next(const char *path, uint8_t *buf, size_t len)
+/*  The format comes from the file's LENGTH, which is unambiguous here: the two
+ *  are 150,528 and 196,608 bytes and nothing else is accepted. That keeps one
+ *  filename on the card, and a file of any other size is refused outright rather
+ *  than read as far as it goes - a truncated read would be a valid-looking image
+ *  with a garbage tail. */
+static int file_next(const char *path, uint8_t *buf, size_t cap, img_fmt_t *fmt)
 {
-    FIL  f;
-    UINT got = 0;
+    FIL     f;
+    UINT    got = 0;
+    FSIZE_t sz;
+    size_t  want;
 
     if (f_open(&f, path, FA_READ) != FR_OK)
         return -1;
-    if (f_read(&f, buf, (UINT)len, &got) != FR_OK || got != (UINT)len) {
+
+    sz = f_size(&f);
+    if (sz == (FSIZE_t)ACCEL_IMG_BYTES) {
+        *fmt = IMG_FMT_Q8;
+    } else if (sz == (FSIZE_t)PREPROC_SRC_BYTES) {
+        *fmt = IMG_FMT_RGB256;
+    } else {
+        xil_printf("  %s is %u bytes - expected %u (int8) or %u (RGB)\r\n",
+                   path, (unsigned)sz, (unsigned)ACCEL_IMG_BYTES,
+                   (unsigned)PREPROC_SRC_BYTES);
+        f_close(&f);
+        return -1;
+    }
+
+    want = IMG_FMT_BYTES(*fmt);
+    if (want > cap) { f_close(&f); return -1; }
+
+    if (f_read(&f, buf, (UINT)want, &got) != FR_OK || got != (UINT)want) {
         f_close(&f);
         return -1;
     }
     f_close(&f);
-    return (int)len;
+    return (int)want;
 }
 
 /* ======================================================================
@@ -169,6 +219,7 @@ int img_src_open(img_src_t *s)
     s->kind = IMG_SRC_DEFAULT;
     s->path = IMG_SRC_FILE_PATH;
     s->mem  = (const void *)(uintptr_t)IMG_SRC_MEM_ADDR;
+    s->mem_fmt = IMG_SRC_MEM_FMT;
 
     switch (s->kind) {
     case IMG_SRC_UART:
@@ -190,11 +241,11 @@ int img_src_open(img_src_t *s)
     }
 }
 
-int img_src_next(img_src_t *s, void *buf, size_t len)
+int img_src_next(img_src_t *s, void *buf, size_t len, img_fmt_t *fmt)
 {
     int got;
 
-    if (len != ACCEL_IMG_BYTES)
+    if (buf == NULL || fmt == NULL || len < IMG_SRC_BUF_BYTES)
         return -1;
 
     /*  A one-shot source has nothing more to give. Returning -1 rather than the
@@ -204,16 +255,19 @@ int img_src_next(img_src_t *s, void *buf, size_t len)
 
     switch (s->kind) {
     case IMG_SRC_UART:
-        got = uart_next((uint8_t *)buf, len);
+        got = uart_next((uint8_t *)buf, len, fmt);
         break;
 
     case IMG_SRC_FILE:
-        got = file_next(s->path, (uint8_t *)buf, len);
+        got = file_next(s->path, (uint8_t *)buf, len, fmt);
         break;
 
     case IMG_SRC_MEM:
-        memcpy(buf, s->mem, len);
-        got = (int)len;
+        /*  Memory carries no length, so the format cannot be inferred from one
+         *  and comes from the build-time knob instead. */
+        *fmt = s->mem_fmt;
+        got  = (int)IMG_FMT_BYTES(*fmt);
+        memcpy(buf, s->mem, (size_t)got);
         break;
 
     default:

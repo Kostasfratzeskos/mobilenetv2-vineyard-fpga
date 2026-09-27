@@ -24,23 +24,47 @@
  *
  *  ---- the image format, in every case -----------------------------------
  *
- *  224 x 224 x 3 int8, HWC INTERLEAVED: byte (y*224 + x)*3 + c holds channel c.
- *  Exactly ACCEL_IMG_BYTES = 150,528 bytes, and the driver refuses anything
- *  else because the length is structural in the hardware (DD-032) and so cannot
- *  be checked there.
+ *  A source hands over one of TWO formats, and says which:
  *
- *  Already quantised, with the same input scale export.py used. This layer does
- *  NOT preprocess - see the note at the top of main.c about that gap and why it
- *  matters for the project's verification story.
+ *    IMG_FMT_Q8      224 x 224 x 3 int8, HWC interleaved, already quantised with
+ *                    export.py's scale. Exactly ACCEL_IMG_BYTES = 150,528 bytes,
+ *                    and it goes straight to the accelerator. This is the
+ *                    bring-up format: nothing between the PC and the DMA.
+ *
+ *    IMG_FMT_RGB256  256 x 256 x 3 uint8 RGB, HWC interleaved, 196,608 bytes -
+ *                    a decoded image, NOT preprocessed. main.c runs
+ *                    preproc_rgb (firmware/src/preproc.c) over it, which crops,
+ *                    normalises and quantises bit-exactly. This is the format
+ *                    that makes the board do its own front end.
+ *
+ *  Both are HWC interleaved: byte (y*W + x)*3 + c holds channel c. DD-032
+ *  explains why, and it pays twice - the DMA reads one sequential stream, and
+ *  preproc_rgb walks both buffers forwards.
+ *
+ *  RGB256 is the interesting one and it took a measurement to justify. The
+ *  torchvision pipeline is Resize(256) -> CenterCrop(224) -> Normalize, and
+ *  every image in this dataset is already 256x256 - so Resize is the identity,
+ *  the crop is an integer crop, and the C front end reproduces the golden
+ *  tensors bit-exactly (firmware/test/test_preproc.c). An image that is NOT
+ *  256x256 is refused rather than resampled; see preproc.h.
+ *
+ *  The buffer a caller passes to img_src_next must therefore be
+ *  IMG_SRC_BUF_BYTES, the larger of the two, not ACCEL_IMG_BYTES.
  *
  *  ---- the UART framing ---------------------------------------------------
  *
  *  Deliberately the simplest thing that cannot silently half-transfer:
  *
- *      magic   4 bytes  'I','M','G','1'
- *      length  4 bytes  little-endian, must equal ACCEL_IMG_BYTES
+ *      magic   4 bytes  'I','M','G','1'  (Q8)  or  'I','M','G','2'  (RGB256)
+ *      length  4 bytes  little-endian, must match the magic's format exactly
  *      payload length bytes
  *      sum     4 bytes  little-endian sum of every payload byte
+ *
+ *  The format is in the MAGIC and the length is checked against it, rather than
+ *  inferred from the length alone. Two independent statements of the same fact
+ *  mean a sender and a receiver that disagree about the format produce a dropped
+ *  frame and a message, instead of 196,608 bytes being read as a quantised
+ *  tensor - which would be a perfectly plausible image and a wrong class.
  *
  *  The checksum is there because a dropped byte on a serial line shifts every
  *  channel afterwards by one, which produces a plausible image and a confident
@@ -56,6 +80,7 @@
 #include <stdint.h>
 
 #include "accel_csr.h"
+#include "preproc.h"
 
 typedef enum {
     IMG_SRC_FILE = 0,
@@ -63,9 +88,21 @@ typedef enum {
     IMG_SRC_MEM
 } img_src_kind_t;
 
+typedef enum {
+    IMG_FMT_Q8 = 0,     /* 150,528 B, already quantised - straight to the DMA  */
+    IMG_FMT_RGB256      /* 196,608 B, decoded RGB - preproc_rgb must run first */
+} img_fmt_t;
+
+/*  One buffer serves both formats, so it is sized for the larger. */
+#define IMG_SRC_BUF_BYTES  PREPROC_SRC_BYTES
+
+#define IMG_FMT_BYTES(f)   ((f) == IMG_FMT_RGB256 ? PREPROC_SRC_BYTES                                                   : (size_t)ACCEL_IMG_BYTES)
+
 typedef struct {
     img_src_kind_t kind;
     const char    *path;      /* FILE: the .bin to read                       */
+    img_fmt_t      mem_fmt;   /* MEM : what is at `mem` - it has no length to
+                               *       infer from, so it must be told         */
     const void    *mem;       /* MEM : where it already is                    */
     unsigned       served;    /* how many images this source has handed over  */
     int            once;      /* FILE/MEM: stop after one, rather than loop    */
@@ -75,12 +112,14 @@ typedef struct {
 /*  Pick a source and get it ready. Returns 0 on success. */
 int  img_src_open(img_src_t *s);
 
-/*  Fill buf with the next image. Returns the byte count, or -1 when the source
- *  is finished (a single file already served, or the UART closed). len must be
- *  ACCEL_IMG_BYTES; a source that cannot supply exactly that returns -1 rather
- *  than a short image, because a short image is a wrong answer and not an error
- *  the hardware can see. */
-int  img_src_next(img_src_t *s, void *buf, size_t len);
+/*  Fill buf with the next image and say which format it is in. Returns the byte
+ *  count, or -1 when the source is finished (a single file already served, or the
+ *  UART closed). len must be IMG_SRC_BUF_BYTES.
+ *
+ *  A source that cannot supply a whole frame returns -1 rather than a short one,
+ *  because a short image is a wrong answer and not an error the hardware can
+ *  see. `fmt` is always written when the return value is positive. */
+int  img_src_next(img_src_t *s, void *buf, size_t len, img_fmt_t *fmt);
 
 void img_src_close(img_src_t *s);
 
