@@ -57,8 +57,28 @@ static XUartPs uart;
 #define IMG_UART_DEVICE_ID XPAR_XUARTPS_0_DEVICE_ID
 #endif
 
+/*  ZERO MEANS "LEAVE THE BAUD RATE ALONE", and that is the default on purpose.
+ *
+ *  This is the same UART the console prints on. main.c uses printf, which the BSP
+ *  routes to psu_uart_0, and IMG_UART_DEVICE_ID above is psu_uart_0 - one device.
+ *  So calling XUartPs_SetBaudRate here would not just configure the image
+ *  transfer, it would reconfigure the CONSOLE underneath the terminal that is
+ *  watching it. Every printf after img_src_open would then arrive at a rate the
+ *  terminal is no longer set to - as garbage - starting exactly at the line that
+ *  names the image source. On a bench that reads as a crash during start-up, and
+ *  it is not one: the application is running perfectly.
+ *
+ *  Inheriting whatever the BSP configured keeps the console readable, and the
+ *  image arrives at the console's rate. At the BSP default of 115200 that is about
+ *  13 s for a 196,608-byte RGB frame: slow, correct, readable, and the right trade
+ *  for first bring-up.
+ *
+ *  To go faster, set BOTH ends deliberately - raise the BSP's STDIN/STDOUT baud to
+ *  921600, build with -DIMG_UART_BAUD=921600 so this agrees with it, and open the
+ *  terminal at 921600. That puts an RGB frame at ~2.1 s. Setting only one of the
+ *  two is the trap above. */
 #ifndef IMG_UART_BAUD
-#define IMG_UART_BAUD 921600u
+#define IMG_UART_BAUD 0u
 #endif
 
 static int uart_open(void)
@@ -70,7 +90,14 @@ static int uart_open(void)
     if (XUartPs_CfgInitialize(&uart, cfg, cfg->BaseAddress) != XST_SUCCESS)
         return -1;
 
-    XUartPs_SetBaudRate(&uart, IMG_UART_BAUD);
+    if (IMG_UART_BAUD != 0u) {
+        /*  Announced BEFORE the change, because afterwards this very message
+         *  would be the unreadable thing it is warning about. */
+        xil_printf("  UART: switching this console to %u baud - reopen the"
+                   " terminal at that rate\r\n",
+                   (unsigned)IMG_UART_BAUD);
+        XUartPs_SetBaudRate(&uart, IMG_UART_BAUD);
+    }
     /*  Polled. An interrupt-driven receiver would be better if the PS had
      *  anything else to do, and it has not: it is waiting for this image. */
     XUartPs_SetOperMode(&uart, XUARTPS_OPER_MODE_NORMAL);

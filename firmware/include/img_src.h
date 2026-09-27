@@ -9,8 +9,12 @@
  *
  *    IMG_SRC_UART   streamed from the PC over the ZCU104's USB-UART bridge. The
  *                   practical one for trying different leaves: the SAME USB
- *                   cable that programs the board carries it, and 150,528 bytes
- *                   at 921600 baud is about 1.6 s. A tiny framed protocol, below.
+ *                   cable that programs the board carries it. It shares that UART
+ *                   with the console, so it runs at the CONSOLE's baud rate and
+ *                   does NOT raise it on its own - see IMG_UART_BAUD in
+ *                   img_src.c for why that matters. ~13 s per frame at the BSP
+ *                   default of 115200; ~2.1 s once both ends are set to 921600.
+ *                   A tiny framed protocol, below.
  *
  *    IMG_SRC_MEM    already in DDR. Put there over JTAG with xsct's `mwr`, or by
  *                   a bootloader, or by a previous run. Zero protocol code and
