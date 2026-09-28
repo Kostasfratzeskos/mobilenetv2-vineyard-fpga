@@ -1,0 +1,20 @@
+EXPECTED RESULT - what the board must print
+============================================================
+
+golden set   : healthy_hl6025
+source image : 0ca59865-f0d2-4863-b4d1-a6690de53a5a___Mt.N.V_HL 6025_90deg.JPG
+checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+
+logits       :   -4950   -6177   15185   -5486
+argmax       : 2 = Healthy
+manifest says: Healthy
+
+These are not a prediction - they are what the RTL produced in
+simulation for this exact input, bit-exact against the C model
+over all 64 layers. The board must produce the SAME FOUR
+INTEGERS. Anything else is a bug, not a rounding difference:
+there is no floating point anywhere in the datapath.
+
+Both image.bin formats must give the same numbers. If the int8
+one is right and the RGB one is not, the fault is preproc.c or
+the cache flush of the image buffer - not the accelerator.
