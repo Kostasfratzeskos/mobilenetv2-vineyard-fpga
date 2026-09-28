@@ -142,6 +142,18 @@ build/bd_*/timing_summary.rpt
 build/bd_*/synth_timing_summary.rpt
 build/bd_*/methodology.rpt
 
+# ── SD-card staging (scripts/make_sdcard.py) ──
+#  EXPECTED.txt is the KNOWN ANSWER - the four logits and the class the RTL
+#  produced in simulation for a golden image, bit-exact against the C model -
+#  so it stays. The point of it is to arrive at the bench with a result that
+#  is already known, rather than debugging the accelerator and the test data
+#  at the same time; a file nobody can obtain is no use for that.
+#  The blobs beside it are the same bytes as software/export/*.bin, ignored
+#  above for the same reason, plus the image. 3.3 MB, and one command
+#  rebuilds all of them:
+#      python scripts/make_sdcard.py
+build/sdcard/*.bin
+
 # ── Place-and-route artifacts (scripts/run_impl.sh) ──
 #  Same rule as build/synth above, one directory per constraint so two runs can
 #  be compared. The utilization reports are small and are the evidence behind
