@@ -1,0 +1,20 @@
+EXPECTED RESULT - what the board must print
+============================================================
+
+golden set   : esca_4399
+source image : 0075b632-2e34-4e4f-9697-fe2b332b7ef8___FAM_B.Msls 4399_flipLR.JPG
+checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+
+logits       :   -8592   23216  -10575   -3925
+argmax       : 1 = ESCA
+manifest says: ESCA
+
+These are not a prediction - they are what the RTL produced in
+simulation for this exact input, bit-exact against the C model
+over all 64 layers. The board must produce the SAME FOUR
+INTEGERS. Anything else is a bug, not a rounding difference:
+there is no floating point anywhere in the datapath.
+
+Both image.bin formats must give the same numbers. If the int8
+one is right and the RGB one is not, the fault is preproc.c or
+the cache flush of the image buffer - not the accelerator.

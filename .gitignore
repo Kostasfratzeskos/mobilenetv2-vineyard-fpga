@@ -152,7 +152,12 @@ build/bd_*/methodology.rpt
 #  above for the same reason, plus the image. 3.3 MB, and one command
 #  rebuilds all of them:
 #      python scripts/make_sdcard.py
-build/sdcard/*.bin
+#  The default is the healthy set. The other classes are staged beside it, one
+#  card per directory, so each can be copied flat to a card root - and the
+#  pattern is build/sdcard*/ for the same reason as build/synth_*/: naming only
+#  build/sdcard/ left every other set's blobs untracked-but-not-ignored.
+#      python scripts/make_sdcard.py --set esca_4399 --out build/sdcard_esca
+build/sdcard*/*.bin
 
 # ── Place-and-route artifacts (scripts/run_impl.sh) ──
 #  Same rule as build/synth above, one directory per constraint so two runs can
