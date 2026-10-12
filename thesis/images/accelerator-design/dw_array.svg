@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1000 576" width="1000" height="576"
+     font-family="Helvetica, Arial, sans-serif">
+  <title>dw_array: the depthwise array</title>
+  <desc>16 lanes, one per channel, each a dwconv3x3: nine registered products and a
+        balanced adder tree, and no accumulator, because a depthwise dot product is
+        exactly nine taps and completes in one pass. The lanes never interact - there
+        is no adder tree across channels and no shared activation broadcast, which is
+        the opposite of pe_array. The line buffer delivers the window tap-major and
+        channel-minor, so lane c gathers byte c of every tap at a stride of 16 bytes;
+        the weight banks are channel-major and pass straight through. 16 x 9 = 144
+        multipliers feed the shared output stage, which writes back to the pool.</desc>
+
+  <defs>
+    <!-- Fixed-size arrowheads (user units, not stroke widths), so a thick bus and a
+         thin wire get the same head. The tip sits 3 units past the line's end. -->
+    <marker id="ah" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#374151"/>
+    </marker>
+    <marker id="ahb" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="aha" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#b45309"/>
+    </marker>
+
+    <!-- One lane (dwconv3x3), drawn once at the origin and placed three times. Rows:
+         nine multipliers, adder tree, out. There is deliberately NO accumulator row
+         here - that absence is the point of the figure. -->
+    <g id="dwlane">
+      <rect x="0" y="215" width="200" height="200" rx="6" fill="#f8fafc" stroke="#374151" stroke-width="1.5"/>
+
+      <!-- 9 multipliers, three drawn -->
+      <rect x="12" y="258" width="176" height="56" rx="4" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+      <g fill="#ffffff" stroke="#374151" stroke-width="1.4">
+        <circle cx="36" cy="286" r="13"/>
+        <circle cx="78" cy="286" r="13"/>
+        <circle cx="162" cy="286" r="13"/>
+      </g>
+      <path d="M30,280 L42,292 M42,280 L30,292 M72,280 L84,292 M84,280 L72,292 M156,280 L168,292 M168,280 L156,292"
+            stroke="#374151" stroke-width="1.6" stroke-linecap="round"/>
+      <g fill="#9ca3af">
+        <circle cx="108" cy="286" r="2.5"/>
+        <circle cx="120" cy="286" r="2.5"/>
+        <circle cx="132" cy="286" r="2.5"/>
+      </g>
+
+      <!-- products into the adder tree -->
+      <path d="M36,299 L36,332 M78,299 L78,332 M162,299 L162,332" stroke="#374151" stroke-width="1.4"/>
+      <path d="M16,332 L184,332 L128,372 L72,372 Z" fill="#f3f4f6" stroke="#374151" stroke-width="1.4"/>
+
+      <!-- the result leaves directly: no accumulator, no feedback path -->
+      <line x1="100" y1="372" x2="100" y2="477" stroke="#374151" stroke-width="1.5" marker-end="url(#ah)"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="576" fill="#ffffff"/>
+
+  <!-- ===================== pool and window generator ===================== -->
+  <rect x="20" y="24" width="190" height="50" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="115" y="56" text-anchor="middle" font-size="20" fill="#1f2937">Activation pool</text>
+
+  <line x1="210" y1="49" x2="247" y2="49" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <rect x="250" y="16" width="310" height="66" rx="5" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="405" y="44" text-anchor="middle" font-size="20" fill="#1f2937">Line buffer</text>
+  <text x="405" y="68" text-anchor="middle" font-size="17" fill="#6b7280">3 rows &#183; each pixel read once</text>
+
+  <text x="600" y="42" font-size="18" fill="#1d4ed8">win &#8212; tap-major, channel-minor</text>
+  <text x="600" y="66" font-size="17" fill="#6b7280">lane c takes byte c of each tap (stride 16 B)</text>
+
+  <line x1="405" y1="82" x2="405" y2="92" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <!-- ===================== the window bus: 9 taps x 16 channels ===================== -->
+  <rect x="240" y="95" width="740" height="35" rx="4" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <g stroke="#1d4ed8" stroke-width="1">
+    <line x1="322.2" y1="95" x2="322.2" y2="130"/>
+    <line x1="404.4" y1="95" x2="404.4" y2="130"/>
+    <line x1="486.7" y1="95" x2="486.7" y2="130"/>
+    <line x1="568.9" y1="95" x2="568.9" y2="130"/>
+    <line x1="651.1" y1="95" x2="651.1" y2="130"/>
+    <line x1="733.3" y1="95" x2="733.3" y2="130"/>
+    <line x1="815.6" y1="95" x2="815.6" y2="130"/>
+    <line x1="897.8" y1="95" x2="897.8" y2="130"/>
+  </g>
+  <g font-size="17" text-anchor="middle" fill="#1f2937">
+    <text x="281.1" y="119">tap 0</text>
+    <text x="363.3" y="119">tap 1</text>
+    <text x="445.6" y="119">tap 2</text>
+    <text x="527.8" y="119">tap 3</text>
+    <text x="610.0" y="119">tap 4</text>
+    <text x="692.2" y="119">tap 5</text>
+    <text x="774.4" y="119">tap 6</text>
+    <text x="856.7" y="119">tap 7</text>
+    <text x="938.9" y="119">tap 8</text>
+  </g>
+
+  <!-- EVERY tap feeds the spine, and each lane gathers from the spine: without this
+       the lane verticals would appear to leave from one tap segment each, which is
+       exactly the channel/tap mix-up the stride is about. -->
+  <g stroke="#1d4ed8" stroke-width="1.2">
+    <line x1="281.1" y1="130" x2="281.1" y2="142"/>
+    <line x1="445.6" y1="130" x2="445.6" y2="142"/>
+    <line x1="610.0" y1="130" x2="610.0" y2="142"/>
+    <line x1="774.4" y1="130" x2="774.4" y2="142"/>
+    <line x1="938.9" y1="130" x2="938.9" y2="142"/>
+  </g>
+  <line x1="240" y1="142" x2="980" y2="142" stroke="#1d4ed8" stroke-width="2.5"/>
+
+  <!-- the gather: one vertical per lane, routed BETWEEN the weight banks so the two
+       buses never cross (the same rule pe_array.svg follows) -->
+  <g stroke="#1d4ed8" stroke-width="2.5">
+    <line x1="383" y1="142" x2="383" y2="215" marker-end="url(#ahb)"/>
+    <line x1="613" y1="142" x2="613" y2="215" marker-end="url(#ahb)"/>
+    <line x1="923" y1="142" x2="923" y2="215" marker-end="url(#ahb)"/>
+  </g>
+  <g fill="#1d4ed8">
+    <circle cx="383" cy="142" r="4"/>
+    <circle cx="613" cy="142" r="4"/>
+  </g>
+
+  <!-- ===================== weights: one bank per channel ===================== -->
+  <text x="226" y="168" text-anchor="end" font-size="20" fill="#b45309">Weight buffer</text>
+  <text x="226" y="190" text-anchor="end" font-size="17" fill="#6b7280">channel-major</text>
+  <g fill="#fffbeb" stroke="#b45309" stroke-width="1.5">
+    <rect x="257" y="152" width="80" height="40" rx="4"/>
+    <rect x="487" y="152" width="80" height="40" rx="4"/>
+    <rect x="797" y="152" width="80" height="40" rx="4"/>
+  </g>
+  <g font-size="17" text-anchor="middle" fill="#1f2937">
+    <text x="297" y="178">bank 0</text>
+    <text x="527" y="178">bank 1</text>
+    <text x="837" y="178">bank 15</text>
+  </g>
+  <g fill="#9ca3af">
+    <circle cx="711" cy="172" r="3.5"/>
+    <circle cx="725" cy="172" r="3.5"/>
+    <circle cx="739" cy="172" r="3.5"/>
+  </g>
+  <g stroke="#b45309" stroke-width="2" stroke-dasharray="7 4">
+    <line x1="297" y1="192" x2="297" y2="215" marker-end="url(#aha)"/>
+    <line x1="527" y1="192" x2="527" y2="215" marker-end="url(#aha)"/>
+    <line x1="837" y1="192" x2="837" y2="215" marker-end="url(#aha)"/>
+  </g>
+
+  <!-- ===================== the lanes ===================== -->
+  <use xlink:href="#dwlane" x="240"/>
+  <use xlink:href="#dwlane" x="470"/>
+  <use xlink:href="#dwlane" x="780"/>
+
+  <g font-size="19" text-anchor="middle" fill="#1f2937">
+    <text x="340" y="242">channel 0</text>
+    <text x="570" y="242">channel 1</text>
+    <text x="880" y="242">channel 15</text>
+  </g>
+
+  <!-- channels 2 .. 14 -->
+  <g fill="#9ca3af">
+    <circle cx="711" cy="315" r="3.5"/>
+    <circle cx="725" cy="315" r="3.5"/>
+    <circle cx="739" cy="315" r="3.5"/>
+  </g>
+
+  <!-- ===================== row labels ===================== -->
+  <g text-anchor="end" fill="#6b7280">
+    <text x="226" y="292" font-size="18">9 multipliers</text>
+    <text x="226" y="352" font-size="18">adder tree</text>
+    <text x="226" y="400" font-size="18">no accumulator</text>
+    <text x="226" y="422" font-size="17">9 taps, one pass</text>
+    <text x="226" y="452" font-size="17">144 multipliers total</text>
+  </g>
+
+  <!-- ===================== the shared output stage ===================== -->
+  <rect x="240" y="480" width="740" height="62" rx="5" fill="#fbfbfd" stroke="#374151" stroke-width="2"/>
+  <text x="610" y="506" text-anchor="middle" font-size="21" fill="#1f2937">Shared output stage</text>
+  <text x="610" y="530" text-anchor="middle" font-size="17" fill="#6b7280">bias add + requantize &#183; 16 channels</text>
+
+  <!-- its int8 results go back to the pool -->
+  <polyline points="240,511 60,511 60,77" fill="none" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+</svg>

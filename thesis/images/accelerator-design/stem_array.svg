@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1000 640" width="1000" height="640"
+     font-family="Helvetica, Arial, sans-serif">
+  <title>stem_array: the stem convolution engine</title>
+  <desc>Eight lanes, each a conv3x3_std computing one output channel from the SAME
+        27-tap window of 3 input channels by 3x3. A standard convolution sums over
+        the input channels as well as the window, so every lane reads the same
+        activations and differs only in its weights - the broadcast arrangement of
+        pe_array, not the per-lane windows of dw_array. The window is transposed from
+        the line buffer's tap-major order into channel-major order once, before the
+        broadcast, rather than once per lane. With OC=32 and TS=8 each window is swept
+        in four oc-tiles, one per cycle, which matches the four input cycles the line
+        buffer needs to produce the next window; the four results of 8 channels are
+        assembled into one 32-channel entry. The stem is the only operation whose
+        input is the image buffer rather than the activation pool.</desc>
+
+  <defs>
+    <!-- Fixed-size arrowheads (user units, not stroke widths), so a thick bus and a
+         thin wire get the same head. The tip sits 3 units past the line's end. -->
+    <marker id="ah" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#374151"/>
+    </marker>
+    <marker id="ahb" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="aha" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#b45309"/>
+    </marker>
+
+    <!-- One lane (conv3x3_std), drawn once at the origin and placed three times.
+         27 multipliers, a 5-level adder tree, and NO accumulator: the dot product
+         is 27 taps wide and completes in one pass. -->
+    <g id="stlane">
+      <rect x="0" y="265" width="200" height="185" rx="6" fill="#f8fafc" stroke="#374151" stroke-width="1.5"/>
+
+      <!-- 27 multipliers, three drawn -->
+      <rect x="12" y="308" width="176" height="56" rx="4" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>
+      <g fill="#ffffff" stroke="#374151" stroke-width="1.4">
+        <circle cx="36" cy="336" r="13"/>
+        <circle cx="78" cy="336" r="13"/>
+        <circle cx="162" cy="336" r="13"/>
+      </g>
+      <path d="M30,330 L42,342 M42,330 L30,342 M72,330 L84,342 M84,330 L72,342 M156,330 L168,342 M168,330 L156,342"
+            stroke="#374151" stroke-width="1.6" stroke-linecap="round"/>
+      <g fill="#9ca3af">
+        <circle cx="108" cy="336" r="2.5"/>
+        <circle cx="120" cy="336" r="2.5"/>
+        <circle cx="132" cy="336" r="2.5"/>
+      </g>
+
+      <!-- products into the adder tree -->
+      <path d="M36,349 L36,382 M78,349 L78,382 M162,349 L162,382" stroke="#374151" stroke-width="1.4"/>
+      <path d="M16,382 L184,382 L128,422 L72,422 Z" fill="#f3f4f6" stroke="#374151" stroke-width="1.4"/>
+
+      <!-- the result leaves directly: no accumulator, no feedback path -->
+      <line x1="100" y1="422" x2="100" y2="467" stroke="#374151" stroke-width="1.5" marker-end="url(#ah)"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="640" fill="#ffffff"/>
+
+  <!-- ===================== the image, and the window generator ===================== -->
+  <rect x="20" y="18" width="190" height="58" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="115" y="44" text-anchor="middle" font-size="20" fill="#1f2937">Image buffer</text>
+  <text x="115" y="66" text-anchor="middle" font-size="17" fill="#6b7280">224 &#215; 224 &#215; 3</text>
+
+  <line x1="210" y1="47" x2="247" y2="47" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <rect x="250" y="16" width="310" height="62" rx="5" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="405" y="42" text-anchor="middle" font-size="20" fill="#1f2937">Line buffer</text>
+  <text x="405" y="64" text-anchor="middle" font-size="17" fill="#6b7280">3 rows &#183; stride 2, pad 1</text>
+
+  <text x="600" y="40" font-size="18" fill="#1d4ed8">win &#8212; 27 taps: 3 channels &#215; 3&#215;3</text>
+  <text x="600" y="64" font-size="17" fill="#6b7280">tap-major, 3 bytes per tap</text>
+
+  <line x1="405" y1="78" x2="405" y2="95" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <!-- ===================== the window bus: 9 taps x 3 channels ===================== -->
+  <rect x="240" y="98" width="740" height="35" rx="4" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <g stroke="#1d4ed8" stroke-width="1">
+    <line x1="322.2" y1="98" x2="322.2" y2="133"/>
+    <line x1="404.4" y1="98" x2="404.4" y2="133"/>
+    <line x1="486.7" y1="98" x2="486.7" y2="133"/>
+    <line x1="568.9" y1="98" x2="568.9" y2="133"/>
+    <line x1="651.1" y1="98" x2="651.1" y2="133"/>
+    <line x1="733.3" y1="98" x2="733.3" y2="133"/>
+    <line x1="815.6" y1="98" x2="815.6" y2="133"/>
+    <line x1="897.8" y1="98" x2="897.8" y2="133"/>
+  </g>
+  <g font-size="17" text-anchor="middle" fill="#1f2937">
+    <text x="281.1" y="122">tap 0</text>
+    <text x="363.3" y="122">tap 1</text>
+    <text x="445.6" y="122">tap 2</text>
+    <text x="527.8" y="122">tap 3</text>
+    <text x="610.0" y="122">tap 4</text>
+    <text x="692.2" y="122">tap 5</text>
+    <text x="774.4" y="122">tap 6</text>
+    <text x="856.7" y="122">tap 7</text>
+    <text x="938.9" y="122">tap 8</text>
+  </g>
+
+  <line x1="610" y1="133" x2="610" y2="145" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+
+  <!-- ===================== the transposition, done ONCE ===================== -->
+  <rect x="240" y="148" width="740" height="36" rx="4" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="610" y="172" text-anchor="middle" font-size="18" fill="#1f2937">transpose once &#8212; channel-major, then broadcast</text>
+
+  <!-- the broadcast spine: ALL lanes read the SAME 27 activations -->
+  <line x1="610" y1="184" x2="610" y2="196" stroke="#1d4ed8" stroke-width="2.5"/>
+  <line x1="240" y1="196" x2="980" y2="196" stroke="#1d4ed8" stroke-width="2.5"/>
+  <g stroke="#1d4ed8" stroke-width="2.5">
+    <line x1="383" y1="196" x2="383" y2="265" marker-end="url(#ahb)"/>
+    <line x1="613" y1="196" x2="613" y2="265" marker-end="url(#ahb)"/>
+    <line x1="923" y1="196" x2="923" y2="265" marker-end="url(#ahb)"/>
+  </g>
+  <g fill="#1d4ed8">
+    <circle cx="383" cy="196" r="4"/>
+    <circle cx="613" cy="196" r="4"/>
+  </g>
+
+  <!-- ===================== weights: one bank per lane, new set each oc-tile ===== -->
+  <text x="226" y="222" text-anchor="end" font-size="20" fill="#b45309">Weight buffer</text>
+  <text x="226" y="244" text-anchor="end" font-size="17" fill="#6b7280">lane m &#8594; ch 8t + m</text>
+  <g fill="#fffbeb" stroke="#b45309" stroke-width="1.5">
+    <rect x="257" y="206" width="80" height="40" rx="4"/>
+    <rect x="487" y="206" width="80" height="40" rx="4"/>
+    <rect x="797" y="206" width="80" height="40" rx="4"/>
+  </g>
+  <g font-size="17" text-anchor="middle" fill="#1f2937">
+    <text x="297" y="232">bank 0</text>
+    <text x="527" y="232">bank 1</text>
+    <text x="837" y="232">bank 7</text>
+  </g>
+  <g fill="#9ca3af">
+    <circle cx="711" cy="226" r="3.5"/>
+    <circle cx="725" cy="226" r="3.5"/>
+    <circle cx="739" cy="226" r="3.5"/>
+  </g>
+  <g stroke="#b45309" stroke-width="2" stroke-dasharray="7 4">
+    <line x1="297" y1="246" x2="297" y2="265" marker-end="url(#aha)"/>
+    <line x1="527" y1="246" x2="527" y2="265" marker-end="url(#aha)"/>
+    <line x1="837" y1="246" x2="837" y2="265" marker-end="url(#aha)"/>
+  </g>
+
+  <!-- ===================== the lanes ===================== -->
+  <use xlink:href="#stlane" x="240"/>
+  <use xlink:href="#stlane" x="470"/>
+  <use xlink:href="#stlane" x="780"/>
+
+  <g font-size="19" text-anchor="middle" fill="#1f2937">
+    <text x="340" y="292">lane 0</text>
+    <text x="570" y="292">lane 1</text>
+    <text x="880" y="292">lane 7</text>
+  </g>
+
+  <!-- lanes 2 .. 6 -->
+  <g fill="#9ca3af">
+    <circle cx="711" cy="365" r="3.5"/>
+    <circle cx="725" cy="365" r="3.5"/>
+    <circle cx="739" cy="365" r="3.5"/>
+  </g>
+
+  <!-- ===================== row labels ===================== -->
+  <g text-anchor="end" fill="#6b7280">
+    <text x="226" y="342" font-size="18">27 multipliers</text>
+    <text x="226" y="402" font-size="18">adder tree</text>
+    <text x="226" y="440" font-size="18">no accumulator</text>
+    <text x="226" y="462" font-size="17">27 taps, one pass</text>
+  </g>
+  <text x="700" y="463" font-size="17" fill="#6b7280">8 channels per cycle</text>
+
+  <!-- ===================== the shared output stage ===================== -->
+  <rect x="240" y="470" width="740" height="58" rx="5" fill="#fbfbfd" stroke="#374151" stroke-width="2"/>
+  <text x="610" y="494" text-anchor="middle" font-size="21" fill="#1f2937">Shared output stage</text>
+  <text x="610" y="517" text-anchor="middle" font-size="17" fill="#6b7280">bias add + requantize + ReLU6 &#183; 8 lanes</text>
+
+  <line x1="610" y1="528" x2="610" y2="546" stroke="#374151" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- ===================== assemble the four oc-tiles ===================== -->
+  <rect x="400" y="549" width="420" height="56" rx="5" fill="#ffffff" stroke="#374151" stroke-width="1.5"/>
+  <text x="610" y="573" text-anchor="middle" font-size="19" fill="#1f2937">assemble 4 oc-tiles</text>
+  <text x="610" y="594" text-anchor="middle" font-size="17" fill="#6b7280">4 &#215; 8 = 32 channels, one entry</text>
+
+  <!-- ===================== out to the pool ===================== -->
+  <rect x="20" y="549" width="190" height="56" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="115" y="573" text-anchor="middle" font-size="20" fill="#1f2937">Activation pool</text>
+  <text x="115" y="594" text-anchor="middle" font-size="17" fill="#6b7280">112 &#215; 112 &#215; 32</text>
+
+  <line x1="400" y1="577" x2="213" y2="577" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#ahb)"/>
+  <text x="306" y="567" text-anchor="middle" font-size="17" fill="#6b7280">per window</text>
+</svg>
