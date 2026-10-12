@@ -60,6 +60,10 @@ sim/*
 # ── OS / editor cruft ───────────────────────────────
 .DS_Store
 Thumbs.db
+#  Windows' "downloaded from the internet" marker, which becomes a real file
+#  when a download is copied through WSL. Three of them were committed beside
+#  the NTUA seal in images/template/.
+*Zone.Identifier
 *.swp
 *~
 .vscode/
