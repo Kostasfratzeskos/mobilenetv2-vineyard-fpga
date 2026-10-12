@@ -44,6 +44,155 @@
 \newcommand{\thLoadOverheadPct}{17.3}
 % [DERIVED] \thCycles / \thClkBoard, i.e. 951833 / 187.5e6.
 \newcommand{\thLatencyBoard}{5.08}
+% [DERIVED] the one-MAC-per-cycle baseline that Section~\ref{sec:parallelism}
+% rejects: \thMacs / \thClkBoard, i.e. 299562112 / 187.5e6 = 1.598 s. The
+% whole-network total is the right one here, not \thMacsConv - a GAP
+% accumulation costs a sequential engine a cycle exactly like a multiply does.
+% Quoted in SECONDS. It is 1.6 s, not 1.6 ms; the draft that first carried this
+% number was out by 1000x, which made the rejected baseline look three times
+% FASTER than \thLatencyBoard and inverted the argument for parallelising.
+\newcommand{\thLatencySeq}{1.60}
+% [DERIVED] \thMacs / \thCycles, i.e. 299562112 / 951833 = 314.7. A ratio of
+% cycle counts, so it is clock-independent; equivalently \thLatencySeq /
+% \thLatencyBoard.
+\newcommand{\thSpeedupSeq}{315}
+
+% --- the Tm/Tn design space (DD-013) --------------------------------------
+% [DERIVED] scripts/analyze_workload.py, "Tm/Tn sweep at constant P=512".
+% The cycle model is HW * ceil(OC/Tm) * ceil(IC/Tn) summed over all
+% \thPwLayers{} pointwise layers; utilization is the useful fraction of the
+% P=512 MAC slots issued. Re-run the script to regenerate - every figure here
+% was reproduced from the current manifest on 2026-10-05 and matches DD-013.
+% Suffix names Tm: 32x16 is the decision, the others are the alternatives.
+\newcommand{\thPwUtil}{92.1}            % Tm=32 x Tn=16 - DD-013's choice
+\newcommand{\thPwUtilSixteen}{88.6}     % 16 x 32
+\newcommand{\thPwUtilSixtyFour}{74.9}   % 64 x 8  - the earlier proposal
+\newcommand{\thPwUtilEight}{66.1}       % 8  x 64
+% [DERIVED] same run, "where the tail-padding goes": 44,758 of 568,088 cycles
+% are zero-padded tail tiles. This is 100 - \thPwUtil, from the other side.
+\newcommand{\thPwWastePct}{7.9}
+% [DERIVED] 2.27 ms pointwise of 4.81 ms modelled total, from the same script's
+% depthwise table at Tc=16. Quoted as a SHARE on purpose: the script's absolute
+% milliseconds are at 250 MHz, which this design does not reach (\thClkBoard),
+% whereas the ratio is clock-independent.
+\newcommand{\thPwRuntimePct}{47}
+% [ESTIMATED] DD-013, "a pixel-parallel fallback for layers with OC < Tm, which
+% recovers only 2.2%". NOTE: unlike every other figure in this block, the sweep
+% behind this one is NOT in analyze_workload.py - it exists only in DD-013's
+% prose. TODO: add the fallback to the script, or drop the number from the text.
+\newcommand{\thPwPixelGain}{2.2}
+
+% --- the depthwise sizing (DD-014) ----------------------------------------
+% [DERIVED] scripts/analyze_workload.py, "depthwise cost" table. Shares of the
+% modelled inference time, not of the MACs - the whole point of DD-014 is that
+% the two differ. Quoted as SHARES for the same reason as \thPwRuntimePct: the
+% script's absolute milliseconds are at 250 MHz, a clock this design does not
+% reach, while the ratios are clock-independent. Reproduced 2026-10-12.
+\newcommand{\thDwShareSeq}{79}          % Tc=1, one output element per cycle
+\newcommand{\thDwShareEight}{33}        % Tc=8
+\newcommand{\thDwShare}{19}             % Tc=16 - DD-014's choice
+\newcommand{\thDwShareThirtyTwo}{11}    % Tc=32, for twice the slices
+% [DERIVED] same table: Tc*K*K = 144 multipliers, packed two int8 products per
+% DSP48E2. The slice count, not the multiplier count.
+\newcommand{\thDwDsp}{72}
+% [DERIVED] same script, "stride-2 depthwise layers": features.2/4/7/14.conv.1.0,
+% 4 of the \thDwLayers{} depthwise layers, each with an input grid 4x its output.
+\newcommand{\thDwStrideTwo}{4}
+% [ESTIMATED] DD-014's correction of 2026-09-12: counting OUTPUT pixels instead
+% of input pixels understated the depthwise cost by this factor. NOTE: like
+% \thPwPixelGain, the before/after comparison is not in analyze_workload.py -
+% the script was fixed in place, so only the corrected model survives. The
+% factor is recorded in DD-014 alone. TODO: drop it, or keep the old model
+% behind a flag so the comparison is reproducible.
+\newcommand{\thDwInputFactor}{1.63}
+
+% --- the stem sizing (DD-016) ---------------------------------------------
+% [ESTIMATED] DD-016's TS sweep. NOTE: unlike the Tm/Tn and Tc sweeps, this one
+% is NOT in analyze_workload.py - the script only computes the stem at one
+% element per cycle (sec_depthwise, `stem_c`). The table survives in DD-016 and
+% in stem_array.v's header alone.
+%
+% Quoted as SHARES of the modelled total, which is both clock-independent and
+% DD-016's own idiom ("the stem climbs back to 15% of runtime" for TS=4, which
+% is 0.55/3.76). Do not quote DD-016's absolute milliseconds: its 401,408
+% cycles are printed by the script as 1.61 ms at 250 MHz, but the table calls
+% the same figure 1.76 ms. One of the two is wrong and nobody has resolved it.
+% TODO: add the TS sweep to analyze_workload.py and settle the discrepancy.
+\newcommand{\thStemShareSeq}{35}        % TS=1,  1.76/4.97
+\newcommand{\thStemShareFour}{15}       % TS=4,  0.55/3.76
+\newcommand{\thStemShare}{10}           % TS=8,  0.35/3.56 - DD-016's choice
+\newcommand{\thStemShareSixteen}{7}     % TS=16, 0.25/3.46
+% [ESTIMATED] same table, 1.76 / 0.35. It is 5x and NOT 8x: past the knee the
+% input stream, not the compute, is the limit - which is the whole of DD-016's
+% argument. A draft of \cref{sec:stem-engine} once claimed a linear 8x here.
+\newcommand{\thStemSpeedup}{5}
+% [DERIVED] TS * CIN * K * K = 8 * 27 = 216 multipliers, packed two int8
+% products per DSP48E2.
+\newcommand{\thStemDsp}{108}
+
+% --- the requantize-lane count (DD-015) -----------------------------------
+% [DERIVED] scripts/analyze_workload.py requant, "requantize parallelism".
+% Reproduced 2026-10-12; agrees with DD-015's table. An output tile costs
+% max(n_ic, ceil(Tm/R)) cycles, so R trades DSPs against a drain stall. The
+% penalties are relative to R=32, which never stalls.
+\newcommand{\thRqPenaltyOne}{667}       % R=1,  4,359,316 cycles
+\newcommand{\thRqPenaltyEight}{40}      % R=8,    797,016
+\newcommand{\thRqPenaltySixteen}{6.6}   % R=16,   605,720 - the knee on cycles
+\newcommand{\thRqStalledEight}{7}       % layers stalled at R=8, of \thPwLayers
+\newcommand{\thRqStalledSixteen}{1}     % layers stalled at R=16 (features.2.conv.0.0)
+% [DERIVED] R=32 lanes x 2 DSP48E2 per 26x32 multiply.
+\newcommand{\thRqDsp}{64}
+%
+% [ESTIMATED] out_stage.v's header and docs/lab_notebook.md: the DSP budget
+% PREDICTED in September 2026 with and without a shared output stage.
+% IMPORTANT: these are predictions from before the pipelining work, not
+% measurements. The measured figure for the finished design is
+% \thDspAccelAxi{} (\thDspPctAccelAxi\%). Always say "predicted" when quoting
+% them, or Chapter~\ref{chap:evaluation} will appear to contradict this one.
+\newcommand{\thDspPredUnshared}{634}
+\newcommand{\thDspPredShared}{442}
+
+% --- the accumulator width (DD-019) ---------------------------------------
+% [DERIVED] replayed from software/export/ on 2026-10-12 with export.py's own
+% check_acc_width() walk: per output channel,
+%     |acc + bias| <= (sum_taps |w[oc,tap]|) * max|a| + |bias_oc|
+% with max|a| taken from the FORMAT (ReLU6 output in [0,q6], else int8), not
+% from any image. Agrees with DD-019 exactly: 5,094,750 at classifier.1.
+\newcommand{\thAccBound}{5\,094\,750}
+\newcommand{\thAccBoundBits}{24}
+% [MEASURED] DD-019: the largest |acc + bias| actually SEEN, one image through
+% one checkpoint, at features.3.conv.0.0. Quoted only to be contrasted with the
+% bound - it is an observation, and sizing from it is what DD-019 forbids.
+\newcommand{\thAccMeasured}{1\,198\,084}
+\newcommand{\thAccMeasuredBits}{22}
+% [DERIVED] same replay: 2^(26-1), and the margin the bound leaves at ACC_W=26
+% and at ACC_W=24. Both reproduce DD-019's 6.6x and 1.6x.
+\newcommand{\thAccRange}{33\,554\,432}
+\newcommand{\thAccMargin}{6.6}
+\newcommand{\thAccMarginNarrow}{1.6}
+% [DERIVED] same replay, the looser bound that uses only the FORMAT and the tap
+% count, taps * 128 * 128, maximised over the network (classifier.1, 1280 taps).
+% NOTE: DD-019's table gives 15,743,028 / 25 bits for this row, which is the
+% largest CONVOLUTION (~960 taps) and omits the classifier - the very layer the
+% row above it identifies as the worst case. 20,971,520 is the correct figure
+% and still fits ACC_W=26. Reported in the thesis as recomputed; DD-019's row
+% should be corrected. TODO: fix DD-019.
+\newcommand{\thAccGeom}{20\,971\,520}
+% [DERIVED] same replay: layers whose BOUND exceeds the old 21-bit range, i.e.
+% layers that were not provably safe - as against the single layer that was
+% observably wrong on the test image. DD-019 does not state this number.
+\newcommand{\thAccUnsafeLayers}{14}
+% [DERIVED] software/export/features_3_conv_0_0_b.hex, channel 110: the bias
+% that overflows a 21-bit accumulator on its own, for any input.
+\newcommand{\thBadBias}{1\,184\,089}
+% [MEASURED] DD-019: elements wrong in the end-to-end golden comparison when
+% ACC_W was 21, of \thElements{} total.
+\newcommand{\thBadElements}{2\,215\,904}
+% [MEASURED] DD-019's controlled pair of synthesis runs, both at the same
+% 4.000 ns constraint so ACC_W is the only variable: 32,387 -> 35,531 CLB LUTs.
+% DSPs did not move (944 either way), which is the number the decision turned on.
+\newcommand{\thAccLutDelta}{3\,144}
+\newcommand{\thAccLutPct}{9.7}
 
 % --- per-module cost ------------------------------------------------------
 % [MEASURED] out-of-context synthesis, DD-031. Neither uses a DSP or a BRAM.

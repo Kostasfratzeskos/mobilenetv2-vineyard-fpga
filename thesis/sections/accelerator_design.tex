@@ -14,14 +14,101 @@
 \chapter{Accelerator Architecture}
 \label{chap:architecture}
 
+This chapter presents the architecture of the proposed accelerator and the
+design decisions behind it. Section~\ref{sec:arch-overview} first gives an
+overview of the complete system and summarizes its dataflow, and
+Section~\ref{sec:engines-philosophy} states the separation of concerns that
+shapes every engine described after it. The remaining sections justify the
+chosen degree of parallelism (Section~\ref{sec:parallelism}), the on-chip
+memory organization (Section~\ref{sec:memory}), the control unit and its
+instruction set (Section~\ref{sec:control}), and the latency contract that
+binds the feeders to the engines (Section~\ref{sec:latency-contract}). The
+integration of the accelerator into the Zynq UltraScale+ MPSoC is deferred to
+Chapter~\ref{chap:integration}.
+
 \section{Proposed Accelerator Architecture}
 \label{sec:arch-overview}
 % The block diagram, and the one-paragraph summary of the dataflow. A reader
 % should be able to stop after this section and still know what the thing is.
-% FIGURE: a top-level block diagram. Does not exist yet - thesis/figures/ has
-% only pe_array.svg. This is the single most valuable figure in the thesis.
+% The figure below is deliberately the SIMPLE one: engines named by what they
+% compute, one shared output stage, one pool, and the loop. Every width, every
+% tiling factor and the accel_top/accel_sys/accel_axi layering are held back for
+% the sections that argue them (\ref{sec:parallelism}, \ref{sec:memory}) and for
+% Chapter~\ref{chap:integration}. Resist adding them here - the first figure is
+% the one a reader meets before they know any of the vocabulary.
 
-\section{Design Philosophy: Engines Do Only Arithmetic}
+The first architecture considered was a fully pipelined, layer-per-stage
+design, in which every layer of the network is mapped to its own dedicated
+hardware stage. Because all stages operate concurrently, such a design
+maximizes throughput. Its cost, however, grows with the depth of the network:
+every layer requires its own multipliers, buffers and control logic, so a
+network with dozens of layers requires dozens of distinct datapaths, each of
+which has to be written and verified separately. The area of such a design was
+never quantified in detail, but two independent considerations ruled it out:
+the resource cost would exceed the target device by a wide margin, and the
+development effort would exceed the time available for this work. The approach
+was therefore rejected in favor of a program-driven architecture, in which a
+central controller sequences a small set of reusable, parameterized compute
+engines (\DD{003}).
+
+This choice exploits the structural regularity of MobileNetV2. Although the
+network is deep, its layers are instances of only a few operation types: the
+standard 3$\times$3 convolution of the first layer (the \emph{stem}),
+1$\times$1 pointwise convolutions, 3$\times$3 depthwise convolutions, residual
+additions, a final global average pooling, and the linear classifier that
+produces the logits. Layers of the same type differ only in their dimensions
+and strides. Each type is therefore implemented once, as a parameterized
+engine, and reused by every layer of that type. The cost of this reuse is that
+only one engine is active at any time; the design thus trades peak throughput
+for a resource footprint that fits on the device.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{images/accelerator-design/accel_top.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/accel_top.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/accel\_top.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{The proposed accelerator. A program of \thInstructions{} instructions is
+           issued one at a time, and each instruction activates exactly one compute
+           engine; because at most one engine is ever live, the logic behind the
+           accumulators is shared rather than replicated --- one requantization
+           stage and one activation pool, which is read back as the next layer's
+           input. The classifier is the one deliberate exception: it reuses the
+           pointwise array, but its result is int16 logits rather than an int8
+           tensor, so it bypasses both (Section~\ref{sec:sharing}). Weights stream
+           from DDR; activations never leave the chip.}
+  \label{fig:accel-top}
+\end{figure}
+
+Figure~\ref{fig:accel-top} shows the resulting architecture. The network is
+expressed as a program of \thInstructions{} instructions, which the program
+sequencer issues one at a time. The sequencer decodes each instruction and
+presents the resulting configuration to the feeders, which supply the input
+data to the selected compute engine in the order that engine expects. The six
+operation types are served by five engines --- stem, pointwise, depthwise,
+residual and pooling --- because the linear classifier reuses the pointwise
+array, as a 1$\times$1 convolution over a single pixel. Each instruction
+therefore activates exactly one engine. While that engine is working it holds a
+busy signal; when the signal falls and the pipeline has drained, the sequencer
+issues the next instruction.
+
+Since at most one engine is active at a time, the logic downstream of the
+accumulators does not need to be replicated per engine. The five engines share
+a single requantization stage, which rescales the accumulated results back to
+int8 and, where the layer requires it, applies the ReLU6 clamp; they also share
+a single on-chip activation pool, which stores the output of each layer and is
+read back as the input of the next. The classifier is the one deliberate
+exception to both: its output is \thClasses{} int16 logits destined for a
+register that the processing system reads, not an int8 tensor destined for the
+pool, so it ends in a narrow requantization tail of its own.
+Section~\ref{sec:sharing} argues why that duplication was accepted rather than
+folded into the shared stage. Weights are streamed from off-chip DDR memory
+layer by layer, whereas activations remain on-chip for the entire inference.
+
+\section{Design Principle: Engines Perform Only Arithmetic}
 \label{sec:engines-philosophy}
 % Set on the first RTL day and never broken: the engines take operands and
 % produce results; addressing, windowing and sequencing live in the feeders and
@@ -30,8 +117,51 @@
 % present (Chapter~\ref{chap:verification}), and the integration testbenches that build
 % windows by hand became the specification of the controller.
 
+From the outset, the compute engines were restricted to arithmetic. An engine
+receives operands and produces results; it does not generate addresses, form
+convolution windows or decide the order of operations. These tasks are instead
+handled by the feeders and the program sequencer.
+
+This separation has two consequences that are exploited later in this thesis.
+First, each engine can be verified in isolation: it is tested bit-exactly
+against the golden vectors of the int8 software model, without the controller
+being present (Chapter~\ref{chap:verification}). Second, the integration
+testbenches, which construct the input windows by hand, subsequently served as
+an executable specification for the feeders: they define the exact sequence of
+operands that the feeders must later generate in hardware.
+
 \section{Parallelizing the Compute Engines}
 \label{sec:parallelism}
+
+The first implementation of the engines was sequential: each engine performed
+one multiply-accumulate (MAC) operation per clock cycle. A single MobileNetV2
+inference costs \thMacsM{} million MAC operations. The total quoted here is the
+whole-network figure of Section~\ref{sec:mac-dist}, which includes the global
+average pool's accumulations even though they carry no multiply, because a
+sequential engine pays a cycle for each of them exactly as it does for a
+multiply-accumulate. At one MAC per cycle the baseline therefore needs as many
+cycles as it has MACs, a latency of \SI{\thLatencySeq}{\second} at
+\MHz{\thClkBoard} --- some \thSpeedupSeq$\times$ slower than the design this
+chapter goes on to describe. A sequential design also leaves almost all of the
+device's DSP48E2 slices idle, although those slices are the FPGA's principal
+resource for parallel arithmetic.
+
+Parallelizing the engines was therefore necessary to reach the performance
+target of this work. The same form of parallelism cannot be applied to every
+engine, however, because each layer type exposes parallelism along different
+loop dimensions. A pointwise convolution reduces over its input channels, and
+every input activation is reused by all output channels; parallelism therefore
+pays along both dimensions at once, as $T_m = 32$ output channels each
+accumulating $T_n = 16$ input channels per cycle --- the $32 \times 16$ array
+of Section~\ref{sec:pw-array}. A depthwise convolution, in contrast, convolves
+each channel independently with its own filter: no output channel sees more
+than one input channel, so there is no cross-channel reduction to parallelize
+and the channel count is the only axis available, which makes the depthwise
+engine one-dimensional at $T_c = 16$ channels. Whether that engine should be
+separate from the pointwise array at all is a further question --- the two
+never run concurrently and could in principle share multipliers --- and
+Section~\ref{sec:dw-engine} answers it. The following subsections describe each
+engine in detail and justify its degree of parallelism.
 
 \subsection{Pointwise Convolution: A \texorpdfstring{$32 \times 16$}{32x16} MAC Array}
 \label{sec:pw-array}
@@ -39,6 +169,59 @@
 % against the tiling space of Section~\ref{sec:tiling} and the \thPwMacPct\% MAC share
 % of Section~\ref{sec:mac-dist}. Output-stationary; accumulation over ceil(IC/Tn)
 % cycles. Broadcast activations, per-lane weights.
+
+Pointwise convolutions account for \thPwMacPct\% of the arithmetic of the
+network (Section~\ref{sec:mac-dist}), which is why the pointwise engine was the
+first to be parallelized. That share should not be read as a share of the
+runtime, however: once the other engines are parallelized as well, this array
+accounts for roughly \thPwRuntimePct\% of the modelled inference time, and
+Section~\ref{sec:dw-engine} shows how a layer type with a twentieth of the
+arithmetic comes to matter nearly as much.
+
+A pointwise convolution is a 1$\times$1 convolution: at each spatial position,
+it combines all input channels into each output channel. For an input
+activation $x_{i,j,n}$ at spatial position $(i,j)$ and input channel $n$,
+output channel $m$ is computed as
+\begin{equation}
+  y_{i,j,m} = b_m + \sum_{n=0}^{C_{\mathrm{in}}-1} w_{m,n}\, x_{i,j,n},
+  \label{eq:pointwise}
+\end{equation}
+where $w_{m,n}$ is the weight connecting input channel $n$ to output
+channel $m$, $b_m$ is the bias of output channel $m$, and $C_{\mathrm{in}}$ is
+the number of input channels. Each output element is therefore a dot product
+of length $C_{\mathrm{in}}$.
+
+Equation~\eqref{eq:pointwise} can be parallelized along three dimensions: the
+input channels, the output channels and the spatial positions. The engine
+unrolls the two channel dimensions, $T_m = 32$ output channels and $T_n = 16$
+input channels, in the notation of Section~\ref{sec:tiling}, giving
+$P = T_m \cdot T_n = 512$ MACs per cycle. The spatial dimension is left
+sequential because, with $P$ fixed, unrolling it could only be paid for out of
+$T_m$ or $T_n$: pixel parallelism helps only those layers whose output channel
+count is smaller than $T_m$, where lanes would otherwise sit idle, and
+recovering them was estimated at \thPwPixelGain\% of the total cycle count ---
+too little to justify the control logic that a second unrolled dimension
+requires (\DD{013}).
+
+With $P$ held at 512, the split between the two channel dimensions is free, and
+it matters more than the product does. Evaluating the cycle model
+$H W \cdot \lceil OC / T_m \rceil \cdot \lceil IC / T_n \rceil$ over all
+\thPwLayers{} pointwise layers of the network gives \thPwUtil\% utilization of
+the 512 MAC slots at $32 \times 16$, against \thPwUtilSixteen\% at
+$16 \times 32$, \thPwUtilSixtyFour\% at $64 \times 8$ and \thPwUtilEight\% at
+$8 \times 64$. The reason lies in the shape of MobileNetV2 itself: the
+bottleneck projections are narrow on output, with as few as 16, 24 or 32
+output channels, while the expansion layers inside each block are wide on
+input. A small $T_m$ with a large $T_n$ matches that asymmetry. The opposite
+choice, $T_n = 8$ --- proposed earlier on the grounds that 8 divides every
+channel count in the network, so that tail padding would vanish altogether ---
+forces $T_m = 64$ with $P$ fixed, and strands most of the lanes on precisely
+the layers that are narrowest on output. Weight bandwidth does not discriminate
+between the splits, being $T_m \cdot T_n \cdot 8 = 4096$ bit per cycle for all
+of them; the remaining tiebreaker is cost, and $32 \times 16$ needs a 128-bit
+activation broadcast rather than 256 bits, and an adder tree of depth four
+rather than five.
+
 \begin{figure}[t]
   \centering
   % images/accelerator-design/pe_array.pdf is produced from the SVG by `make figures', which
@@ -52,10 +235,49 @@
     \vspace{2em}}}%
   }
   \caption{The pointwise MAC array. The $T_m = 32$ lanes share one broadcast of
-           $T_n = 16$ activations while each lane holds its own weights, giving
-           $P = T_m \cdot T_n = 512$ MAC per cycle.}
+           $T_n = 16$ activations, while each lane holds its own weights, giving
+           $P = T_m \cdot T_n = 512$ MACs per cycle.}
   \label{fig:pe-array}
 \end{figure}
+
+As shown in Figure~\ref{fig:pe-array}, the array consists of 32 lanes, one per
+output channel. In every cycle, the same 16 input activations are broadcast to
+all lanes, and each lane multiplies them by its own 16 weights.
+
+Within each lane, the 16 products are summed by an adder tree, and the
+resulting partial sum is added to the lane's accumulator. The accumulator holds
+this running sum for $\lceil C_{\mathrm{in}} / T_n \rceil$ cycles, until all
+input channels have been processed. Each output element thus stays in place
+until it is complete, which makes the engine \emph{output-stationary}. The
+array computes only the summation of Equation~\eqref{eq:pointwise}, not the
+whole of it: the accumulator is cleared to zero rather than preloaded with the
+bias, and $b_m$ is added downstream in the shared output stage, immediately
+before requantization. This is the principle of
+Section~\ref{sec:engines-philosophy} applied to the one engine where departing
+from it would have been easiest and cheapest. The 32 completed output elements
+are passed to that stage, and the array proceeds to the next group of output
+elements. Neither the lanes nor the array are combinational, and the pipeline
+depth they contribute is part of the latency contract of
+Section~\ref{sec:latency-contract}. As in the rest of the design, activations
+remain on-chip in URAM, whereas weights are streamed from off-chip DDR memory
+(Section~\ref{sec:memory}).
+
+The \thPwUtil\% utilization quoted above has a cost worth stating from the
+other side: \thPwWastePct\% of the MAC slots that the array issues over a full
+inference are multiplications by zero. Whenever a layer's output channel count
+is not a multiple of $T_m$, or its input channel count not a multiple of $T_n$,
+the final tile is only partly occupied, and it is the feeder rather than the
+array that drives zero weights into the unused lanes and taps. Those padded
+terms contribute nothing to the sum, so the result remains bit-exact and only
+utilization is lost. Keeping the tail in the feeder is what allows the array
+itself to stay a fixed $32 \times 16$ block with no notion of a partial tile.
+
+The classifier reuses this array rather than adding a sixth engine, since a
+fully connected layer over a feature vector is a 1$\times$1 convolution at a
+single spatial position. It is issued as a pointwise instruction over one
+pixel, and differs only in its tail: the result is int16 logits rather than
+int8 activations, so it bypasses the shared output stage
+(Section~\ref{sec:sharing}).
 
 \subsection{Depthwise Convolution: A 16-Channel Engine}
 \label{sec:dw-engine}
@@ -63,21 +285,549 @@
 % different, not because of the MAC count. The line buffer reads each input
 % pixel ONCE rather than nine times - that is the result worth reporting here.
 
+The depthwise layers are only \thDwMacPct\% of the arithmetic of the network,
+and for that reason they were at first treated as a detail. The cycle model
+shows this to be the wrong reading. Left at one output element per cycle while
+the pointwise array runs at 512 MACs per cycle, the depthwise layers would
+account for \thDwShareSeq\% of the inference time: the 512-MAC array would
+spend most of its life waiting for a layer type that performs a fifteenth of
+the work. Parallelizing the depthwise engine is therefore not the optimization
+of a detail --- it is the condition under which the parallelism of the
+pointwise array is worth anything at all.
+
+As established in Section~\ref{sec:parallelism}, the channel count is the only
+axis available here: each output channel depends on the same-index input
+channel alone, so there is no cross-channel reduction to unroll, and widening
+the engine means processing more channels at once rather than more terms per
+channel. At $T_c = 16$ the depthwise share of the inference falls to
+\thDwShare\%, for \thDwDsp{} DSP48E2 slices once the int8 multiplications are
+packed two to a slice. The neighbouring choices are what identify this as the
+knee of the curve: $T_c = 8$ leaves the depthwise at \thDwShareEight\% of the
+runtime, whereas $T_c = 32$ reduces it only to \thDwShareThirtyTwo\% in
+exchange for twice the slices (\DD{014}).
+
+That the depthwise engine is separate from the pointwise array is a second
+decision, and it does not follow from the first. Because the network alternates
+pointwise, depthwise and pointwise layers, the two engines never run
+concurrently, and they could in principle share one pool of multipliers. They
+do not, because the two dataflows have nothing in common: a broadcast
+activation bus feeding a cross-channel adder tree on one side, sixteen
+independent nine-tap dot products on the other. Merging them would buy
+multipliers at the price of multiplexing the one resource that is not the
+binding constraint of this design --- the finished accelerator uses
+\thDspPctAccelAxi\% of the device's DSP slices --- and would pay for them in
+control complexity and timing margin on the critical engine.
+
+\begin{figure}[t]
+  \centering
+  % images/accelerator-design/dw_array.pdf is produced from the SVG by `make
+  % figures'. Same guard as the other two figures: a missing PDF should not
+  % stop the manuscript compiling on a machine without Inkscape.
+  \IfFileExists{images/accelerator-design/dw_array.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/dw_array.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/dw\_array.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{The depthwise array. Sixteen independent lanes, one per channel,
+           each nine multipliers and an adder tree; there is no accumulator,
+           because a depthwise dot product is exactly nine taps and completes
+           in one pass, and no connection of any kind between lanes. The line
+           buffer delivers the window tap-major, so lane $c$ gathers byte $c$
+           of every tap at a stride of $T_c$ bytes, while the channel-major
+           weight banks pass straight through.}
+  \label{fig:dw-array}
+\end{figure}
+
+Figure~\ref{fig:dw-array} shows the resulting engine: sixteen independent
+lanes, one per channel, each an instance of the same 3$\times$3 convolution
+unit, in which nine multipliers produce nine products that a balanced adder
+tree reduces to one sum. Two things distinguish a depthwise lane from the
+pointwise lane of Section~\ref{sec:pw-array}. First, it has no accumulator: a
+depthwise dot product is exactly $K \cdot K = 9$ taps and completes in a single
+pass, where a pointwise lane streams $\lceil C_{\mathrm{in}} / T_n \rceil$
+tiles through its accumulator. Second, the lanes never interact --- no adder
+tree spans them and no activation is broadcast between them --- which makes the
+engine, structurally, a pointwise array turned inside out. Altogether it holds
+$T_c \cdot K \cdot K = 144$ multipliers. The adder tree is built for sixteen
+leaves rather than nine, since nine is not a power of two; the seven unused
+taps are padded with zeros on the buses rather than special-cased in the logic,
+and synthesis prunes the constant products and the additions that consume them.
+
+Almost all of the array's own logic is a transposition between two bus orders,
+and it is worth setting them out. The line buffer delivers the window
+tap-major and channel-minor, as $\mathrm{win}[(k_y K + k_x) T_c + c]$, which is
+the natural order for it to produce: one window position is $T_c$ channels
+wide, because all sixteen channels advance together. The weight buffer delivers
+the opposite order, channel-major and tap-minor, which is equally natural for
+it, because bank $c$ \emph{is} channel $c$ and holds that channel's nine
+weights contiguously. Each lane, however, needs the nine taps of one channel.
+The weights therefore arrive already contiguous per lane and pass straight
+through, while the window has to be gathered with a stride of $T_c$ bytes.
+Getting that stride wrong would mix channels while still producing entirely
+plausible sums, with no width mismatch and no elaboration error to betray it,
+which is what the array's testbench is written to catch
+(Chapter~\ref{chap:verification}).
+
+Consistently with Section~\ref{sec:engines-philosophy}, none of the window
+construction belongs to the array. The line buffer and the feeder generate the
+window, and zero padding at the image borders is the feeder's responsibility
+as well: it drives a zero into any tap that falls outside the image, which the
+lane multiplies by its weight and contributes nothing, exactly as the
+reference C model skips that tap. The line buffer is also what makes the
+dataflow efficient, since it retains the rows the window needs and therefore
+reads each input pixel once rather than nine times.
+
+One consequence of generating windows this way is easy to overlook, and was
+overlooked in the first version of the cycle model: the cost is driven by the
+input pixels, not the output pixels. A sliding-window generator must consume
+every input pixel in order to advance the window, including at stride two,
+where only every second window yields an output. \thDwStrideTwo{} of the
+\thDwLayers{} depthwise layers have stride two, and their input grids are four
+times the size of their output grids, so counting output pixels understated
+the depthwise cost by a factor of \thDwInputFactor{}. The figures quoted above
+are from the corrected model; the choice of $T_c = 16$ survived the correction
+unchanged.
+
+The accumulator width, finally, is a provable bound here rather than a
+data-dependent precondition. A depthwise dot product is always exactly nine
+taps, so $\lvert \mathrm{acc} \rvert \le 9 \cdot 128 \cdot 127 = \num{146304}$
+for any int8 input whatsoever, which needs 19 bits and sits well inside the
+26-bit accumulator. Section~\ref{sec:widths} returns to this, and contrasts it
+with the pointwise side, where the same width is arrived at by a different
+argument.
+
 \subsection{Stem Convolution: An 8-Channel Engine}
 \label{sec:stem-engine}
 % Runs once per inference, on 3 input channels. Sized accordingly; justify the
 % asymmetry with \thStemMacPct\%.
 
+The stem is the first layer of the network, \file{features.0.0}: a standard
+3$\times$3 convolution at stride 2 with padding 1, taking the
+$224 \times 224 \times 3$ image to a $112 \times 112 \times 32$ feature map,
+with a ReLU6 activation. It is the only standard convolution in MobileNetV2 ---
+every other convolutional layer is either pointwise or depthwise --- and it is
+also the only operation whose input is the image rather than the activation
+pool. Because it consumes the image directly, its input channel count is fixed
+at three, the colour channels, and each output element is therefore a dot
+product of exactly $C_{\mathrm{in}} \cdot K \cdot K = 27$ taps. One lane of the
+engine holds 27 multipliers, which makes the degree of parallelism a genuine
+area decision rather than a free one.
+
+That decision has to answer an apparent asymmetry: the pointwise array is
+given 512 multiply-accumulate operations per cycle and the stem only eight
+lanes. The stem accounts for \thStemMacPct\% of the arithmetic of the network
+and executes once per inference, so it does not warrant a comparable share of
+the device. Left at one output element per cycle, however, it is not
+negligible either --- it would be \thStemShareSeq\% of the modelled inference
+time, which is far more than its share of the arithmetic, for the same reason
+the depthwise layers were in Section~\ref{sec:dw-engine}.
+
+What fixes the number at eight is the rate of the input stream rather than the
+arithmetic. The line-buffer front end streams $225 \times 225$ input
+pixel-groups, the image plus its virtual border, and emits $112 \times 112$
+windows at stride 2, so there are exactly $50\,625 / 12\,544 = 4$ input cycles
+per window. Each window needs $\lceil OC / T_s \rceil$ cycles of compute, so
+$T_s \ge 8$ is the point at which the compute stops exceeding the input
+stream; below it the line buffer idles while the array sweeps, and above it
+the array idles waiting for windows. The measured sweep confirms the knee:
+$T_s = 4$ leaves the stem at \thStemShareFour\% of the runtime, $T_s = 8$
+brings it to \thStemShare\%, and $T_s = 16$ reaches only \thStemShareSixteen\%
+for twice the multipliers (\DD{016}). It is worth being precise about what
+widening the engine bought, because the arithmetic invites the wrong answer:
+going from one lane to eight made the stem roughly
+\thStemSpeedup$\times$ faster, not eight times. A linear speedup would assume
+the compute remained the limit throughout, and the entire point of choosing
+eight is that at eight it no longer is.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{images/accelerator-design/stem_array.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/stem_array.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/stem\_array.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{The stem engine. Eight lanes each compute one output channel from the
+           \emph{same} 27-tap window of $3 \times 3 \times 3$: a standard
+           convolution sums over the input channels as well as the window, so the
+           activations are broadcast as in the pointwise array of
+           Figure~\ref{fig:pe-array} rather than split per lane as in the depthwise
+           array of Figure~\ref{fig:dw-array}. The window is transposed into
+           channel-major order once, before the broadcast, not once per lane. With
+           $OC = 32$ and $T_s = 8$ each window is swept in four oc-tiles, one per
+           cycle, which is exactly the rate at which the line buffer produces the
+           next window; the four groups of eight are assembled into one 32-channel
+           entry. The stem is the only operation that reads the image buffer rather
+           than the activation pool.}
+  \label{fig:stem-array}
+\end{figure}
+
+Figure~\ref{fig:stem-array} shows the engine. Its eight lanes are instances of
+the same standard-convolution unit, each producing one output channel, and
+they are arranged like the pointwise array rather than like the depthwise one.
+A standard convolution sums over the input channels as well as over the
+window, so every output channel is computed from the same 27 activations and
+the lanes differ only in their weights: the window is broadcast, exactly as the
+activation tile is broadcast in Figure~\ref{fig:pe-array}, and not split per
+lane as in Figure~\ref{fig:dw-array}. The same transposition problem described
+in Section~\ref{sec:dw-engine} arises here, since the line buffer again emits
+tap-major and the convolution unit wants channel-major order, but because the
+window is shared it is transposed once, ahead of the broadcast, instead of
+once per lane. The weights need no transposition at all: the manifest stores
+them as $(OC, IC, K_h, K_w)$ row-major, which is already the order the unit
+expects. As in the depthwise lane there is no accumulator, because 27 taps is
+the whole dot product and it completes in one pass. In total the engine holds
+$T_s \cdot C_{\mathrm{in}} \cdot K \cdot K = 216$ multipliers, or
+\thStemDsp{} DSP48E2 slices with the int8 products packed two to a slice.
+
+Since $OC = 32$ and $T_s = 8$, a window is swept in four oc-tiles, one per
+cycle, the lanes computing output channels $8t$ to $8t + 7$ on tile $t$. The
+four results of eight channels are assembled into a single 32-channel entry
+before it is written to the activation pool, so the engine emits one complete output pixel per window.
+This is also where the balance of the previous paragraph becomes visible in
+the control logic: the windows do not arrive evenly, but every two cycles
+inside an odd row and not at all on even rows, so the feeder stalls the input
+stream while each window is swept. The lane array itself knows nothing of
+this. Consistently with Section~\ref{sec:engines-philosophy}, the counters,
+the window generation, the border padding and the stall all belong to the
+feeder; the array receives 27 activations and eight sets of weights, and
+returns eight sums.
+
+One consequence of the 27-tap dot product belongs to Chapter~\ref{chap:timing}
+rather than here, but is worth signposting: this unit, not the much larger
+pointwise array, was the critical path of the design from the first synthesis
+onward, because 27 taps in an unregistered cascade is a far deeper chain of
+logic than anything in the 512-MAC array. Pipelining it was the single largest
+improvement in the timing work.
+
 \subsection{Requantization Lanes}
 \label{sec:requant-lanes}
 % The shared out_stage. \DD{016}: sharing it took the predicted DSP count from
 % ~634 to 442. Implements Section~\ref{sec:requant-theory} exactly.
+% NOTE: the DD number above is wrong. The sharing argument is \DD{015} and
+% out_stage.v's header; DD-016 is the stem's TS. Left as written so the error
+% is visible; the text below cites \DD{015}.
+
+Every engine described so far produces accumulators, not activations. A
+pointwise lane accumulates into 26 bits, and the next layer consumes
+int8, so each result must be returned to the int8 grid before it can be
+stored. That conversion is requantization, and it is the only arithmetic in
+the accelerator that is neither a multiplication nor an addition of the
+operands themselves.
+
+The quantization scheme is int8 with per-channel weight scales and per-tensor
+activation scales, and batch normalization folded into the weights and biases
+offline (\DD{005}). Two distinct models are involved, and the distinction
+matters for what each one is evidence of. The \emph{fake-quantized} model runs
+in floating point and merely rounds values onto the int8 grid at each step; it
+was used to establish that the scheme does not cost accuracy, but its
+floating-point rounding is not reproducible in hardware to the last bit, so it
+is not a specification. The \emph{integer-only} model, written separately,
+performs every operation on integers exactly as the RTL does, and it is this
+second model that defines what the hardware must compute. The accelerator is
+verified against the integer-only model alone; the fake-quantized model never
+appears downstream of accuracy measurement.
+
+Let $S_x$, $S_w$ and $S_y$ be the scales of the input activations, the weights
+of one output channel and the output activations, all three being the positive
+real number by which an integer code is multiplied to recover the value it
+represents. An accumulator $a$ holds the integer sum of products of int8
+codes, so the value it stands for is $S_x S_w a$, whereas the output code
+must be expressed in units of $S_y$. The conversion is therefore a
+multiplication by the real ratio $M = S_x S_w / S_y$, which is per output
+channel because the weight scales are. Since the hardware has no floating
+point, $M$ is represented exactly as a fixed-point pair, and the operation
+performed on each element is
+\begin{equation}
+  y \;=\; \mathrm{clamp}\!\left(
+          \left\lfloor \frac{a \cdot M_0 + 2^{\,s-1}}{2^{\,s}} \right\rfloor
+          \right),
+  \qquad M \;\approx\; M_0 \cdot 2^{-s},
+  \label{eq:requant}
+\end{equation}
+where $M_0$ is a signed integer multiplier and $s$ the right-shift amount.
+The exporter normalizes the pair so that $2^{30} \le M_0 < 2^{31}$, which fixes
+$s \ge 31$ for every layer of this network, because every real ratio $M$ in it
+is smaller than one.
+
+Three details of Equation~\eqref{eq:requant} are load-bearing, in the sense
+that changing any of them changes results. First, the floor is an
+\emph{arithmetic} right shift, and the constant $2^{s-1}$ added before it is
+half an output LSB, so the rule is round-half-up toward $+\infty$: a negative
+tie rounds up, $-2.5$ giving $-2$ rather than $-3$. Second, the product
+$a \cdot M_0$ is formed at full width and never truncated. Third, the clamp
+depends on the activation function of the layer. A layer with ReLU6 clamps to
+$[0, q_6]$, where $q_6 = \min(127, \mathrm{round}(6 / S_y))$ is the integer
+code of the value 6 at the output scale; because $q_6 \le 127$, this clamp
+subsumes the int8 saturation and no separate saturation is applied. A layer
+without one saturates to $[-128, 127]$. The classifier is the same arithmetic
+with a wider saturation, to $[-32768, 32767]$, since its output is int16
+logits rather than int8 activations (\DD{011}).
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{images/accelerator-design/requantize.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/requantize.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/requantize.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{One requantization lane, as four register stages. Each parameter
+           enters at the stage that consumes it rather than at the input, so the
+           window in which a stale parameter can meet live data is one cycle
+           wide regardless of the pipeline depth. Only the clamp narrows the
+           datapath.}
+  \label{fig:requantize}
+\end{figure}
+
+Figure~\ref{fig:requantize} shows how Equation~\eqref{eq:requant} is realized.
+The bias addition and the requantization form four register stages: the biased
+accumulator, the multiplication by $M_0$, the rounding and shift, and the
+clamp. The intermediate is carried at
+$\mathit{ACC\_W} + \mathit{M0\_W} + 1 = 26 + 32 + 1 = 59$ bits, and the clamp
+in the fourth stage is the only point at which the datapath narrows. Every
+operand in the chain is declared signed; a single unsigned operand would make
+the whole expression unsigned and silently break both the arithmetic shift and
+the comparisons.
+
+The stage at which each parameter enters is itself a decision. The bias, $M_0$
+and the shift are per output channel and arrive from the parameter buffer,
+while the activation kind and $q_6$ are per layer and come from the
+instruction word; originally all of them were presented at the input, which
+was correct only because the sequencer happens not to fetch the next
+instruction while an operation is running. With one pipeline stage that
+coincidence was harmless. With four it protects an arithmetic unit four levels
+below the place that guarantees it, so each parameter is now delayed to the
+stage that uses it: $M_0$ to the second, the shift to the third, and the
+activation parameters to the fourth. The guarantee became structural rather
+than contractual, at a cost of a few registers.
+
+How many such lanes to build was the one sizing decision here. The pointwise
+array finishes $T_m = 32$ accumulators every $\lceil IC/T_n \rceil$ cycles, and
+with $R$ lanes the drain takes $\lceil T_m / R \rceil$ cycles, so an output
+tile costs $\max(\lceil IC/T_n \rceil, \lceil T_m/R \rceil)$ cycles: too few
+lanes and the array stalls waiting to unload. Modelled over all
+\thPwLayers{} pointwise layers, $R = 1$ costs \thRqPenaltyOne\% more cycles
+than an unstalled design, $R = 8$ costs \thRqPenaltyEight\% and stalls
+\thRqStalledEight{} layers, and $R = 16$ costs only \thRqPenaltySixteen\% and
+stalls \thRqStalledSixteen. The design uses $R = T_m = 32$, one lane per
+accumulator, for \thRqDsp{} DSP48E2 slices (\DD{015}).
+
+$R = 16$ is the knee of the cycle curve and was the obvious alternative, but it
+was rejected for a reason that the cycle counts do not show. At $R = 32$ all
+32 results appear in the same cycle and already constitute the 256-bit word
+that the activation buffer stores. At any smaller $R$ the output stage needs a
+shadow register to hold the accumulators while the array moves on, a drain
+counter, a stall path back into the address generator, and logic to assemble
+the stored word in pieces --- an entire control mechanism, and one that
+$R = 16$ would exercise on exactly one layer of the \thPwLayers{}. The 32
+additional slices were judged the cheaper side of that trade.
+
+A second decision made this block shared rather than replicated. Because the
+sequencer runs one operation at a time, no two engines ever requantize
+simultaneously, so the bank and its parameter memory were factored out of the
+feeders into a single stage used by all of them. Before that, the pointwise
+path carried a 32-lane bank and the depthwise path a 16-lane one, and the stem,
+residual and pooling paths were each about to add their own. Sharing was
+predicted to reduce the DSP budget from roughly \thDspPredUnshared{} to
+\thDspPredShared{} and, as importantly, left one block to verify instead of
+five. Both figures are predictions made before the timing work;
+Chapter~\ref{chap:evaluation} reports the measured utilization of the finished
+design. The classifier is the single exception to the sharing, for the reason
+given in Section~\ref{sec:sharing}.
+
+The lane is verified directly against the integer-only model rather than
+against a tolerance. Its unit testbench replays the same directed vectors as
+the C model's own test of its requantization routine, so a pass establishes
+that the RTL agrees with the reference on every case the reference is itself
+validated against, including the rounding of negative ties and both clamps.
+The bank and the whole-network run extend this to every element of every
+layer, as Chapter~\ref{chap:verification} describes.
+
+One divergence between the two is deliberate and is worth recording, since a
+later reader will otherwise read it as a defect. The C model narrows its
+intermediate to 32 bits before clamping; the RTL clamps the full 59-bit value.
+The two therefore disagree whenever the shifted result exceeds $2^{31}$ in
+magnitude, where the C model wraps and the hardware saturates. That region is
+unreachable, and by a bound rather than by observation: the normalization that
+gives $2^{30} \le M_0 < 2^{31}$ also forces $s \ge 31$, so
+\begin{equation}
+  \left| a \cdot M_0 \cdot 2^{-s} \right| \;\le\; |a| \cdot \frac{M_0}{2^{s}}
+  \;<\; |a| \;\le\; 2^{25},
+  \label{eq:requant-bound}
+\end{equation}
+which is six bits clear of $2^{31}$ for any input data whatsoever.
+Equation~\eqref{eq:requant-bound} depends only on the exported multipliers
+being normalized, not on any measurement, which is the distinction
+Section~\ref{sec:acc-bound} draws for the accumulator width. The RTL is the
+more conservative of the two and nothing reads a wider value from the C model,
+so the divergence was documented and kept rather than removed, and the
+simulation model carries a check that fires if it is ever reached (\DD{024}).
 
 \subsection{Datapath Widths}
 \label{sec:widths}
 % Every width, and for each one whether it is a BOUND or a MEASUREMENT. After
 % \DD{019} this table is one of the more defensible things in the thesis -
 % make the distinction a column, not a footnote.
+
+In an integer accelerator every signal has a width, and each width is justified
+in one of two ways: by a bound, which holds for every input the format admits,
+or by an observation, which holds for the inputs that happened to be tried.
+The distinction is not academic. One width in this design was once chosen from
+an observation, and the section below describes what that cost. Table~%
+\ref{tab:widths} lists every width in the datapath together with what fixes it
+and which kind of justification it rests on. Storage geometry --- buffer
+depths, banking and address widths --- is a separate matter and is treated in
+Section~\ref{sec:buffers}.
+
+\begin{table}[t]
+  \centering
+  \caption{The datapath widths, and what justifies each. A \emph{bound} holds
+           for every input the format admits; an \emph{observation} holds for
+           the inputs that were tried. Only the logit scale now rests on the
+           latter.}
+  \label{tab:widths}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Signal & Width & Fixed by & Justification \\
+    \midrule
+    Activations, weights   & 8  & the quantization scheme (\DD{005})      & construction \\
+    Tap product            & 16 & exact int8 $\times$ int8                 & exact \\
+    Accumulator            & 26 & worst-case $|acc + b|$, any input (\DD{019}) & bound \\
+    Bias                   & 32 & int32, as exported                       & construction \\
+    Requant.\ multiplier   & 32 & normalized to $[2^{30}, 2^{31})$         & bound \\
+    Requant.\ shift        & 6  & largest exported shift is 48             & bound \\
+    Requant.\ intermediate & 59 & $\mathit{ACC\_W} + \mathit{M0\_W} + 1$   & exact \\
+    Activation output      & 8  & the quantization scheme                  & construction \\
+    Logit output           & 16 & $S_{\mathrm{logit}}$, calibrated (\DD{011}) & observation \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The width of the activations and the weights is 8 bits by the choice of
+quantization scheme (\DD{005}), and the width of the output is the same,
+because the output of one layer is the input of the next. The product of two
+int8 operands is exact in 16 bits, since the extreme case $-128 \times -128$
+is $16\,384$, inside the signed 16-bit range; the engines therefore register
+each tap product at that width before the adder tree, and no rounding occurs
+anywhere between the multiplier and the accumulator. The bias is int32 as the
+exporter emits it, and the widths internal to requantization --- the 32-bit
+multiplier, the 6-bit shift and the 59-bit intermediate --- are those of
+Equation~\eqref{eq:requant}, discussed in Section~\ref{sec:requant-lanes}. The
+6-bit shift field deserves one remark: it is a bound rather than a convenience,
+because the exporter's normalization caps the shift well below the 63 that six
+bits can encode, the largest value in the current network being 48.
+
+The accumulator is the width this design got wrong, and it is worth setting out
+why, because the failure was methodological rather than arithmetic. The width
+was originally 21 bits, chosen from a measurement: the largest
+$|acc + b|$ observed while running one image through one checkpoint was
+\thAccMeasured, which needs \thAccMeasuredBits{} signed bits and left what
+looked like comfortable headroom. The model was then retrained. Re-exporting
+the weights moved one channel of \file{features.3.conv.0.0} to a bias of
+\thBadBias, which does not fit a 21-bit signed accumulator \emph{on its own},
+for any input whatsoever. The hardware wrapped it negative, the ReLU6 clamp
+turned the wrapped value into zero, and \thBadElements{} of the
+\thElements{} elements of the network were wrong. Nothing in the RTL detects
+accumulator overflow, so the only symptom was the golden-vector comparison
+failing; the design had no mechanism that could have caught it earlier.
+
+The correction was to size the accumulator from a bound. For one output
+channel $oc$ of a layer, the accumulator before requantization satisfies
+\begin{equation}
+  \left| acc_{oc} + b_{oc} \right| \;\le\;
+  \left( \sum_{\mathrm{taps}} \left| w_{oc,\mathrm{tap}} \right| \right)
+  \cdot \max |a| \;+\; \left| b_{oc} \right| ,
+  \label{eq:acc-bound-widths}
+\end{equation}
+where $w_{oc,\mathrm{tap}}$ are the int8 weights of that channel, $b_{oc}$ its
+int32 bias, and $\max |a|$ the largest magnitude an input activation can take.
+The last quantity is what makes Equation~\eqref{eq:acc-bound-widths} a bound
+rather than a statistic: an activation entering a layer is either the output of
+a ReLU6, and so lies in $[0, q_6]$, or a plain int8 in $[-128, 127]$. Both
+limits are properties of the number format, not of the data, so no image ---
+including one chosen adversarially --- can exceed them.
+
+Evaluated over this network, Equation~\eqref{eq:acc-bound-widths} peaks at
+\thAccBound{} in the classifier, which requires \thAccBoundBits{} signed bits.
+Two things about that figure are worth noting. The first is that it is more
+than four times the measured peak, which is the usual relationship between a
+bound and an observation. The second is more pointed: the bound and the
+measurement identify \emph{different layers}. The measured worst case was
+\file{features.3.conv.0.0}, an outlier bias, whereas the provable worst case is
+the classifier, which simply has the longest dot product in the network.
+Sizing from the measurement would have been unsound even if the measured number
+had been larger, because it was taken at the wrong place. A weaker bound that
+discards the weights entirely and uses only the tap count and the format,
+$\mathrm{taps} \cdot 128 \cdot 128$, gives \thAccGeom{} for the same layer and
+is also instructive: it is reached by no real weight set, yet the chosen width
+accommodates even that.
+
+The design uses 26 bits, whose range of $\pm\thAccRange$ leaves
+\thAccMargin$\times$ margin over the bound. The choice of 26 rather than the
+\thAccBoundBits{} the bound strictly requires is a hardware argument. The
+requantization multiply is $\mathit{ACC\_W} \times \mathit{M0\_W}$, and the
+DSP48E2 multiplier is $27 \times 18$ bits. While the accumulator is at most 27
+bits wide, one operand fits a port whole and the 32-bit multiplier splits
+across two slices, costing two slices per lane; at 28 bits both operands must
+be split and the cost doubles to four, which over the $R = 32$ lanes of
+Section~\ref{sec:requant-lanes} would double the \thRqDsp{} slices spent there,
+bought for no correctness. Everything up to 27 bits is therefore free and 28 is
+expensive, so the width was set at the top of the free range rather than at
+the bottom of the safe one. Taking the minimum of \thAccBoundBits{} bits would
+have left only \thAccMarginNarrow$\times$ margin for no saving, and 32 bits
+would have bought nothing the bound does not already guarantee while paying
+the doubled multiplier (\DD{019}).
+
+The cost of the extra five bits was measured with two synthesis runs at the
+same timing constraint, so that the width was the only variable. The
+accumulator widening added \thAccLutDelta{} CLB LUTs, or \thAccLutPct\%, spread
+across the feeder multiplexer, the delay lines and the wider adders, and left
+the DSP, block-RAM and URAM counts unchanged. The DSP count is the figure the
+decision turned on, and it did not move, which is the whole content of the
+27-bit argument above. Timing did not degrade either, since the critical path
+at the time lay in the tap cascade of Section~\ref{sec:stem-engine} and not in
+the accumulator.
+
+Two alternatives were considered and rejected. Re-quantizing the model so that
+the biases fit the narrower accumulator would have changed the numerics for a
+reason unrelated to accuracy, and would have left the identical problem waiting
+for the next retrain. Saturating the accumulator instead of letting it wrap
+would have converted a silent corruption into a visible one, which is an
+improvement, but a design that saturates is still a design that has run out of
+bits. Testing more images was rejected on principle: more observations raise
+confidence without establishing a bound, and in this instance they would have
+found nothing at all, because the overflow was contained in a bias and was
+therefore independent of the input.
+
+What replaced the measurement is a check rather than a number. The exporter
+now evaluates Equation~\eqref{eq:acc-bound-widths} over every output channel of
+every layer, reads the accumulator width out of the RTL source so that the two
+cannot drift apart, and exits with an error if the network's worst case does
+not fit. Re-running that check against the current export confirms the figures
+quoted above, and also shows how far the original width was from safe:
+at 21 bits, \thAccUnsafeLayers{} layers of the network exceed the bound. Only
+one of them produced an observable error on the test image, which is precisely
+why the observation was misleading.
+
+One width is still justified by observation, and the table records it as such.
+The classifier emits int16 logits on a shared scale $S_{\mathrm{logit}}$,
+calibrated from the largest logit magnitude the float model produced over a
+few batches, with a factor of 1.2 in hand (\DD{011}). A shared scale is what
+lets the predicted class be taken by comparing the \thClasses{} logits
+directly, with no rescaling. The exposure is bounded in practice because the
+requantization saturates rather than wraps, as Section~\ref{sec:requant-lanes}
+describes: a logit beyond the calibrated range is clipped to the end of the
+int16 interval, which costs resolution at the extremes and could in principle
+make two saturated classes compare equal, but cannot corrupt the result the way
+a wrapped accumulator does. The margin is wide --- \thClasses{} classes on a
+16-bit scale --- so the risk is small, but it is an observation, and
+Table~\ref{tab:widths} says so.
 
 \section{Memory Organization}
 \label{sec:memory}
