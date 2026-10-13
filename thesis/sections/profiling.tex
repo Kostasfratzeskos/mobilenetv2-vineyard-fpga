@@ -14,15 +14,35 @@
 
 \section{Dataset}
 \label{sec:dataset}
-% The four classes: \thClassList. Sources, counts, the split.
+% The four classes: \thClassList. 4,062 original PlantVillage photographs
+% (1,180 / 1,383 / 423 / 1,076). The 3,639 diseased ones are of 910 leaves,
+% four photos each, by PlantVillage's own leaf maps; healthy has no map. The
+% split: train / val / test by LEAF, 70/15/15 - \thAccTestImages{} test images
+% on \thAccTestLeaves{} leaves (DD-034).
 
 \subsection{Data Leakage and Leaf-Level Resplit}
 \label{sec:leakage}
-% Tell this straight: the first split reported 100.00% float and 100.00% int8,
-% and those numbers were wrong because augmented duplicates of the same leaf
-% appeared in both train and validation. scripts/resplit_dataset.py resplits by
-% leaf. The honest accuracy on grape_clean is lower and it is the one reported
-% in Section~\ref{sec:accuracy}.
+% Tell this straight, in two stages, because the first fix was itself wrong:
+%
+%   1. data/grape was split per FILE and held rotated/flipped copies of each
+%      image on both sides -> 100.00% float and 100.00% int8.
+%   2. data/grape_clean kept one original per image id and split by id. It
+%      looked leakage-free and was not: PlantVillage photographed every leaf
+%      several times, each photo with its own id. Its leaf maps put the 3,639
+%      diseased images on 910 leaves, and grape_clean had 532 of those 910 on
+%      both sides of its split.
+%
+% The fix (software/train/resplit_dataset.py): diseased classes grouped by
+% PlantVillage's leaf maps [mohanty2016plantdisease]; healthy, which has no
+% map, by contiguous frame ranges cut where the leaf visibly changes. A third
+% split, test, is touched once (Section~\ref{sec:accuracy}).
+%
+% How the second leak was found is worth a sentence: a near-duplicate scan
+% turned up two "different" healthy images of one leaf (HL 9127 / HL 9129),
+% which led to the leaf maps. Visual similarity could NOT recover the
+% grouping - an ImageNet embedding separates same-leaf from next-leaf frames
+% with AUC 0.88, and SIFT matching not at all at 256x256 - so the maps are
+% the only sound source, and the reason healthy is cut by frame range.
 %
 % This belongs in the thesis rather than being quietly dropped: it is a
 % failure mode endemic to the plant-disease literature (Section~\ref{sec:related-plant})
@@ -32,9 +52,12 @@
 \section{Model Training}
 \label{sec:training}
 % Transfer learning from ImageNet, the schedule, the augmentation, the
-% checkpoint. Record the checkpoint hash: \thCkptSha{} (truncated; the manifest
-% carries all 64 hex digits). Every result in this thesis is against that one
-% checkpoint, and saying so is what makes the rest reproducible.
+% checkpoint: chosen on val at epoch \thAccBestEpoch{} (\thAccValSelect\% -
+% a selection score, never quoted as the result). Record the checkpoint hash:
+% \thCkptSha{} (truncated; the manifest carries all 64 hex digits). Every result
+% in this thesis is against that one checkpoint, and saying so is what makes
+% the rest reproducible - so \thAccCkptSha{}, the checkpoint the accuracy was
+% measured on, has to be the same one (thesis_numbers.py warns when it is not).
 
 \section{Post-Training Quantization to int8}
 \label{sec:ptq}

@@ -2,18 +2,19 @@
 """Emit thesis/generated/numbers.tex from the repository's own artefacts.
 
 Every number the manuscript quotes about the network or about an implementation
-run is defined here as a LaTeX macro, recomputed from `software/export/manifest.json`
-and from the Vivado reports under `build/`. Nothing is typed into the text.
+run is defined here as a LaTeX macro, recomputed from `software/export/manifest.json`,
+from the Vivado reports under `build/`, and from the test-set report that
+`evaluate.py --report` writes (DD-034). Nothing is typed into the text.
 
 The reason is DD-019 in prose form: a number that was measured once and then
 copied by hand is true only until the thing it measured changes. `analyze_workload.py`
 already refuses to hard-code the architectural numbers; this does the same for the
 manuscript.
 
-What this file cannot derive - cycle counts from simulation logs, accuracy from an
-evaluation run - lives in `thesis/manual_numbers.tex`, where each macro has to carry
-a comment saying where it came from. If a number is not in one of those two files,
-it does not belong in the text.
+What this file cannot derive - cycle counts from simulation logs - lives in
+`thesis/manual_numbers.tex`, where each macro has to carry a comment saying where
+it came from. If a number is not in one of those two files, it does not belong in
+the text.
 
 Usage:
     python scripts/thesis_numbers.py            # write thesis/generated/numbers.tex
@@ -34,6 +35,9 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from analyze_workload import load_ops  # noqa: E402  - one source of truth for the network
 
 OUT = os.path.join(ROOT, "thesis", "generated", "numbers.tex")
+MANIFEST = os.path.join(ROOT, "software", "export", "manifest.json")
+# evaluate.py --split test --report: the held-out test set, scored once (DD-034)
+ACCURACY = os.path.join(ROOT, "software", "runs", "mobilenetv2_grape_leafsplit_test.json")
 
 # Device totals for the XCZU7EV-ffvc1156-2-e, so utilisation percentages are
 # derived here rather than trusted from whichever report happened to be open.
@@ -170,6 +174,76 @@ def network_macros(lines):
     lines.append("")
 
 
+def accuracy_macros(lines):
+    """Float and int8 accuracy on the held-out test split, from evaluate.py's report.
+
+    The int8 figures are the integer pipeline's - the arithmetic the accelerator
+    reproduces bit for bit - so they are the accelerator's accuracy, provided the
+    report's checkpoint is the one software/export/ was built from. When it is
+    not, that is said in the output, not left for a reader to discover.
+    """
+    rel = os.path.relpath(ACCURACY, ROOT).replace(os.sep, "/")
+    if not os.path.exists(ACCURACY):
+        lines.append("%% %s missing - accuracy macros not defined" % rel)
+        lines.append("")
+        return
+    with open(ACCURACY, encoding="utf-8") as fh:
+        rep = json.load(fh)
+    if rep["split"] != "test":
+        sys.exit("%s scores the %r split - only the test split is a result" % (rel, rep["split"]))
+
+    def pct(x):
+        return "{:.2f}".format(100.0 * x)
+
+    def name(s):   # LaTeX macro names take letters only
+        return re.sub(r"[^A-Za-z]", "", s)
+
+    lines.append("% --- accuracy on the held-out test split, from " + rel + " ---")
+    with open(MANIFEST, encoding="utf-8") as fh:
+        deployed = json.load(fh)["ckpt_sha256"]
+    if rep["ckpt_sha256"] != deployed:
+        note = ("WARNING: accuracy measured on checkpoint %s, but software/export/ is built "
+                "from %s - these are not the deployed model's numbers"
+                % (rep["ckpt_sha256"][:12], deployed[:12]))
+        lines.append("% " + note)
+        print(note, file=sys.stderr)
+    emit(lines, "AccCkptSha", rep["ckpt_sha256"][:12], "the checkpoint these were measured on")
+    emit(lines, "AccTestImages", rep["images"])
+    emit(lines, "AccTestLeaves", rep["groups"],
+         "independent leaves (healthy: runs of 4 frames, an approximation)")
+    emit(lines, "AccBestEpoch", rep["ckpt_best_epoch"], "chosen on val/, never on test/")
+    emit(lines, "AccValSelect", pct(rep["ckpt_best_val_acc"]),
+         "val accuracy at that epoch - a selection score, not a result")
+    for key, tag in (("float", "Float"), ("int8", "Int")):
+        m = rep[key]
+        emit(lines, "Acc" + tag, pct(m["accuracy"]),
+             "percent, %d/%d correct" % (m["correct"], m["images"]))
+        emit(lines, "Acc%sErrors" % tag, m["images"] - m["correct"])
+        lo, hi = m["ci95_per_image"]
+        emit(lines, "Acc%sCiImageLo" % tag, pct(lo), "95% Wilson, photos as independent")
+        emit(lines, "Acc%sCiImageHi" % tag, pct(hi))
+        lo, hi = m["ci95_per_leaf"]
+        emit(lines, "Acc%sCiLeafLo" % tag, pct(lo), "95% Wilson, one observation per leaf")
+        emit(lines, "Acc%sCiLeafHi" % tag, pct(hi))
+        emit(lines, "Acc%sMacroF" % tag, "{:.4f}".format(m["macro_f1"]), "macro-averaged F1")
+        for cls, r in m["per_class"].items():
+            for metric, short in (("precision", "Prec"), ("recall", "Rec"), ("f1", "F")):
+                emit(lines, "Acc%s%s%s" % (tag, short, name(cls)), "{:.4f}".format(r[metric]))
+        for t, row in zip(rep["classes"], m["confusion"]):
+            for p, v in zip(rep["classes"], row):
+                emit(lines, "Acc%sConf%s%s" % (tag, name(t), name(p)), v,
+                     "true %s, predicted %s" % (t, p))
+    for cls, r in rep["float"]["per_class"].items():
+        emit(lines, "AccTestImages" + name(cls), r["support"])
+        emit(lines, "AccTestLeaves" + name(cls), r["groups"])
+    emit(lines, "AccDrop", "{:.2f}".format(100.0 * (rep["float"]["accuracy"]
+                                                    - rep["int8"]["accuracy"])),
+         "points, float minus int8")
+    emit(lines, "AccDisagree", len(rep["int8_float_disagree"]),
+         "test images where int8 and float predict differently")
+    lines.append("")
+
+
 def run_macros(lines):
     lines.append("% --- implementation runs, parsed from build/*/ Vivado reports ---")
     for dirname, suffix, note in RUNS:
@@ -218,6 +292,7 @@ def main():
         "",
     ]
     network_macros(lines)
+    accuracy_macros(lines)
     run_macros(lines)
 
     text = "\n".join(lines) + "\n"

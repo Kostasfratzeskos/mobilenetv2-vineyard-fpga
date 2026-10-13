@@ -202,11 +202,9 @@
 \newcommand{\thFfDma}{1\,396}
 
 % --- accuracy -------------------------------------------------------------
-% NOT MEASURED YET. \cref{sec:accuracy} is blocked on this.
-% Run evaluate.py on data/grape_clean/val with the current checkpoint
-% (\thCkptSha) for both float and int8, then fill these in and delete the
-% \TODO markers. The 100.00% figures in the repository are from the LEAKY
-% split and must not be quoted as results.
-\newcommand{\thAccFloat}{\TODO{float acc on grape\_clean}}
-\newcommand{\thAccInt}{\TODO{int8 acc on grape\_clean}}
-\newcommand{\thAccDrop}{\TODO{quantisation drop, pts}}
+% Moved to scripts/thesis_numbers.py (\thAccFloat, \thAccInt, \thAccDrop and
+% the rest), which reads the report evaluate.py writes for the held-out test
+% split of data/grape_leafsplit - DD-034. Neither 100.00% figure in the
+% repository's history is a result: both come from data/grape, which leaked
+% rotated copies of each image across its split. data/grape_clean, the first
+% fix, still leaked the other three photos of each leaf.

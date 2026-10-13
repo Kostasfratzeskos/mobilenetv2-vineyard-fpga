@@ -2093,3 +2093,116 @@ cross-check on each other, which is the first thing to run when one exists.
 Recorded as **DD-033**. Still outstanding project-wide: the accuracy measurement on `grape_clean`
 in float and int8 — the only accuracy numbers in the repository are 100.00% from the *leaky* split,
 which is not a result — and `docs/latency_map.md` §6 still stops at Phase 2d.
+
+### 2026-10-13 - Accuracy: the "leak-free" split leaked too, and a test set that is touched once
+
+The outstanding item above was meant to be one evaluation run on `grape_clean`. It became a new
+split, a retrain and an evaluation protocol, because the first thing I checked was whether
+`grape_clean` deserved to be measured on.
+
+#### The second leak
+
+`grape_clean` keeps one original per image id and splits by id. Before building a test split on it, I
+ran a near-duplicate scan over its 4,062 originals — a 64-bit difference hash under all eight
+rotations and flips. No two images were identical. The closest pair was:
+
+```
+ 2  train/Healthy/...___Mt.N.V_HL 9127.JPG  <->  train/Healthy/...___Mt.N.V_HL 9129.JPG
+```
+
+Two image ids, consecutive frame numbers, and on a contact sheet **the same leaf**, photographed
+twice. That sent me to PlantVillage's own `leaf_grouping/` data, which maps every diseased grape image
+to a leaf:
+
+```
+3,639 diseased images  ->  910 leaves, 4 photos each, in consecutive frames
+grape_clean            ->  532 of the 910 leaves have photos in BOTH train and val (2,128 images)
+```
+
+So `grape_clean`'s validation set was mostly other angles of leaves the model had trained on. The
+first fix had removed the augmented copies — the visible leak — and kept the bigger one, because it
+split by image id and PlantVillage gives every photo of a leaf its own id.
+
+#### Healthy has no map, and the images could not supply one
+
+The map covers the three diseases and not healthy. I tried to recover healthy's grouping from the
+pixels, calibrating each method on the diseased classes where the map gives the answer:
+
+```
+ImageNet MobileNetV2 embedding, best of 8 rotations/flips   AUC 0.88 - no leaf cut => 870/907 boundaries missed
+SIFT on the leaf mask + RANSAC similarity fit               median 2 inliers, same leaf or not
+```
+
+Neither is a detector. What does hold for all 910 mapped leaves is that a leaf occupies one unbroken
+stretch of frame numbers, and healthy was shot the same way (two sessions, 6020–6212 and 8903–9132).
+So healthy is split by **frame range**: a leaf can only cross a split at a cut, and I put each of the
+four cuts where the leaf visibly changes shape — `6150|6151`, `6181|6182`, `9062|9063`, `9090|9091` —
+not at the nominal 15% marks, where neighbouring frames look alike (6151–6158 could be one leaf or two).
+
+#### The protocol
+
+`resplit_dataset.py` now writes `data/grape_leafsplit`: train / val / test **by leaf**, 70/15/15,
+2,842 / 603 / 617 images, and a `split.csv` recording which photos belong together. Then:
+
+- `train.py` trains on train and chooses the epoch on val — nothing else uses val, and nothing is
+  tuned: the recipe is the old one (20 epochs, SGD 0.01 cosine, batch 32). Ties go to the lower loss,
+  because val accuracy saturates at 1.000. The checkpoint now says what it was trained on; the
+  deployed one does not, which is why nobody could vouch for its 100%.
+- `quantize.py` calibrates the int8 scales on train, seeded.
+- `evaluate.py --split test` runs **once**, last. It scores the float model and the **integer
+  pipeline** — `export.py`'s executor, the arithmetic the RTL matches bit for bit — and checks the
+  checkpoint's accumulator bound against the RTL's `ACC_W`, since the integer numbers are the
+  hardware's only if nothing overflows. To share that code I moved the logit calibration and plan
+  construction out of `export.py`'s `main()`; a re-export of the deployed checkpoint afterwards is
+  byte-identical to `software/export/` in all 213 files the exporter writes.
+
+Accuracy gets two 95% intervals, per image and per leaf, because four photos of one leaf are not four
+independent tests. The per-image one is the one papers quote and it is too narrow; the per-leaf one
+is conservative. The report is JSON and `thesis_numbers.py` turns it into the `\thAcc*` macros.
+
+#### Result
+
+Training selected epoch 10 (val 100.00%, loss 0.0009); the int8 scales were calibrated on train, and
+two calibration runs give byte-identical scale files. Before touching test I ran the whole evaluation
+on val, to exercise the code: float 100%, int8 100%, 0 of 603 predictions different. Then test, once:
+
+```
+test: 617 images, 155 leaf groups
+FLOAT                  accuracy 99.84%  (616/617)   95% CI per image [99.09, 99.97]  per leaf [97.27, 99.99]
+INT8 integer pipeline  accuracy 99.68%  (615/617)   95% CI per image [98.83, 99.91]  per leaf [96.98, 99.97]
+  ERROR  Black Rot/...___FAM_B.Rot 0400.JPG   true Black Rot  predicted ESCA        (int8 only)
+  ERROR  ESCA/...___FAM_B.Msls 1828.JPG       true ESCA       predicted Black Rot   (both)
+int8 vs float: 1/617 predictions differ; accuracy drop +0.16 points
+```
+
+Both errors sit on the Black Rot / ESCA boundary. `Msls 1828` is the over-exposed shot of its leaf —
+glare washes out the margins where ESCA shows — and the model gets the leaf's other three photos
+right. `Rot 0400` is the one quantisation flip, and the float model was nearly tied on it already:
+
+```
+Rot 0400   float softmax  Black Rot 0.586  ESCA 0.414     int8 logits  4661 vs 5271 -> ESCA
+smallest float top-1/top-2 margins on test: 0.170, 0.171, 0.399, 0.929, ...
+```
+
+Only three test images have a float margin below 0.5, and both errors are among them. That is the
+honest shape of the quantisation cost: nothing moves except where the float model was already unsure.
+
+One run of the test split was not quite the end. The report stamped `commit: b70b678` — HEAD at the
+time — while the `evaluate.py` that wrote it was still uncommitted, so the hash named the code
+*before* the code that produced the numbers. `evaluate.py` now marks the stamp `-dirty` in that case;
+I committed the pipeline and ran test again, purely to stamp the report. The evaluation is
+deterministic and the second run informs no decision, so it is not a second look in any sense that
+matters — and it reproduced the first report in every field but the commit.
+
+The checkpoint's accumulator bound came out at 8,971,923 — 25 bits, inside `ACC_W = 26` — and it is
+one bias, channel 80 of `features.9.conv.0.0` (8,590,995), the same failure mode DD-019 found in
+`features.3`. Nothing had to be remembered to catch it: `evaluate.py` recomputes the bound for the
+checkpoint it scores, which is the whole point of having a bound rather than a measurement.
+
+#### Where this leaves things
+
+Recorded as **DD-034**; `thesis_numbers.py` now emits `\thAccFloat` 99.84, `\thAccInt` 99.68,
+`\thAccDrop` 0.16 and the rest from the report. The open item is the one DD-034 names: these numbers
+are for `mobilenetv2_grape_leafsplit.pth`, and `software/export/`, the golden vectors and every
+simulation are still from `mobilenetv2_grape.pth`. Until they are regenerated from the new checkpoint,
+`numbers.tex` says so in a WARNING line.

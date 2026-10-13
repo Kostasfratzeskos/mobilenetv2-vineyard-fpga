@@ -1718,3 +1718,112 @@ argmax over the 4 int16 logits is the predicted class.
   will catch a stale header, but the `lrint` margin above should be re-measured rather than assumed
   to survive. Or if the input size becomes variable, which would interact with DD-032's note about
   `IMG_PIXELS`.
+
+### DD-034 — Accuracy: split by LEAF, three ways, and the test split scored once
+- Status: Accepted
+- Date: 2026-10-13
+- Context: the only accuracy figures in the repository were 100.00% float and 100.00% int8, from
+  `data/grape` — a split **per file** of a set that holds rotated and flipped copies of every image,
+  so copies of one image sat on both sides. `resplit_dataset.py` had produced `data/grape_clean`
+  (one original per image id, split 80/20 by id) on 2026-07-22, and it was believed leak-free;
+  nothing had been measured on it. Two more things were wrong with the protocol itself: there was no
+  test set — `train.py` chose the checkpoint on val and printed that same val accuracy as "the float
+  baseline" — and the deployed checkpoint (`268f85f714d3`) records `best_acc: 1.0` but not what it was
+  trained on, so its numbers could not be re-derived by anyone.
+
+- **The measurement that changed the plan.** Before building a third split on top of `grape_clean`, a
+  near-duplicate scan (a 64-bit difference hash under all eight rotations and flips, over the 4,062
+  originals) found no identical pair — but its closest pair, `HL 9127` / `HL 9129`, two different
+  image ids in the healthy class, is the **same physical leaf** photographed twice. That led to
+  PlantVillage's own leaf grouping (`leaf_grouping/leaf_maps` in spMohanty/PlantVillage-Dataset), which
+  covers every diseased grape image:
+
+  ```
+  3,639 diseased images  ->  910 leaves, four photos each, as consecutive frame numbers
+                             (292/295, 336/346, 263/269 leaves exactly consecutive)
+  grape_clean            ->  532 of those 910 leaves on BOTH sides of its split (2,128 images)
+  ```
+
+  So `grape_clean`'s validation set was mostly other photos of leaves the model had trained on. The
+  first fix had removed the augmented copies and kept the larger leak.
+
+- Decision:
+  - **The unit of splitting is the leaf.** Black Rot, ESCA and Leaf Blight are grouped by
+    PlantVillage's leaf maps; leaves are shuffled (seed 42) and split 70/15/15 within each class. The
+    maps are pinned to upstream commit `40789680` by sha256 and **not committed** — the upstream
+    repository declares no licence — so they live in `data/` beside the images.
+  - **Healthy has no leaf map**, so it is split into contiguous **frame ranges**: every mapped leaf
+    occupies one unbroken stretch of the frame sequence (no two of the 910 interleave), healthy was
+    visibly shot the same way, and so a leaf can only cross a split at a cut. Each of the four cuts sits where margin and lobing change between two
+    frames, which no rotation or exposure can explain (`6150|6151`, `6181|6182`, `9062|9063`,
+    `9090|9091`) — not at the nominal 15% marks, where consecutive frames look alike. Both photo
+    sessions (6020–6212 and 8903–9132), which look visibly different, contribute to every split.
+  - **Three splits, each with one job.** train trains; val only chooses the epoch (best accuracy,
+    ties to the lower loss — val accuracy saturates at 1.000); test is scored **once**, by
+    `evaluate.py --split test`, after the checkpoint and the int8 scales are fixed. The training
+    recipe is unchanged (20 epochs, SGD 0.01 cosine, batch 32), so val selects and nothing is tuned.
+  - **int8 accuracy is the integer pipeline's**, `export.py`'s `IntExecutor` — the arithmetic the RTL
+    reproduces bit for bit — not the fake-quant proxy (DD-009). `evaluate.py` builds it through the
+    same `build_int_plan()` the exporter now uses, and checks the checkpoint's provable accumulator
+    bound (DD-019) against the RTL's `ACC_W`, because the integer numbers are the hardware's only if
+    nothing overflows. A re-export of the deployed checkpoint after that refactor is byte-identical
+    to `software/export/` in all 213 files the exporter writes.
+  - **Two intervals, because the photos are not independent.** 95% Wilson per image (each photo an
+    observation: too narrow) and per leaf (each leaf once: conservative). Wilson rather than
+    ±1.96σ because it stays inside [0,1] and is not zero-width at 100%.
+  - **The report is the source.** `evaluate.py --report` writes JSON; `scripts/thesis_numbers.py`
+    turns it into the `\thAcc*` macros, which leave `manual_numbers.tex`. It warns in `numbers.tex`
+    while the measured checkpoint is not the one `software/export/` is built from.
+  - **Provenance.** Checkpoints now record their data and settings; `train.py` refuses to replace an
+    existing checkpoint without `--overwrite` (its default `--out` is the deployed one — the DD-019
+    retrain); `quantize.py` seeds its calibration, which drew shuffled, augmented batches unseeded.
+
+- Result — the test split, scored once, on checkpoint `1b536a3033c8` (selected at epoch 10, val
+  100.00%), from `software/runs/mobilenetv2_grape_leafsplit_test.json`. (Run a second time after
+  `evaluate.py` was committed, only so the report's commit stamp names the code that wrote it; the
+  evaluation is deterministic and both reports agree in every other field.)
+
+  ```
+  617 test images, 155 leaves      accuracy            95% CI per image   95% CI per leaf   macro-F1
+  float                            99.84%  (616/617)   [99.09, 99.97]     [97.27, 99.99]    0.9987
+  int8, the integer pipeline       99.68%  (615/617)   [98.83, 99.91]     [96.98, 99.97]    0.9974
+  ```
+
+  Both errors are Black Rot ↔ ESCA; Healthy and Leaf Blight are perfect. The float error
+  (`ESCA 1828` → Black Rot) is the over-exposed one of its leaf's four photos — the other three are
+  right. **int8 and float disagree on one image** (`Black Rot 0400`), on which the float model was
+  itself nearly tied, 0.586 against 0.414: the second-smallest margin of the 617, and only 3 test
+  images have a float margin below 0.5. The quantisation cost one decision, at the decision boundary
+  — 0.16 points.
+
+  The new checkpoint's provable accumulator bound is **8,971,923 (25 bits)**, set almost entirely by
+  one folded bias — channel 80 of `features.9.conv.0.0`, 8,590,995, against a layer median of 4,337 —
+  the DD-019 failure mode again. It fits `ACC_W = 26` with a 3.7× margin, so these int8 figures are the
+  accelerator's for this checkpoint; and it is a second retrain moving the bound (24 → 25 bits), which
+  is DD-019's point: the bound was recomputed and checked, not remembered.
+
+- Alternatives considered:
+  - **Evaluate the deployed checkpoint on `grape_clean`'s val.** Rejected three times over: the split
+    leaks leaves, val chose that checkpoint, and nobody can say what it was trained on.
+  - **Recover healthy's leaf groups from the images.** Tried, measured against the leaf maps on the
+    diseased classes, and rejected. An ImageNet MobileNetV2 embedding (best cosine over the eight
+    rotations/flips) separates same-leaf from next-leaf frames with AUC 0.88 — a threshold that cuts
+    no leaf misses 870 of 907 boundaries. SIFT on the leaf region with a RANSAC similarity fit finds a
+    median of **2** inliers between photos of the same leaf, the same as between different leaves:
+    at 256×256 there is no matchable vein texture. Frame ranges need no detector at all.
+  - **Guard bands** (dropping a few frames at each healthy cut) instead of placing the cuts by eye.
+    Unnecessary where the leaf visibly changes, and they cost data in the smallest class.
+  - **k-fold cross-validation.** A steadier estimate, but five trainings for one number, and the
+    hardware runs one checkpoint; a single held-out test ties the figure to the weights deployed.
+
+- Consequences: `data/grape_leafsplit` (2,842 / 603 / 617 images) replaces `grape_clean`, which stays
+  on disk unused; `data/README.md` says which folder is which. **The accuracy is measured on a
+  retrained checkpoint, `mobilenetv2_grape_leafsplit.pth`, while `software/export/`, the golden
+  vectors and every simulation are built from `mobilenetv2_grape.pth`.** Until those are regenerated
+  from the new checkpoint, the accuracy and the bit-exactness results are about two different
+  models, and the thesis must not present them as one — `thesis_numbers.py` writes a WARNING line
+  into `numbers.tex` for as long as that is true.
+
+- Revisit if: field photographs arrive — they are the real test of deployment, and they get their own
+  number rather than being pooled; a leaf map for the healthy class turns up; or the export is
+  regenerated from the new checkpoint, which closes the consequence above.
