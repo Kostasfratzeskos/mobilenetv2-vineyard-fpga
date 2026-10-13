@@ -13,6 +13,10 @@ Or a pre-split layout:
     data/
       train/   <class folders>
       val/     <class folders>
+      test/    <class folders>   (optional - resplit_dataset.py writes one)
+
+Training reads train/ and val/ only; test/ is read by evaluate.py --split test,
+once, after everything else is fixed.
 
 Classes are detected automatically from the folder names (sorted).
 
@@ -83,10 +87,20 @@ def make_dataloaders(data_dir, batch_size=32, img_size=224, val_split=0.2,
     return train_loader, val_loader, classes
 
 
-def make_eval_loader(data_dir, batch_size=32, img_size=224, num_workers=4):
-    """Return (loader, classes) over an eval set (uses data/val if present, else all of data)."""
-    eval_dir = os.path.join(data_dir, "val")
-    root = eval_dir if os.path.isdir(eval_dir) else data_dir
+def make_eval_loader(data_dir, batch_size=32, img_size=224, num_workers=4, split="val"):
+    """Return (loader, classes) over one split of an eval set.
+
+    split="val" uses data/val if present, else all of data (export.py relies on
+    that). Any other split must exist: falling back to the whole dataset there
+    would quietly score the model on its own training images.
+    """
+    eval_dir = os.path.join(data_dir, split)
+    if os.path.isdir(eval_dir):
+        root = eval_dir
+    elif split == "val":
+        root = data_dir
+    else:
+        raise FileNotFoundError(f"no {split}/ under {data_dir!r}")
     ds = datasets.ImageFolder(root, _eval_tf(img_size))
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False,
                         num_workers=num_workers, pin_memory=True)
