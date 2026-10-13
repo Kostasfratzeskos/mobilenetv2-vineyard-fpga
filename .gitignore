@@ -26,6 +26,9 @@ data/*
 #  The manifests carry its sha256 so a mismatch is caught, but catching it is
 #  no use if nobody can obtain the file the hash names.
 !software/runs/mobilenetv2_grape.pth
+#  ...and the checkpoint the held-out test accuracy was measured on (DD-034):
+#  trained on the leaf-level split, so its numbers name a file anyone can get.
+!software/runs/mobilenetv2_grape_leafsplit.pth
 # Large exported weight blobs — track with Git LFS if you must version them:
 # software/export/*.bin
 

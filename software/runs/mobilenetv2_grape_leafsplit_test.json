@@ -1,0 +1,190 @@
+{
+  "split": "test",
+  "data": "grape_leafsplit",
+  "file_list_sha256": "0f05bbb1ba0cf1ffacd8e20e4b2426a1431e2841b0a34792d9d87cd62a1401cd",
+  "images": 617,
+  "groups": 155,
+  "classes": [
+    "Black Rot",
+    "ESCA",
+    "Healthy",
+    "Leaf Blight"
+  ],
+  "ckpt": "runs/mobilenetv2_grape_leafsplit.pth",
+  "ckpt_sha256": "1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d",
+  "ckpt_best_val_acc": 1.0,
+  "ckpt_best_epoch": 10,
+  "ckpt_trained_on": "grape_leafsplit",
+  "float": {
+    "accuracy": 0.9983792544570502,
+    "correct": 616,
+    "images": 617,
+    "ci95_per_image": [
+      0.990877220557323,
+      0.9997138413027827
+    ],
+    "ci95_per_leaf": [
+      0.9727467230291654,
+      0.9999059456745599
+    ],
+    "macro_f1": 0.9986893750639954,
+    "per_class": {
+      "Black Rot": {
+        "precision": 0.9943502824858758,
+        "recall": 1.0,
+        "f1": 0.9971671388101983,
+        "support": 176,
+        "groups": 44
+      },
+      "ESCA": {
+        "precision": 1.0,
+        "recall": 0.9951923076923077,
+        "f1": 0.9975903614457832,
+        "support": 208,
+        "groups": 52
+      },
+      "Healthy": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 73,
+        "groups": 19
+      },
+      "Leaf Blight": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 160,
+        "groups": 40
+      }
+    },
+    "confusion": [
+      [
+        176,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        207,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        73,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        160
+      ]
+    ],
+    "errors": [
+      {
+        "file": "ESCA/81a1b9ac-4e0e-4bd0-aa3a-ffa4448e34ff___FAM_B.Msls 1828.JPG",
+        "true": "ESCA",
+        "pred": "Black Rot"
+      }
+    ]
+  },
+  "generated": "2026-10-13",
+  "commit": "84c4ba5",
+  "scales": "runs/quant_scales_grape_leafsplit.json",
+  "scales_sha256": "cbb03295334dc7c10aaa64878e76476995922fb4773764aa4a51d764aeabe3ab",
+  "s_logit": 0.0008127817727933926,
+  "acc_bound": 8971923,
+  "acc_bound_bits": 25,
+  "rtl_acc_w": 26,
+  "acc_bound_fits": true,
+  "max_abs_acc_seen": 8636154,
+  "int8": {
+    "accuracy": 0.9967585089141004,
+    "correct": 615,
+    "images": 617,
+    "ci95_per_image": [
+      0.9882590118274208,
+      0.9991106156851721
+    ],
+    "ci95_per_leaf": [
+      0.9698294099646488,
+      0.9996601606294707
+    ],
+    "macro_f1": 0.9973776223776224,
+    "per_class": {
+      "Black Rot": {
+        "precision": 0.9943181818181818,
+        "recall": 0.9943181818181818,
+        "f1": 0.9943181818181818,
+        "support": 176,
+        "groups": 44
+      },
+      "ESCA": {
+        "precision": 0.9951923076923077,
+        "recall": 0.9951923076923077,
+        "f1": 0.9951923076923077,
+        "support": 208,
+        "groups": 52
+      },
+      "Healthy": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 73,
+        "groups": 19
+      },
+      "Leaf Blight": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 160,
+        "groups": 40
+      }
+    },
+    "confusion": [
+      [
+        175,
+        1,
+        0,
+        0
+      ],
+      [
+        1,
+        207,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        73,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        160
+      ]
+    ],
+    "errors": [
+      {
+        "file": "Black Rot/c8bfe895-d9a9-489b-82c3-a038f28640c1___FAM_B.Rot 0400.JPG",
+        "true": "Black Rot",
+        "pred": "ESCA"
+      },
+      {
+        "file": "ESCA/81a1b9ac-4e0e-4bd0-aa3a-ffa4448e34ff___FAM_B.Msls 1828.JPG",
+        "true": "ESCA",
+        "pred": "Black Rot"
+      }
+    ]
+  },
+  "int8_float_disagree": [
+    "Black Rot/c8bfe895-d9a9-489b-82c3-a038f28640c1___FAM_B.Rot 0400.JPG"
+  ]
+}
