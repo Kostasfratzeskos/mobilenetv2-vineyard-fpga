@@ -1,14 +1,19 @@
 """Fine-tune MobileNetV2 on the grape-disease dataset and save the best checkpoint.
 
 Run from inside software/:
-    python train/train.py --data ../data/grape --epochs 20 --batch-size 32
-    python train/train.py --data ../data/grape --freeze-backbone --epochs 8   # fast / CPU
+    python train/train.py --data ../data/grape_leafsplit --out runs/mobilenetv2_grape_leafsplit.pth
+    python train/train.py --data ../data/grape_leafsplit --freeze-backbone --epochs 8   # fast / CPU
 
-Prints the float baseline accuracy and writes a checkpoint you'll quantize next.
+Trains on train/, picks the checkpoint on val/ (best accuracy, ties to the lower
+loss), and never opens test/ - that is evaluate.py's, once. Writes the
+checkpoint you'll quantize next and a per-epoch log beside it (<out>.csv). The
+checkpoint records which data and settings made it: the deployed one did not,
+and nobody could say afterwards what it had been trained on (DD-034).
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import random
 import sys
@@ -50,7 +55,7 @@ def run_epoch(model, loader, device, criterion, optimizer=None, scaler=None):
         if is_train:
             optimizer.zero_grad(set_to_none=True)
             if scaler is not None:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast("cuda"):
                     out = model(x)
                     loss = criterion(out, y)
                 scaler.scale(loss).backward()
@@ -87,8 +92,16 @@ def main():
     p.add_argument("--no-pretrained", action="store_true",
                    help="train from scratch instead of ImageNet weights")
     p.add_argument("--out", default="runs/mobilenetv2_grape.pth")
+    p.add_argument("--overwrite", action="store_true",
+                   help="allow --out to replace an existing checkpoint")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
+
+    # The default --out is the deployed checkpoint, and a retrain that silently
+    # replaced it is how the export and the golden vectors came to disagree
+    # (DD-019). Replacing a checkpoint has to be asked for.
+    if os.path.exists(args.out) and not args.overwrite:
+        raise SystemExit(f"{args.out} exists - choose another --out, or pass --overwrite")
 
     set_seed(args.seed)
     device = pick_device()
@@ -109,27 +122,53 @@ def main():
     optimizer = torch.optim.SGD(params, lr=args.lr, momentum=0.9,
                                 weight_decay=args.weight_decay, nesterov=True)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-    scaler = torch.cuda.amp.GradScaler() if device == "cuda" else None
+    scaler = torch.amp.GradScaler("cuda") if device == "cuda" else None
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    best_acc = 0.0
-    for epoch in range(1, args.epochs + 1):
-        t0 = time.time()
-        tr_loss, tr_acc = run_epoch(model, train_loader, device, criterion, optimizer, scaler)
-        va_loss, va_acc = run_epoch(model, val_loader, device, criterion)
-        scheduler.step()
-        print(f"epoch {epoch:3d}/{args.epochs} | "
-              f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
-              f"val loss {va_loss:.3f} acc {va_acc:.3f} | {time.time() - t0:.0f}s")
-        if va_acc > best_acc:
-            best_acc = va_acc
-            save_checkpoint(args.out, model, classes, args.img_size,
-                            IMAGENET_MEAN, IMAGENET_STD, best_acc)
-            print(f"  saved new best -> {args.out} (val acc {best_acc:.3f})")
+    log_path = os.path.splitext(args.out)[0] + ".csv"
+    provenance = {
+        "data": os.path.basename(os.path.normpath(args.data)),
+        "train_images": len(train_loader.dataset),
+        "val_images": len(val_loader.dataset),
+        "epochs": args.epochs, "batch_size": args.batch_size, "lr": args.lr,
+        "weight_decay": args.weight_decay, "seed": args.seed,
+        "freeze_backbone": args.freeze_backbone, "pretrained": not args.no_pretrained,
+        "torch": torch.__version__,
+    }
+    best_acc, best_loss = 0.0, float("inf")
+    with open(log_path, "w", newline="") as fh:
+        log = csv.writer(fh)
+        log.writerow(["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc",
+                      "seconds", "saved"])
+        for epoch in range(1, args.epochs + 1):
+            t0 = time.time()
+            lr = scheduler.get_last_lr()[0]
+            tr_loss, tr_acc = run_epoch(model, train_loader, device, criterion, optimizer, scaler)
+            va_loss, va_acc = run_epoch(model, val_loader, device, criterion)
+            scheduler.step()
+            secs = time.time() - t0
+            print(f"epoch {epoch:3d}/{args.epochs} | "
+                  f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
+                  f"val loss {va_loss:.3f} acc {va_acc:.3f} | {secs:.0f}s")
+            # accuracy first; on a tie (val accuracy saturates near 1.0) the
+            # lower loss is the more confident, better-separated model
+            saved = va_acc > best_acc or (va_acc == best_acc and va_loss < best_loss)
+            if saved:
+                best_acc, best_loss = va_acc, va_loss
+                save_checkpoint(args.out, model, classes, args.img_size,
+                                IMAGENET_MEAN, IMAGENET_STD, best_acc,
+                                extra={**provenance, "best_epoch": epoch,
+                                       "val_loss": va_loss})
+                print(f"  saved new best -> {args.out} (val acc {best_acc:.3f}, "
+                      f"loss {best_loss:.4f})")
+            log.writerow([epoch, f"{lr:.6g}", f"{tr_loss:.5f}", f"{tr_acc:.5f}",
+                          f"{va_loss:.5f}", f"{va_acc:.5f}", f"{secs:.1f}", int(saved)])
+            fh.flush()
 
-    print(f"\nFloat baseline accuracy (best val): {best_acc:.4f}")
+    print(f"\nBest val accuracy: {best_acc:.4f} (loss {best_loss:.4f}) - a selection "
+          f"score, not a result; the result is evaluate.py --split test.")
     print(f"Checkpoint: {args.out}")
-    print("Record this in docs/design_decisions.md - it's the bar the int8 model must match.")
+    print(f"Log: {log_path}")
 
 
 if __name__ == "__main__":
