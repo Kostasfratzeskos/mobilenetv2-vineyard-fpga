@@ -832,22 +832,176 @@ Table~\ref{tab:widths} says so.
 \section{Memory Organization}
 \label{sec:memory}
 
+The accelerator divides its data by how often it is reused. Activations are
+written once and read once or twice, but they are read by the engine that
+produced them a layer earlier, so keeping them on chip removes almost all
+off-chip traffic; weights are read once per inference and are too large to
+hold, so they are streamed. Section~\ref{sec:mem-split} states that division
+and the traffic it leaves. Section~\ref{sec:act-pool} describes the activation
+pool, which is one flat memory whose addresses are assigned at compile time
+rather than managed at run time. Section~\ref{sec:buffers} covers the three
+buffers that hold what is streamed in --- weights, per-channel parameters and
+the input image --- and compares each with what the network actually needs.
+Capacities in this section are binary: \si{\kibi\byte} is 1024 bytes and
+\si{\mebi\byte} is 1024\,\si{\kibi\byte}.
+
 \subsection{On-Chip Activations and Off-Chip Weights}
 \label{sec:mem-split}
-% Activations never leave the chip; weights stream from DDR. Justify from
-% Section~\ref{sec:roofline-analysis}: \thWeightMB{} MB of weights against activations
-% that fit in URAM.
+
+The weights of the network are \thWeightBytes{} bytes at int8, which does not
+fit in the on-chip memory of the target device. Its activations do. The design therefore streams weights
+from DDR over AXI and keeps every feature map on chip for the whole inference
+(\DD{007}). The alternative arrangements were both rejected on arithmetic
+rather than preference: holding the weights on chip is not possible at this
+capacity, and spilling activations to DDR would add traffic to a design that
+Section~\ref{sec:roofline-analysis} shows is already compute-bound, turning a
+margin into a bottleneck.
+
+What the choice leaves is a single pass of off-chip traffic per inference:
+the weights, the \thParamBlobBytes{} bytes of per-channel parameters, and the
+\thImgBytes{} bytes of the input image. No activation is ever written to DDR
+and none is read back. The cost is that the weight load is not overlapped with
+compute, because the sequencer is strictly serial; measured against the
+compute cycles of a whole inference this costs \thLoadOverheadPct\%
+(Section~\ref{sec:sequencer} returns to the serial issue, and
+Section~\ref{sec:buffers} to why the overlap was not built).
 
 \subsection{Activation Pool and Static Allocation}
 \label{sec:act-pool}
-% One pool, statically allocated by the compiler. No allocator at run time, so
-% no fragmentation and no dynamic failure mode.
+
+Every feature map lives in one flat memory, the activation pool. An entry holds
+$T_m = 32$ channels of one pixel, that is 256 bits, which is the word the
+output stage of Section~\ref{sec:requant-lanes} produces in a single cycle.
+The width was chosen against the asymmetry of the pointwise array, which writes
+$T_m = 32$ channels at a time but reads $T_n = 16$: a 128-bit pool would match
+the read and halve the storage word, but every writeback would then take two
+cycles, and in \file{features.2.conv.0.0} --- whose 16 input channels make one
+tile the entire dot product --- the writeback would overtake the compute and
+cost \thNarrowPoolPct\% of the pointwise runtime. Storing the wider word and
+multiplexing down on the read side makes both the write and the read
+single-cycle.
+
+Addresses in the pool are assigned when the program is compiled, not when it
+runs. The compiler computes the live range of every tensor, from the operation
+that defines it to its last use, and places each one by first fit in the gaps
+between the tensors still live at that point. Because an operation's inputs are
+still live when its output is placed, no output can be given an address that
+overlaps an input it is still reading. The result is a fixed address per
+tensor, carried in the instruction word, and no allocator in hardware: there is
+no fragmentation at run time and no allocation that can fail mid-inference. The
+compiler also verifies the result, checking every pair of tensors that are live
+together for overlap, so a bad allocation stops the build rather than
+corrupting an inference.
+
+The peak of that allocation over the whole network is \thPoolEntries{} entries,
+or \thPoolMiB\,\si{\mebi\byte}, and the pool is built at exactly that depth.
+The figure is the largest input and output pair that must be resident at the
+same time, which is not the same as twice the largest feature map: the largest
+single tensor is \thPoolLargest{} entries
+(\thPoolLargestMiB\,\si{\mebi\byte}), so a conventional ping-pong of two fixed
+halves would have required \thPingPongMiB\,\si{\mebi\byte} to guarantee the
+same thing. One flat pool with compile-time addresses was chosen instead, and
+the alternation between layers became a property of the program rather than of
+the hardware --- the same division of labour as in
+Section~\ref{sec:engines-philosophy}.
+
+The pool is mapped to UltraRAM. At 256 bits it occupies \thPoolUramWide{}
+URAM288 tiles across, since one tile is 72 bits wide, and
+\thPoolUramDeep{} deep, since one tile holds 4096 entries; the product,
+\thUramBoard{} tiles, is the entire URAM count the implemented design measures,
+\thUramPctBoard\% of the device. UltraRAM rather than block RAM because a
+structure of this size would consume most of the block RAM the buffers of
+Section~\ref{sec:buffers} need, and because UltraRAM is the deeper primitive
+and this memory is deep rather than wide. The choice has one consequence that
+is paid for elsewhere: the depth is built as a cascade of tiles, and reading
+across that cascade became the longest path in the implemented design, which
+Chapter~\ref{chap:timing} takes up.
 
 \subsection{Weight, Parameter and Image Buffers}
 \label{sec:buffers}
-% Sizes, banking, and the address-width headroom noted in Section~\ref{sec:risks}:
-% features.18.0 uses 800 of 1024 entries, and the classifier is small only
-% because this model has \thClasses{} classes.
+
+Three buffers hold what the DMA brings on chip. Table~\ref{tab:buffers} gives
+each one's capacity against what the network requires of it.
+
+\begin{table}[t]
+  \centering
+  \caption{The on-chip memories, against the largest demand any layer places on
+           each. Only the activation pool is built to exactly its requirement;
+           the buffers carry headroom because their addresses are a power of
+           two.}
+  \label{tab:buffers}
+  \small
+  \begin{tabular}{lllll}
+    \toprule
+    Memory & Holds & Built & Worst layer needs & Resource \\
+    \midrule
+    Activation pool  & feature maps              & \thPoolEntries{} entries & \thPoolEntries{} entries & URAM \\
+    Weight buffer    & one layer's weights       & \thWgtDepth{} entries    & \thWgtEntries{} entries (\thWgtPct\%) & BRAM \\
+    Parameter buffer & bias, $M_0$, shift        & \thParamDepth{} oc-tiles & \thParamEntries{} oc-tiles & BRAM \\
+    Image buffer     & the input image           & \thImgBytes{} B          & \thImgBytes{} B & BRAM \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The weight buffer holds the weights of one layer, in $T_m = 32$ banks of
+$T_n = 16$ bytes, so that each lane of the pointwise array reads its own bank
+in the same cycle. Its \thWgtDepth{} entries are \thWgtBufKiB\,\si{\kibi\byte},
+against the \thWeightBytes{} bytes of the whole network: the buffer is sized
+for the largest layer, not the model, which is what makes the streaming of
+Section~\ref{sec:mem-split} necessary rather than optional. The largest demand
+is \file{features.18.0} at \thWgtEntries{} entries,
+\thWgtWorstKiB\,\si{\kibi\byte} and \thWgtPct\% of the depth.
+
+That layer is also where the serial weight load costs most. Its fill takes
+\thWgtWorstOverheadPct\% as long as its compute, and none of it is hidden,
+because there is no second bank to fill while the first is in use. Double
+buffering was considered and deferred (\DD{029}). The reasons were that it
+improves throughput rather than correctness; that a second bank would roughly
+double the largest block-RAM structure in a design already at
+\thBramPctBoard\% block-RAM occupancy, so whether it fits is a question for
+synthesis rather than for argument; and that prefetching the next layer's
+weights makes the sequencer concurrent with compute, which changes the meaning
+of the busy signal that Section~\ref{sec:sharing} describes and that had
+already been the source of two defects. Over a whole inference the unhidden
+load is \thLoadOverheadPct\%, not the \thWgtWorstOverheadPct\% of the worst
+layer, which is the figure a throughput claim should use.
+
+The parameter buffer holds the per-channel bias, multiplier and shift that
+Section~\ref{sec:requant-lanes} consumes, banked like the weights: 32 banks,
+one per requantization lane, each entry packing the three values for one
+channel. Its depth is counted in oc-tiles rather than channels, and
+\thParamDepth{} tiles against the \thParamEntries{} the deepest layer needs is
+the widest headroom in the design. The demand comes from
+\file{features.18.0}, whose 1280 output channels fill \thParamEntries{} tiles
+of 32 channels; the classifier needs a single tile, because this model has
+\thClasses{} classes. The three
+parameter arrays are kept as three separate regions in DDR with three base
+addresses, rather than interleaved into one record per channel (\DD{030}). An
+interleaved record would have been simpler in hardware --- one burst beat would
+carry one channel complete --- but it would have been a second encoding of
+numbers the export already writes and the program compiler already validates,
+and a 9-byte payload padded to a 16-byte beat wastes almost half of every
+record on a path that carries \thParamBlobBytes{} bytes against the weights'
+\thWeightBytes. The cost of keeping the three regions is a staging buffer and a
+three-way stream sequencer in the DMA.
+
+The image buffer holds the \thImgBytes{} bytes of the input image, one pixel of
+three channels per entry, and is read only by the stem
+(Section~\ref{sec:stem-engine}). It is separate from the activation pool
+because a pool entry is 32 channels wide and an image pixel has three, so
+storing the image in the pool would leave nine tenths of every entry unused.
+The image is written to DDR by the processing system in interleaved order, so
+that the three bytes of a pixel are consecutive and the DMA's existing
+byte-aligner can produce one buffer entry per three bytes with no gather logic;
+the planar alternative would have required three concurrent streams
+\thImgBytes{} bytes apart (\DD{032}).
+
+Taken together the three buffers and the line buffers account for the
+\thBramBoard{} block-RAM tiles the implemented design measures,
+\thBramPctBoard\% of the device, against the \thUramBoard{} UltraRAM tiles of
+the activation pool. The implementation report gives these as device totals and
+does not attribute them per module, so the division between the buffers is not
+measured here.
 
 \section{Control Unit and Instruction Set}
 \label{sec:control}

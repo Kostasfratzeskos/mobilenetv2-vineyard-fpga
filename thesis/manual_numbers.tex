@@ -194,6 +194,62 @@
 \newcommand{\thAccLutDelta}{3\,144}
 \newcommand{\thAccLutPct}{9.7}
 
+% --- the on-chip memories (DD-007, DD-023, DD-029) ------------------------
+% UNITS: everything in this block is BINARY (KiB = 1024 B, MiB = 1024 KiB),
+% because it sizes memory tiles. Note that \thWeightMB{} above is DECIMAL MB,
+% which is how scripts/thesis_numbers.py emits it - so the weight blob is
+% quoted here in exact bytes instead, to avoid comparing MB with MiB.
+% scripts/gen_program.py itself mixes the two conventions in one print block;
+% see the report. Reproduced 2026-10-12 by running gen_program.py.
+%
+% [DERIVED] gen_program.py, "ACTIVATION POOL PEAK": the static first-fit
+% allocator's peak over the whole network, and the largest single tensor.
+\newcommand{\thPoolEntries}{50\,176}
+\newcommand{\thPoolMiB}{1.53}
+\newcommand{\thPoolLargest}{37\,632}
+\newcommand{\thPoolLargestMiB}{1.15}
+% [DERIVED] the pool is 4 URAM288 tiles wide (ceil(256/72)) by 13 deep
+% (ceil(50176/4096)) = 52, which is the whole URAM count the board build
+% measures (\thUramBoard{} of 96). The activation pool IS the design's URAM.
+\newcommand{\thPoolUramWide}{4}
+\newcommand{\thPoolUramDeep}{13}
+% [DERIVED] act_buffer.v: a 128-bit pool would cost two cycles per writeback,
+% and in features.2.conv.0.0 the store would overtake the compute - this is
+% that layer's share of the whole pointwise runtime.
+\newcommand{\thNarrowPoolPct}{6.6}
+% [DERIVED] act_buffer.v: two fixed ping-pong halves would need twice the
+% largest feature map, against the largest resident input+output pair
+% (\thPoolMiB{} MiB) that the allocator actually requires.
+\newcommand{\thPingPongMiB}{2.3}
+%
+% [DERIVED] gen_program.py, "weight buffer": worst-case layer occupancy
+% (features.18.0) of the buffer's 1024 entries, and the buffer's own capacity
+% at TM=32 banks x TN=16 weights x 8 bit = 4096 bit per entry.
+\newcommand{\thWgtEntries}{800}
+\newcommand{\thWgtDepth}{1024}
+\newcommand{\thWgtPct}{78}
+\newcommand{\thWgtBufKiB}{512}
+\newcommand{\thWgtWorstKiB}{400}
+% [DERIVED] the whole weight blob, exact bytes (= \thWeightMB{} decimal MB).
+\newcommand{\thWeightBytes}{2\,194\,880}
+% [MEASURED] DD-029 / C-11: features.18.0 spends 25,600 fill cycles against
+% 39,200 compute, none of it hidden - the WORST SINGLE LAYER. The whole-network
+% figure is \thLoadOverheadPct\%, which supersedes this one; quote both only
+% with that distinction made, as manual_numbers' \thLoadOverheadPct note says.
+\newcommand{\thWgtWorstOverheadPct}{65}
+%
+% [DERIVED] param_buffer.v: oc-tiles needed against the depth built, at
+% TM=32 banks x (BIAS_W 32 + M0_W 32 + SHIFT_W 8) = 72 bit per channel.
+\newcommand{\thParamEntries}{40}
+\newcommand{\thParamDepth}{64}
+% [DERIVED] DD-030: the padded parameter blob, 19,264 channels x 9 B.
+\newcommand{\thParamBlobBytes}{173\,376}
+%
+% [DERIVED] img_buffer.v: 224*224 pixels of CIN=3 bytes, which is both the
+% buffer's depth and the DDR image DD-032 defines.
+\newcommand{\thImgBytes}{150\,528}
+\newcommand{\thImgKiB}{147}
+
 % --- per-module cost ------------------------------------------------------
 % [MEASURED] out-of-context synthesis, DD-031. Neither uses a DSP or a BRAM.
 \newcommand{\thLutCsr}{173}
