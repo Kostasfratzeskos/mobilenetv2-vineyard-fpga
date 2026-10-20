@@ -81,6 +81,10 @@ main.exe
 software/cmodel/build/
 #  firmware/ builds the driver and its two host tests the same way.
 firmware/build/
+#  firmware/linux/ too: the host tests, their fixtures (a fake /sys, fake
+#  /proc/iomem files), and the aarch64 vinecam binary - `make check` rebuilds
+#  all of it, and the binary is what goes on the SD card, not into git.
+firmware/linux/build/
 
 # ── Generated weight blob ────────────────────────────
 #  software/export/weights.hex is a byte-for-byte concatenation of the

@@ -8,7 +8,8 @@ network matches.
 ## Success tiers
 - **Core (committee bar):** image loaded from the SD card → FPGA → disease class.
 - **Foundation:** full MobileNetV2 running bit-exact against the software model in simulation.
-- **Stretch:** live camera → disease result, in real time.
+- **Stretch:** live camera → disease result, in real time. A USB webcam on the board, under
+  Linux, with the same accelerator and preprocessing: `firmware/linux/README.md` (DD-035).
 
 ## The verification spine
 The software int8 model produces the exact integer output of every layer — the *golden vectors*.
@@ -41,6 +42,7 @@ See `docs/design_decisions.md` (DD-006) and `software/golden/`.
 │   └── constraints/        .xdc files
 ├── vivado/                 project rebuild scripts (generated files gitignored)
 ├── firmware/               Phase 4: PS app (SD image → DDR → PL → result)
+│   └── linux/              the live-camera app under Linux, and its PetaLinux image
 ├── sim/                    simulation + golden-vs-hardware logs (gitignored)
 ├── scripts/                helpers, e.g. compare_golden.py
 └── thesis/                 manuscript — write as you go

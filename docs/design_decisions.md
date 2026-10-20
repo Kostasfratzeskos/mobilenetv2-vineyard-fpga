@@ -1718,3 +1718,138 @@ argmax over the 4 int16 logits is the predicted class.
   will catch a stale header, but the `lrint` margin above should be re-measured rather than assumed
   to survive. Or if the input size becomes variable, which would interact with DD-032's note about
   `IMG_PIXELS`.
+
+### DD-035 — The live camera on the board: Linux, a fifth platform hook, and a Pillow-exact resize
+- Status: Accepted — built and tested on the PC; **not yet run on the board**
+- Date: 2026-10-20
+- Numbering: DD-034 is the accuracy entry on branch `accuracy-test-split`; this one follows it so
+  the two branches merge without a collision.
+- Context: the stretch tier — live camera → disease class — for the presentation, with the camera
+  plugged into the **board** (option B) rather than into a laptop that relays frames over the UART
+  (option A, ~2 s a frame). DD-033 had named exactly what this would need and left it out on
+  purpose: a camera frame is not 256×256, so `Resize(256)` is a real resampling, and `preproc_rgb`
+  refuses such a frame rather than guess at it.
+
+- **Linux, because of the camera.** A UVC webcam needs a USB host stack and a UVC driver; the
+  standalone BSP has neither. PetaLinux 2022.2 (matching Vivado 2022.2), built from the ZCU104 BSP
+  plus our XSA, provides both — plus a DisplayPort framebuffer and the network — and keeps the
+  bitstream in `BOOT.BIN`, so the PL is configured by the FSBL exactly as for baremetal. **The FPGA
+  design does not change.** The board preset already enables USB 3.0, DisplayPort, Ethernet and SD
+  (read back from the `.hwh` in the XSA).
+
+- **A fifth platform hook, `accel_plat_phys`, and a new refusal, `ACCEL_ERR_ADDR`.** The driver
+  wrote `(uint32_t)(uintptr_t)pointer` into the base registers. That is correct only where a pointer
+  is a physical address — baremetal, by identity map. Under Linux it would point the DMA at an
+  unrelated physical page and the run would complete on whatever was there: the failure shape this
+  project designs out everywhere else. The driver now asks the platform, translates **all four**
+  blobs before writing **any** base register (a refusal half way would leave a mixed set), checks
+  the physical address fits the 32-bit registers end to end and is aligned, and refuses before
+  `LOAD_IMAGE` otherwise. `plat_zynq.c` returns the pointer; `plat_linux.c` translates through the
+  one region it mapped and refuses everything else. `test_drv_seq` gained six cases, with the mock
+  deliberately mapping buffers to addresses that differ from their pointers, so a driver still
+  writing pointers fails rather than passing by coincidence.
+
+- **The DMA region: `no-map` reserved memory, mapped through UIO, never cached.** 16 MB at
+  `0x3800_0000` (`firmware/linux/petalinux/vinecam.dtsi`), exposed with the CSR as one UIO device
+  with two maps. `no-map` takes it out of the kernel's linear map, and UIO maps physical memory
+  Device-nGnRnE — so no cache anywhere can hold a line of it, the baremetal flush becomes a `DSB`
+  (wait for the writes to reach DDR before the CSR write that starts the DMA), and stale data is
+  impossible by construction rather than by remembering to flush. The costs are known and accepted:
+  every write must be an aligned store (`dmaregion_write`: 64-bit stores, verified in the
+  disassembly — no `stp`, no `dc zva`, no `memcpy`), and the 150 KB image copy per frame runs at
+  uncached speed, a millisecond or two. `vine_uio.c` refuses a region above 2 GB (HP0 reaches only
+  DDR_LOW), unaligned, or listed as System RAM in `/proc/iomem` — the signature of a forgotten
+  `no-map`.
+
+- **The resize: Pillow's `Resample.c`, transcribed — the extension point DD-033 named.**
+  `camfront.c` computes torchvision's `Resize(256)` (on a PIL image, Pillow BILINEAR with its
+  antialiasing support) on just the 256×256 window whose centre is `CenterCrop(224)`, and hands
+  that window to `preproc_rgb` unchanged. Evidence, all measured:
+  - **15 frame sizes bit-exact**, 196,608 bytes each, against vectors that
+    `scripts/gen_camfront_vectors.py` makes with the real torchvision 0.27.1 / Pillow 11.1.0 —
+    which itself checks torchvision's crop offsets against `CenterCrop`'s output pixels and its
+    resize against a direct `Image.resize`. Every common webcam size, an upscale, a portrait frame,
+    and the half-to-even crop offsets.
+  - **4 photographs** (two classes × 640×480 and 1280×720, a real dataset leaf in a camera-style
+    frame): window *and* int8 tensor identical to torchvision + `export.py`
+    (`tools/render_ui --dump` → `scripts/check_camera_frame.py`).
+  - **Verified to bite**, nine deliberate mistakes:
+
+    | mutation | 640×480 bytes that differ | caught |
+    |:--|--:|:--|
+    | xmin/xmax by `floor` instead of `(int)(v + 0.5)` | 126,196 | yes (12 checks) |
+    | accumulator starts at 0, not the rounding half | 173,040 | yes (13) |
+    | weights truncated to 22 bits, not rounded | **1,385**, each by 1 | yes (11) |
+    | naive bilinear: support not widened when shrinking | 194,270 | yes (11) |
+    | corner-aligned centres, `xx * scale` | 193,733 | yes (13) |
+    | `filterscale` not clamped to 1 when enlarging | — (only the upscales) | yes (2) |
+    | crop offset rounded half **up** | 194,198 | yes (20, 10 of them geometry) |
+    | weights not normalised by their sum | 196,608 | yes (12) |
+    | divide by `filterscale` instead of multiplying by its reciprocal | 0 | **no** |
+
+    The last one was then settled by enumeration rather than argument, as DD-033 did for
+    `floor(x + 0.5)`: the 22-bit weights are identical for every short side from 2 to 4096 and for
+    21,283 long-side size pairs from common aspect ratios. The reciprocal stays because it is
+    Pillow's form by construction, not by a margin belonging to these sizes. Likewise measured, not
+    asserted: dropping the uint8 rounding **between** the two passes changes 36,863 of 261,888
+    bytes, on a Python port that matches Pillow exactly with it.
+
+- **A measurement that strengthens DD-033.** The reference normalises in float32 (`ToTensor`,
+  `Normalize`, `quantize_input`), `preproc.c` in float64. DD-033 showed agreement on five golden
+  images; that does not cover every input. All 768 (channel, byte) inputs now agree, and the
+  float32 path never comes closer than **6.6e-05** to a rounding tie — so a camera frame's tensor
+  can be required to match torchvision's byte for byte.
+
+- **What stays outside the bit-exact chain, named:** the camera's YUV→RGB conversion (BT.601,
+  OpenCV's integer constants), the camera path's equivalent of the JPEG decode. There is no
+  reference to be exact against. A frame saved with `S` is saved *after* it, so
+  `check_camera_frame.py` re-derives window, tensor and logits from the RGB the board actually used,
+  and a frame that passes is one where the board's answer is provably the model's answer for that
+  picture.
+
+- Display and the talk: the DisplayPort monitor through fbdev (with the console switched to
+  graphics mode so its cursor and messages stay off the picture), and `--http`, the same screen as
+  a BMP to a browser on the presenting laptop — because the board's output is DisplayPort, a
+  projector usually takes HDMI from the laptop, and a DP→HDMI adapter here must be an active one.
+  The class names on screen come from the generated `quant_params.h`, and its softmax uses a new
+  generated constant, `QP_LOGIT_SCALE` (manifest `s_logit`), which `test_preproc` checks against
+  the manifest like every other constant in that header.
+
+- Alternatives considered:
+  - **Option A, the camera on the laptop** (frames over the UART). The least work, and it remains
+    the fallback; rejected as the primary demo because the board is then not what sees the leaf, and
+    at ~2 s a frame it is not live.
+  - **A MIPI camera** through an FMC card and the CSI-2 / demosaic / frame-buffer IP chain. The
+    ZCU104 has no MIPI connector of its own; weeks of PL work and re-implementation. Rejected.
+  - **Certified Ubuntu or PYNQ images instead of building PetaLinux.** No Linux build, which is
+    attractive on a Windows machine. Rejected: both load the bitstream at run time through a device
+    tree *overlay*, and `reserved-memory` cannot come from an overlay (it is processed at early
+    boot); PYNQ's route to DMA buffers is its own Python allocator, which would mean a second
+    implementation of the driver's protocol — the duplication DD-030 argues against.
+  - **u-dma-buf** (an out-of-tree kernel module) for cacheable buffers with explicit sync. Faster
+    copies; one more kernel module to build and trust. Not needed at one 150 KB image per frame.
+  - **Make the DMA coherent** (`S_AXI_HPC0_FPD` with coherent AxCACHE). The cleanest in principle,
+    but a hardware change to a verified design, for a demo. Noted as the place to go if the copy
+    ever matters.
+  - **A naive bilinear "close enough" resize.** Exactly what the mutation table shows is not close:
+    194,270 of 196,608 bytes differ.
+  - **The interrupt** (`pl_ps_irq0`, SPI 89) instead of polling. The run is ~6 ms, shorter than a
+    scheduler tick; polling, as baremetal does, with the poll limit raised to seconds.
+
+- Consequences: the verification chain now reaches camera frames — **the RGB frame → the window
+  (bit-exact against torchvision) → the tensor → 6.9 M elements bit-exact → the argmax** — with the
+  YUV conversion named as the one link outside it, and the frame-dump check making it testable on
+  any frame from the board itself. `vinecam` is one static aarch64 binary, so it needs nothing from
+  the root filesystem.
+
+- What is **not** yet true: nothing has run on a board. The PetaLinux build, V4L2, UIO, the
+  framebuffer and the HTTP view are compiled (`-Werror`) but unexercised; the device-tree fragment
+  was not compiled on the development PC (the Vitis `dtc` is a Linux binary), and `build.sh` checks
+  the built `system.dtb` instead. The first board run is `vinecam --image image_q8.bin --expect
+  EXPECTED.txt`, a known answer with no camera, before anything new is trusted.
+
+- Revisit if: the board run shows the poll limit or the copy mattering (then u-dma-buf, or HPC0);
+  a camera that offers only MJPEG has to be supported; a larger root filesystem makes U-Boot place
+  the ramdisk over `0x3800_0000` (the kernel then refuses the initrd at boot — move the carve-out);
+  or the model is redeployed from the leaf-split checkpoint (DD-034), which regenerates
+  `quant_params.h`, `QP_LOGIT_SCALE` and the blobs, and needs the known answers remade.
