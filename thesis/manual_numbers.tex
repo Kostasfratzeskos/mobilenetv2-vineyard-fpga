@@ -142,6 +142,9 @@
 \newcommand{\thRqStalledSixteen}{1}     % layers stalled at R=16 (features.2.conv.0.0)
 % [DERIVED] R=32 lanes x 2 DSP48E2 per 26x32 multiply.
 \newcommand{\thRqDsp}{64}
+% [DERIVED] the pointwise array's own slices: P = Tm*Tn = 512 int8 MACs packed
+% two per DSP48E2. Agrees with DD-015's budget breakdown ("array 256").
+\newcommand{\thPwDsp}{256}
 %
 % [ESTIMATED] out_stage.v's header and docs/lab_notebook.md: the DSP budget
 % PREDICTED in September 2026 with and without a shared output stage.
@@ -249,6 +252,69 @@
 % buffer's depth and the DDR image DD-032 defines.
 \newcommand{\thImgBytes}{150\,528}
 \newcommand{\thImgKiB}{147}
+
+% --- the control unit (T-1, T-2, DD-017) ----------------------------------
+% [DERIVED] scripts/gen_program.py's own summary, reproduced 2026-10-15:
+%   "instructions: 64 (34 PW, 17 DW, 1 STEM, 10 RES, 1 GAP, 1 LINEAR)"
+% The census sums to \thInstructions{}, and top_seq_tb asserts exactly it.
+% NOTE on grouping: \thPwLayers{} is 35 because it counts the classifier among
+% the pointwise-SHAPED layers; \thOpsPw{} is 34 because LINEAR is its own
+% opcode. Both are right; say which grouping is meant.
+\newcommand{\thOpsPw}{34}
+\newcommand{\thOpsDw}{17}
+\newcommand{\thOpsStem}{1}
+\newcommand{\thOpsRes}{10}
+\newcommand{\thOpsGap}{1}
+\newcommand{\thOpsLin}{1}
+% [DERIVED] same run: manifest ops that compile to no instruction because they
+% move no data - they are liveness annotations for the allocator.
+% \thManifestOps{} - \thSaveOps{} = \thInstructions{}.
+\newcommand{\thSaveOps}{10}
+% [DERIVED] same run, "program memory": \thInstructions{} x 8 words x 4 B.
+\newcommand{\thProgBytes}{2\,048}
+%
+% [DERIVED] hardware/rtl/control/top_seq.v: the FSM's state count, the idle
+% cycles left after every op, and the watchdog's width (it trips at 2^20-1
+% cycles, shared across S_LOAD / S_WAIT / S_RUN).
+\newcommand{\thSeqStates}{8}
+% [DERIVED] accel_top.v:147 and accel_axi.v:106 both set GAP_CYC = OS_LAT, so
+% the built design idles \thOsLat{} cycles, not the 4 that top_seq.v carries as
+% a MODULE DEFAULT. Same trap as act_buffer's DEPTH: the default is not what is
+% instantiated. T-10 made it derived; top_seq.v's own header still says
+% "64*4 cycles over the whole network", which is stale. TODO: fix that header.
+\newcommand{\thGapCyc}{5}
+\newcommand{\thWdogBits}{20}
+% [DERIVED] pw_feeder.v: DRAIN_CYC = ARR_LAT + OS_LAT = 7 + 5. This is how far
+% `busy` must outlive the address generator on the pointwise path.
+% NOTE: DD-017 says "~7 extra cycles", which predates the L-1/L-3 pipelining
+% that deepened both terms. 12 is the current structural figure; do not quote
+% the 7. TODO: correct DD-017.
+\newcommand{\thDrainPw}{12}
+
+% --- the latency contract (docs/latency_map.md) ---------------------------
+% [DERIVED] the six constants every other depth in the design is sized from,
+% each a localparam in the module named, each reproduced from the RTL on
+% 2026-10-20. The "before" column is the pre-pipelining value recorded in
+% docs/latency_map.md section 1; L-1 pipelined the MAC trees (phases 2a-2c),
+% L-3 the requantizer (2d), A-1 added the array input register (phase 3).
+\newcommand{\thMacLat}{6}        \newcommand{\thMacLatOld}{1}
+\newcommand{\thArrLat}{7}        % = 1 + MAC_LAT, after A-1
+\newcommand{\thDwLat}{5}         \newcommand{\thDwLatOld}{0}
+\newcommand{\thStLat}{6}         \newcommand{\thStLatOld}{0}
+\newcommand{\thRqLat}{4}         \newcommand{\thRqLatOld}{1}
+\newcommand{\thOsLat}{5}         \newcommand{\thOsLatOld}{2}
+% [DERIVED] the five drain counters, which are what those constants are FOR.
+% Each is now a localparam derived from the stages it covers; the "old" values
+% are the hand-set literals docs/latency_map.md section 3 records, which
+% carried 3-8 cycles of unexplained margin. \thDrainPw{} is defined above.
+\newcommand{\thDrainPwOld}{7}
+\newcommand{\thDrainDw}{11}      \newcommand{\thDrainDwOld}{7}
+\newcommand{\thDrainStem}{12}    \newcommand{\thDrainStemOld}{15}
+\newcommand{\thDrainRes}{5}      \newcommand{\thDrainResOld}{6}
+\newcommand{\thDrainGap}{6}      \newcommand{\thDrainGapOld}{7}
+% [DERIVED] docs/latency_map.md: the watchdog is sized against the longest
+% legitimate operation (the stem) rather than against any latency.
+\newcommand{\thStemCycles}{100\,801}
 
 % --- per-module cost ------------------------------------------------------
 % [MEASURED] out-of-context synthesis, DD-031. Neither uses a DSP or a BRAM.

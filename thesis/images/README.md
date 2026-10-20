@@ -13,6 +13,8 @@
 | `accelerator-design/dw_array.svg` | ο depthwise array: Tc=16 ανεξάρτητα lanes, ένα ανά κανάλι, με 9 πολλαπλασιαστές και adder tree το καθένα — **χωρίς** accumulator και **χωρίς** καμία σύνδεση μεταξύ τους· δείχνει και τη μετάθεση των δύο διατάξεων (window tap-major από το line buffer, βάρη channel-major) | `hardware/rtl/control/dw_array.v`, `hardware/rtl/kernels/dwconv3x3.v`, `hardware/rtl/control/line_buffer.v` |
 | `accelerator-design/stem_array.svg` | ο stem engine: TS=8 lanes που διαβάζουν **το ίδιο** παράθυρο 27 taps (3 κανάλια x 3x3) — broadcast όπως το `pe_array`, όχι ανά lane όπως το `dw_array`· η μετάθεση γίνεται **μία φορά** πριν το broadcast, και κάθε παράθυρο σαρώνεται σε 4 oc-tiles που συναρμολογούνται σε μία εγγραφή 32 καναλιών | `hardware/rtl/control/stem_array.v`, `stem_feeder.v`, `hardware/rtl/kernels/conv3x3_std.v` |
 | `accelerator-design/requantize.svg` | μία requantization lane ως τέσσερα register stages (acc+bias, xM0, round+shift, clamp)· κάθε παράμετρος μπαίνει στο stage που την καταναλώνει (L-7), και μόνο το clamp στενεύει τον datapath από τα 59 bits στα int8 | `hardware/rtl/kernels/requantize.v`, `bias_add.v`, `hardware/rtl/control/rq_bank.v`, `out_stage.v` |
+| `accelerator-design/top_seq_fsm.svg` | η μηχανή καταστάσεων του sequencer: ο βρόχος fetch/load/go/wait/run/gap μία φορά ανά εντολή, και οι διακεκομμένες ακμές που προστέθηκαν μετά το T-2 (έλεγχος opcode, watchdog, S_ERR) ώστε κάθε κόλλημα να τερματίζει | `hardware/rtl/control/top_seq.v` |
+| `accelerator-design/busy_handshake.svg` | γιατί το `busy` χρειάζεται και τους τρεις όρους: ο drain counter δεν διαβάζεται τον κύκλο που φορτώνεται, άρα χωρίς το `layer_done` ανοίγει τρύπα ενός κύκλου στη μέση της πράξης | `hardware/rtl/control/pw_feeder.v`, DD-017 |
 | `template/pyrforos.svg` | ο Προμηθέας Πυρφόρος, το έμβλημα του ΕΜΠ· χρησιμοποιείται δύο φορές στη σελίδα τίτλου (40mm και 28mm) | — |
 
 Το πρότυπο ζητούσε `pyrforos.png`· εδώ χρησιμοποιείται το `.pdf` που παράγεται
@@ -73,7 +75,7 @@ inkscape images/<κεφάλαιο>/<αρχείο>.svg --export-type=pdf \
 | 1200 | 20 px |
 | 1240 | 21 px |
 
-Το `accel_top.svg`, το `pe_array.svg`, το `dw_array.svg` , το `stem_array.svg` και το `requantize.svg` (W=1000, ελάχιστο
+Το `accel_top.svg`, το `pe_array.svg`, το `dw_array.svg` , το `stem_array.svg` , το `requantize.svg`, το `top_seq_fsm.svg` και το `busy_handshake.svg` (W=1000, ελάχιστο
 17 px → 8.2 pt) το τηρούν. Το παλιό `pe_array.svg` (W=1240, κείμενο 9.5–15 px) έβγαινε **3.7–5.8 pt**
 τυπωμένο. Ένα σχήμα που δεν το τηρεί θέλει μεγαλύτερες γραμματοσειρές, όχι
 μικρότερο `width` — το μικρότερο `width` το κάνει χειρότερο.

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1000 420" width="1000" height="420"
+     font-family="Helvetica, Arial, sans-serif">
+  <title>busy: the three terms, and the one-cycle hole between them</title>
+  <desc>The feeder's busy output is the disjunction of three terms. run covers the body of
+        the layer and falls when the address generator finishes. drain covers the results
+        still inside the arrays and the shared output stage, but the drain counter is
+        loaded at the end of the cycle layer_done asserts, so it does not read back until
+        the cycle after. layer_done is the term that covers that single cycle. Without it
+        busy reads low in the middle of the operation, which the sequencer took for
+        completion.</desc>
+
+  <defs>
+    <marker id="ah" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#374151"/>
+    </marker>
+    <marker id="ahr" viewBox="0 0 10 8" refX="7.5" refY="4" markerWidth="12" markerHeight="9.6"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="420" fill="#ffffff"/>
+
+  <!-- the one cycle the whole figure is about -->
+  <rect x="540" y="52" width="35" height="316" fill="#fffbeb" stroke="#b45309"
+        stroke-width="1.2" stroke-dasharray="5 4"/>
+
+  <!-- ===================== the waveforms ===================== -->
+  <g fill="none" stroke="#1d4ed8" stroke-width="2.5">
+    <!-- run: the body of the layer, then it drops -->
+    <polyline points="260,80 540,80 540,110 960,110"/>
+    <!-- layer_done: exactly one cycle -->
+    <polyline points="260,170 540,170 540,140 575,140 575,170 960,170"/>
+    <!-- drain != 0: loaded by layer_done, readable only from the next cycle -->
+    <polyline points="260,230 575,230 575,200 960,200"/>
+  </g>
+
+  <!-- busy as built: high throughout -->
+  <polyline points="260,260 960,260" fill="none" stroke="#1d4ed8" stroke-width="3"/>
+
+  <!-- busy with the layer_done term omitted: the hole -->
+  <polyline points="260,340 540,340 540,368 575,368 575,340 960,340"
+            fill="none" stroke="#b45309" stroke-width="3"/>
+
+  <!-- ===================== row labels ===================== -->
+  <g font-size="18" text-anchor="end" fill="#1f2937">
+    <text x="245" y="92">run</text>
+    <text x="245" y="152">layer_done</text>
+    <text x="245" y="212">drain &#8800; 0</text>
+    <text x="245" y="266">busy</text>
+  </g>
+  <g font-size="17" text-anchor="end" fill="#b45309">
+    <text x="245" y="339">busy, without</text>
+    <text x="245" y="359">the layer_done term</text>
+  </g>
+
+  <!-- ===================== annotations ===================== -->
+  <text x="400" y="44" text-anchor="middle" font-size="18" fill="#6b7280">the body of the layer</text>
+  <text x="775" y="44" text-anchor="middle" font-size="18" fill="#6b7280">the pipeline drains (12 cycles, pointwise)</text>
+
+  <line x1="557" y1="58" x2="557" y2="36" stroke="#b45309" stroke-width="1.5"/>
+  <text x="557" y="30" text-anchor="middle" font-size="17" fill="#b45309">1 cycle</text>
+
+  <text x="975" y="392" text-anchor="end" font-size="17" fill="#b45309">the sequencer left S_RUN here, and began loading</text>
+  <text x="975" y="412" text-anchor="end" font-size="17" fill="#b45309">the next layer&#8217;s parameters over results in flight</text>
+  <line x1="580" y1="386" x2="566" y2="372" stroke="#b45309" stroke-width="1.5" marker-end="url(#ahr)"/>
+</svg>

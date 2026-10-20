@@ -162,7 +162,6 @@ separate from the pointwise array at all is a further question --- the two
 never run concurrently and could in principle share multipliers --- and
 Section~\ref{sec:dw-engine} answers it. The following subsections describe each
 engine in detail and justify its degree of parallelism.
-
 \subsection{Pointwise Convolution: A \texorpdfstring{$32 \times 16$}{32x16} MAC Array}
 \label{sec:pw-array}
 % \DD{013}. Tm=32 output lanes x Tn=16 input channels = 512 MAC/cycle, chosen
@@ -832,18 +831,21 @@ Table~\ref{tab:widths} says so.
 \section{Memory Organization}
 \label{sec:memory}
 
-The accelerator divides its data by how often it is reused. Activations are
-written once and read once or twice, but they are read by the engine that
-produced them a layer earlier, so keeping them on chip removes almost all
-off-chip traffic; weights are read once per inference and are too large to
-hold, so they are streamed. Section~\ref{sec:mem-split} states that division
-and the traffic it leaves. Section~\ref{sec:act-pool} describes the activation
-pool, which is one flat memory whose addresses are assigned at compile time
-rather than managed at run time. Section~\ref{sec:buffers} covers the three
-buffers that hold what is streamed in --- weights, per-channel parameters and
-the input image --- and compares each with what the network actually needs.
-Capacities in this section are binary: \si{\kibi\byte} is 1024 bytes and
-\si{\mebi\byte} is 1024\,\si{\kibi\byte}.
+The accelerator partitions its data according to reuse. Activations are
+written once and read once or twice, and each tensor is consumed by the
+layer that follows the one that produced it. Keeping activations on chip
+therefore eliminates nearly all off-chip activation traffic. In contrast,
+weights are read once per inference and are too large to be held on chip;
+they are consequently streamed from external memory.
+Section~\ref{sec:mem-split} formalizes this partitioning and quantifies the
+residual off-chip traffic. Section~\ref{sec:act-pool} presents the
+activation pool, a single flat memory whose addresses are assigned at
+compile time rather than managed at run time. Finally,
+Section~\ref{sec:buffers} describes the three buffers that receive streamed
+data (weights, per-channel parameters, and the input image) and compares the
+capacity of each with the requirement of the network.
+Capacities in this section are binary: \si{\kibi\byte} denotes 1024 bytes
+and \si{\mebi\byte} denotes 1024\,\si{\kibi\byte}.
 
 \subsection{On-Chip Activations and Off-Chip Weights}
 \label{sec:mem-split}
@@ -1006,34 +1008,457 @@ measured here.
 \section{Control Unit and Instruction Set}
 \label{sec:control}
 
+The control unit consists of one program sequencer and five feeders. The
+sequencer contains no datapath: it fetches an instruction, requests the weights
+and parameters of the corresponding layer from the weight DMA, starts the single
+feeder responsible for the opcode, waits for it to finish, and advances to the
+next instruction. The feeders, in turn, contain no arithmetic: they generate
+addresses and order operands for the engines of Section~\ref{sec:parallelism},
+in accordance with the division of labour established in
+Section~\ref{sec:engines-philosophy}.
+Section~\ref{sec:sequencer} describes the sequencer and the two ways in which it
+failed silently during development; Section~\ref{sec:isa-format} presents the
+instruction format it executes and the compiler that generates it;
+Section~\ref{sec:feeders} describes the feeders and the handshake that connects
+them to the sequencer; and Section~\ref{sec:sharing} examines which resources
+this serial execution allows to be shared. Serial execution is the premise on
+which the entire chapter rests: because no two operations overlap, a single
+output stage, a single activation pool and a single parameter bank serve all six
+opcodes.
+
 \subsection{Program Sequencer}
 \label{sec:sequencer}
-% Sequential issue, one op at a time, \thInstructions{} instructions. State the
-% ceiling plainly: 64 of 64 used, zero spare, and it fails at build time rather
-% than corrupting execution.
+
+The sequencer executes the \thInstructions{} instructions of the compiled
+program one at a time. Figure~\ref{fig:top-seq-fsm} shows its
+\thSeqStates-state machine. Each instruction occupies eight 32-bit words, which
+are fetched one per cycle in \texttt{S\_FETCH}. \texttt{S\_LOAD} issues the
+weight and parameter request and waits for the DMA to respond; \texttt{S\_GO}
+pulses the start strobe of the selected feeder; \texttt{S\_WAIT} and
+\texttt{S\_RUN} wait for the busy signal of the feeder first to rise and then to
+fall; and \texttt{S\_GAP} inserts \thGapCyc{} idle cycles before the next fetch.
+Two functions are deliberately kept outside the module. First, the module does
+not contain the DMA: the weight load is a handshake, answered by whichever
+master owns the bus. Second, it does not multiplex the feeders; instead, it
+exposes the decoded fields and a per-opcode start strobe, which the datapath
+wires to the corresponding sub-controllers. The result is a pure control unit,
+and this is what allows it to be tested against the real program using stub
+feeders.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{images/accelerator-design/top_seq_fsm.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/top_seq_fsm.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/top\_seq\_fsm.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{State machine of the program sequencer. The solid path is the loop
+           traversed once per instruction. The dashed edges were added after
+           T-2, so that an undecodable opcode, a feeder that never starts and a
+           DMA that never responds each terminate in a sticky fault instead of
+           stalling the machine until reset.}
+  \label{fig:top-seq-fsm}
+\end{figure}
+
+Two defects in this module shared a property that merits generalization: both
+failed silently, and neither could be detected by inspecting the waveform of a
+passing run.
+
+The first was a capacity limit that was not enforced anywhere. The fetch
+address is the concatenation of an instruction index and a three-bit word
+index; consequently, the number of instructions that can exist is fixed by the
+width of the program address, not by the depth of the program memory:
+$2^{9-3} = \thInstructions$. The network compiles to exactly \thInstructions{}
+instructions, which reaches this ceiling with no margin, whereas the
+instruction-count input was eight bits wide and accepted any value up to 255.
+Instruction \thInstructions{} would have fetched the words of instruction~0 and
+executed it. The failure mode was therefore not a build error but corrupted
+execution, and it would have been triggered by the addition of a single layer
+or debug operation. Three checks now guard against it: an elaboration-time check
+ties the two widths together, a run-time check rejects an out-of-range
+instruction count, and the compiler asserts the same ceiling when it emits the
+program (Section~\ref{sec:isa-format}).
+
+The second defect was a hang. Neither \texttt{S\_LOAD} nor \texttt{S\_WAIT} had
+an escape path: the former waited indefinitely for a load that might never
+complete, and the latter for a busy signal that might never rise. Three causes
+of such a hang were reachable. First, ten of the sixteen opcode encodings decode
+to no feeder at all, so a corrupted instruction stalls the machine. Second, a
+feeder's own guard against a zero-sized shape rejects the operation, so the
+defensive behaviour itself causes the hang. Third, a DMA that never responds has
+the same effect. In every case, the sequencer stalled with its running flag
+asserted, never pulsed completion, and could be recovered only by a reset. The
+module did include a default branch, but it guarded against an illegal
+\emph{state}, which is unreachable, rather than against an illegal
+\emph{opcode}, which is not. The fix adds an opcode-validity check in
+\texttt{S\_GO}, a single watchdog counter of \thWdogBits{} bits shared across
+the three waiting states, an error state, and a sticky fault output, so that
+every stall now terminates and is reported.
+
+The sequencer is verified against the real compiled program rather than against
+synthetic stimulus, since the most likely defect in a decoder is a disagreement
+with the encoder. Its testbench decodes each instruction using its own
+independent field extraction and compares every output of the module in the
+cycle in which the operation is issued. In addition, it asserts the operation
+census of the network --- \thOpsPw{} pointwise, \thOpsDw{} depthwise,
+\thOpsStem{} stem, \thOpsRes{} residual, \thOpsGap{} pooling and \thOpsLin{}
+classifier --- so that a decoder returning plausible but incorrect fields still
+fails. The feeders and the DMA are replaced by stubs, which is what makes the
+test stringent: the stub feeder takes a variable number of cycles and the stub
+DMA responds after a variable delay, thereby exercising the handshake of
+Section~\ref{sec:feeders}. The test therefore establishes that the decoder
+agrees with the encoder and that the control flow is robust to timing it does
+not control. It does not establish that either agrees with the network; only
+the integration testbench can demonstrate that.
 
 \subsection{Instruction Format and Program Compiler}
 \label{sec:isa-format}
-% scripts/gen_program.py compiles manifest.json to the program. Full encoding
-% in Chapter~\ref{appendix:isa}; here, only the shape and the six opcodes.
+
+Each instruction comprises eight 32-bit words. Encoding density was not a design
+goal: with \thInstructions{} instructions, the entire program occupies
+\thProgBytes{} bytes regardless of the encoding, so the fields were laid out for
+readability in a hexadecimal dump rather than packed. One word holds the opcode
+and the spatial shape of the layer; three hold the loop bounds and the tile
+counts; two hold the base addresses assigned by the allocator of
+Section~\ref{sec:act-pool}; and two hold the weight-blob offset, its byte count,
+and the number of channels whose per-channel parameters are to be loaded. The
+complete bit layout is given in Appendix~\ref{appendix:isa}, which is generated
+from the encoder rather than transcribed by hand. Table~\ref{tab:opcodes} lists
+the six opcodes and the hardware that each one drives.
+
+\begin{table}[t]
+  \centering
+  \caption{The six opcodes. They are served by five engines, because the
+           classifier reuses the pointwise array, and by five feeders, because
+           it also reuses the pointwise feeder. The classifier is the only
+           opcode whose result leaves through a path other than the shared
+           output stage.}
+  \label{tab:opcodes}
+  \small
+  \begin{tabular}{lllll}
+    \toprule
+    Opcode & Operation & Engine & Feeder & Result destination \\
+    \midrule
+    STEM   & 3$\times$3 convolution   & stem array      & stem feeder      & output stage \\
+    PW     & 1$\times$1 convolution   & pointwise array & pointwise feeder & output stage \\
+    DW     & 3$\times$3 depthwise     & depthwise array & depthwise feeder & output stage \\
+    RES    & residual addition        & ---             & residual feeder  & output stage \\
+    GAP    & global average pool      & pooling adders  & pooling feeder   & output stage \\
+    LINEAR & classifier               & pointwise array & pointwise feeder & logit register \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The program is generated by a compiler that reads the same manifest that the
+exporter writes. It lowers the \thManifestOps{} operations of the manifest to
+\thInstructions{} instructions. The difference consists of \thSaveOps{}
+\emph{save} markers, which move no data and compile to no instruction, since
+their sole purpose is to extend the live range of a tensor for the allocator of
+Section~\ref{sec:act-pool}. The compiler also performs the static allocation
+described there, assigns each weight its offset within the blob, and validates
+its own output: it checks that no two simultaneously live tensors overlap, that
+no operation writes to a location it reads from, and that the instruction count
+does not exceed the ceiling of the sequencer. Because these checks run at build
+time, the failure mode of the ceiling described in Section~\ref{sec:sequencer}
+now manifests as a build that halts rather than as an inference that is
+silently incorrect.
 
 \subsection{Feeders and Handshaking}
 \label{sec:feeders}
-% Five feeders, one per dataflow. The addr_gen contract - shape latched at
-% start so the caller may prefetch - and the C-3 finding: no feeder honoured
-% it, masked only because top_seq does not refetch until !op_busy. Worth
-% telling, because implementing the advertised prefetch would have broken all
-% five silently, as wrong addresses rather than as an error.
+
+Five feeders serve the six opcodes of Table~\ref{tab:opcodes}, one per
+dataflow. Each feeder traverses its own tensors in its own order (pixel-major on
+the pointwise path, group-major on the depthwise path) and presents operands to
+its engine in the order that engine expects. The pointwise feeder is built
+around an address generator that implements the output-stationary loop of
+Section~\ref{sec:pw-array} as three nested counters over pixels, output-channel
+tiles and input-channel tiles. Its bounds are run-time inputs rather than
+synthesis-time parameters, because a single instance serves every pointwise
+layer and the shapes are supplied by the instruction word. It contains no logic
+for partial tiles: as described in Section~\ref{sec:pw-array}, the weight buffer
+is zero-filled and only actual weights are written, so a padded lane multiplies
+by zero and the address path remains free of special cases.
+
+The interface between the sequencer and these five modules consists of a single
+signal per feeder; the guarantee that this signal provides is therefore the
+entire contract. \DD{017} defines its semantics: busy remains high until the
+last result of the layer has been \emph{written to the activation pool}, not
+until the address generator has issued its last read. All five feeders implement
+it in the same form,
+\[
+  \mathit{busy} \;=\; \mathit{run} \;\lor\; \mathit{layer\_done}
+                 \;\lor\; (\mathit{drain} \neq 0),
+\]
+and Figure~\ref{fig:busy} shows why each of the three terms is necessary. The
+first term covers the body of the layer. The third covers the results still in
+flight inside the arrays and in the two subsequent pipeline stages of the shared
+output stage, a drain of \thDrainPw{} cycles on the pointwise path. The second
+covers the single cycle between them: the drain counter is loaded at the end of
+the cycle in which the layer completes, and a register loaded at the end of a
+cycle cannot be read until the following cycle, by which time the first term has
+already fallen.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{images/accelerator-design/busy_handshake.pdf}{%
+    \includegraphics[width=\linewidth]{images/accelerator-design/busy_handshake.pdf}%
+  }{%
+    \fbox{\parbox{0.8\linewidth}{\centering\vspace{2em}
+      \texttt{images/accelerator-design/busy\_handshake.pdf} not built --- run \texttt{make figures}
+    \vspace{2em}}}%
+  }
+  \caption{The necessity of all three terms in the handshake. The drain counter
+           cannot be read back in the cycle in which it is loaded, so omitting
+           the middle term produces a spurious one-cycle low in the middle of an
+           operation, which the sequencer, exiting on the first low cycle it
+           observes, interprets as completion.}
+  \label{fig:busy}
+\end{figure}
+
+Without the middle term, the signal is low for exactly one cycle partway through
+the operation. Because the sequencer leaves its waiting state on the first low
+cycle it observes, it interpreted this spurious low as completion, executed the
+idle gap and the eight fetch cycles, and began loading the parameters of the
+next layer while the entire drain of the previous operation was still pending.
+The new parameters overwrote the scales with which the in-flight results were
+about to be requantized. The defect is as instructive for verification as it is
+for design. Every standalone datapath testbench either waits for the
+layer-completion pulse or runs for a fixed duration; consequently, none of them
+samples the handshake in that cycle. Moreover, the corruption can occur only
+when a second operation follows. The defect was found only by the integration
+testbench, which now also counts the busy pulses and requires exactly one per
+operation.
+
+A second issue in the same area was identified by review rather than by
+simulation, and had caused no failure at all. The address generator deliberately
+latches its shape at the start pulse, so that a caller may change its inputs
+while a layer is running; this is the property that would make prefetching of
+the next instruction possible, and its interface documents it explicitly.
+However, no feeder honoured this contract: all five read the raw ports for the
+entire duration of the layer. No failure resulted because the sequencer does not
+fetch a new instruction while an operation is running, so the inputs are stable
+by coincidence rather than by design. The latent defect was thus masked by the
+very serialism that prefetching would have removed. Implementing the advertised
+prefetch would have broken all five feeders simultaneously and silently,
+producing wrong addresses rather than an error. The base address of the output
+tensor was the most critical case, since it is consumed during the drain, after
+the body of the layer has finished. All five feeders now latch the shape and
+base addresses at the start pulse and read only the latched copies.
 
 \subsection{Resource Sharing}
 \label{sec:sharing}
-% \DD{016}, \DD{017}. out_stage shared across engines; res_feeder needs no
-% multiplier; gap_feeder needs no DSP; the classifier needs no feeder at all.
-% \DD{017} - two busy bugs that appeared only when sharing became real - is
-% evidence for Section~\ref{sec:three-levels} and should be cross-referenced there.
+
+Because the sequencer issues one operation at a time, no two engines are ever
+active simultaneously, and every block downstream of the accumulators can
+therefore be instantiated once: one requantization stage
+(Section~\ref{sec:requant-lanes}), one activation pool
+(Section~\ref{sec:act-pool}) and one parameter bank. Table~\ref{tab:sharing}
+lists what each opcode adds to the design beyond the resources it reuses.
+
+\begin{table}[t]
+  \centering
+  \caption{Resources added by each opcode beyond those it reuses. Three of the
+           six add no arithmetic at all, which is a consequence of the shared
+           output stage rather than of any special property of those
+           operations.}
+  \label{tab:sharing}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Opcode & Added arithmetic & Reused resources \\
+    \midrule
+    STEM   & \thStemDsp{} DSP slices             & output stage, pool \\
+    PW     & \thPwDsp{} DSP slices               & output stage, pool \\
+    DW     & \thDwDsp{} DSP slices               & output stage, pool \\
+    RES    & integer adders and saturations only & output stage, pool \\
+    GAP    & adders only, no DSP                 & output stage, pool \\
+    LINEAR & none                               & pointwise array and feeder \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three of the six opcodes illustrate the extent of this sharing. The residual
+addition requires no dedicated multiplier: rescaling the saved branch to the
+scale of the main branch \emph{is} a requantization with zero bias and the
+operation's own multiplier and shift. It therefore runs on the shared stage, and
+the feeder contributes only the integer adders and saturation logic of
+\DD{009}. The repository does contain a standalone residual engine with its own
+multiplier; it is retained as a verified reference model but is not
+instantiated. Had it been used, it would have cost two DSP slices per lane. The
+global average pool requires neither a divider nor a DSP slice: \DD{010} folds
+the reciprocal of the number of spatial positions into the requantization
+multiplier, so the division is absorbed by the multiply-and-shift that the
+output stage performs in any case, and the accumulator reduces to one adder per
+channel. The classifier requires no dedicated feeder, since it is a
+1$\times$1 convolution over a single pixel, as described in
+Section~\ref{sec:pw-array}. It is also the only opcode that does not use the
+shared output stage, because its result consists of int16 logits rather than
+int8 activations.
+
+Sharing is not without cost, and the cost takes a form this chapter has already
+identified. Both defects of Section~\ref{sec:feeders} are consequences of it: a
+handshake needs to be exact only when a second operation follows, and
+parameters can be overwritten prematurely only when a single bank serves every
+layer. Neither defect was reachable while the engines were being built and
+tested in isolation, and neither was detected by the testbenches that proved
+the engines correct. They became reachable only once the sharing was actually
+in place, which is the argument developed in Section~\ref{sec:three-levels}
+about where defects of this class reside and which kinds of test can expose
+them.
 
 \section{Latency as a Contract}
 \label{sec:latency-contract}
+
+The pipeline depth of a module is not a property of that module alone. An engine
+determines how many cycles separate its input from its result, but the feeder
+that drives it must know the same number in order to delay the tags that
+accompany the data, to size the drain counter that keeps the busy signal of
+Section~\ref{sec:feeders} asserted until the last result has been written, and
+to time the simulation witnesses that check the writeback address. A latency is
+therefore a fact that must hold in several modules simultaneously, and the
+design accordingly treats it as a contract rather than as an implementation
+detail.
+
+Six constants determine every other pipeline depth in the accelerator.
+Table~\ref{tab:latencies} lists them together with their composition and with
+their values before the pipelining work described in Chapter~\ref{chap:timing}.
+The significance of the table lies not in the arithmetic, which is
+unremarkable, but in the \emph{Before} and \emph{After} columns read together:
+every one of these numbers changed, and four of them changed from zero or one,
+which is precisely the case that leaves no visible evidence.
+
+\begin{table}[t]
+  \centering
+  \caption{The six constants from which every other depth is derived, before
+           and after the pipelining of Chapter~\ref{chap:timing}. The four that
+           began at zero or one are the hazardous ones: a module with no
+           latency has nothing in its interface that indicates it.}
+  \label{tab:latencies}
+  \small
+  \begin{tabular}{lllll}
+    \toprule
+    Constant & Module & Before & After & Composition \\
+    \midrule
+    \texttt{MAC\_LAT} & pointwise lane      & \thMacLatOld & \thMacLat & $1 + \log_2 T_n + 1$ \\
+    \texttt{ARR\_LAT} & pointwise array     & $=$ \texttt{MAC\_LAT} & \thArrLat & $1 + \texttt{MAC\_LAT}$ \\
+    \texttt{DW\_LAT}  & depthwise unit      & \thDwLatOld  & \thDwLat  & $1 + \log_2 K^2$ \\
+    \texttt{ST\_LAT}  & stem unit           & \thStLatOld  & \thStLat  & $1 + \log_2 3K^2$ \\
+    \texttt{RQ\_LAT}  & requantization lane & \thRqLatOld  & \thRqLat  & four register stages \\
+    \texttt{OS\_LAT}  & output stage        & \thOsLatOld  & \thOsLat  & $1 + \texttt{RQ\_LAT}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Before the latencies were organized in this way, each depth was restated
+wherever it was needed, and in a different form each time: as a literal in the
+width of a shift register, as a shift by one, as the names of a chain of delay
+registers, and as an English sentence in a header comment. The same fact
+therefore appeared in several modules in forms that no textual search could
+relate to one another, so a change to one kernel silently invalidated the
+modules that depended on it. Consequently, the cost of pipelining a kernel was
+never confined to that kernel; this is the structural reason why the timing
+work of Chapter~\ref{chap:timing} was costly.
+
+The drain counters illustrate this cost concretely. Table~\ref{tab:drains} lists
+all five, one per feeder, before and after the change. The previous values were
+chosen by hand and carried between three and eight cycles of unexplained margin,
+and that margin is precisely what made them hazardous. A counter that is three
+cycles too large wastes cycles yet passes every test; likewise, a counter that
+is one cycle too small can also pass, by chance, on the layers whose last tile
+happens to be short. Once the arrays were pipelined, two of the five hand-set
+values no longer covered the pipeline they were intended to cover. The
+shortfall was not large enough to cause a visible failure, but it was large
+enough to lose the final results of a layer. The remaining three were still
+sufficient, but equally only by chance.
+
+\begin{table}[t]
+  \centering
+  \caption{The five drain counters that keep \emph{busy} asserted until the last
+           result has been written. None is a hand-set number any longer: each
+           is derived from the pipeline stages it actually covers, and the width
+           of each counter follows from its own value.}
+  \label{tab:drains}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Feeder & Before & After & Derived from \\
+    \midrule
+    pointwise & \thDrainPwOld   & \thDrainPw   & $\texttt{ARR\_LAT} + \texttt{OS\_LAT}$ \\
+    depthwise & \thDrainDwOld   & \thDrainDw   & $1 + \texttt{DW\_LAT} + \texttt{OS\_LAT}$ \\
+    stem      & \thDrainStemOld & \thDrainStem & $\texttt{ST\_LAT} + \texttt{OS\_LAT} + 1$ \\
+    residual  & \thDrainResOld  & \thDrainRes  & $\texttt{OS\_LAT}$ \\
+    pooling   & \thDrainGapOld  & \thDrainGap  & $1 + \texttt{OS\_LAT}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three mechanisms now enforce the contract; they are presented in order of how
+much of the checking they transfer from the engineer to the tools. The first is
+to derive values rather than record them: every entry in the \emph{After}
+column of Table~\ref{tab:drains} is a local parameter computed from the
+constants of Table~\ref{tab:latencies}, and the width of every counter follows
+from its own value rather than from a number that happened to be wide enough.
+A change in the depth of a kernel therefore now propagates automatically at
+elaboration.
+
+The second mechanism is to make the latency part of the interface. It responds
+to a more fundamental observation: a latency of zero has no representation in a
+port list, so making it non-zero leaves no compile-time witness. While the
+depthwise and stem arrays were combinational, they had no clock, no valid input
+and no valid output, and their feeders expressed the alignment as an assignment
+that was correct only because the delay was zero. Adding a pipeline to such a
+module changes nothing visible to the compiler: the feeder still elaborates and
+still simulates, but is now misaligned by the depth of the new pipeline. Both
+arrays therefore now have a clock, a reset and a valid output, so each feeder
+connects a wire where it previously asserted an equality. The depth thus became
+a signal, and a signal that is misaligned by five cycles is visible in a
+waveform in a way that a correct-looking assignment is not.
+
+The third mechanism applies where neither of the first two is available. The
+output stage is instantiated at the top level rather than inside the feeders, so
+its depth is not visible to any feeder, and \texttt{OS\_LAT} can be neither
+derived locally nor read from a port. It is therefore passed down as a parameter
+to all five feeders and to the output stage itself, which makes it the most
+critical single constant in the design: five tag pipelines and five drain
+counters are sized from it. The safeguard in this case is that the default value
+in every module is the correct one, so a standalone testbench that omits the
+override cannot silently build a shallower pipeline than the integrated design.
+
+Where a constant must still be restated, it is verified by measurement. The
+pointwise feeder has no visibility into the array it drives, so it recomputes
+\texttt{MAC\_LAT} from the same arithmetic --- and then, in simulation, measures
+the actual distance from its own control delay to the arrival of the
+accumulator value, failing if the two disagree. Its unit testbenches assert the
+same number as an equality rather than as an upper bound, so a pipeline that
+became one stage shallower would fail just as visibly as one that became
+deeper. The depthwise feeder applies the same check to \texttt{DW\_LAT} and
+reports all four of its derived constants in the failure message, so that the
+report identifies what must be changed rather than only what failed. These
+checks make the restatement safe; they do not make it desirable.
+
+One consequence of the contract is visible in the sequencer. The idle gap it
+inserts after each operation (Section~\ref{sec:sequencer}) is now defined as
+\texttt{OS\_LAT} rather than as a literal, so it changes whenever the depth of
+the output stage changes. Since the busy signal of every feeder already covers
+its own drain, this gap is strictly redundant; it was retained as a second line
+of defence, at the cost of one requantization pipeline's depth in idle cycles
+per operation. The watchdog of the sequencer is the counter-example that marks
+the boundary of the contract: it is sized against the longest legitimate
+operation, the stem at \thStemCycles{} cycles, and must therefore be revisited
+when a layer grows rather than when a latency changes.
+
+One latency increase has not yet been made. The activation pool is read in a
+single cycle, and, as noted in Section~\ref{sec:act-pool}, the read path across
+its UltraRAM cascade became the critical path of the implemented design. The
+remedy is an output pipeline register on the memory, which raises its read
+latency from one cycle to two; by the argument of this section, that is not a
+local change. It would shift the first delay stage of all five feeders and every
+tag pipeline that follows them, which places it in the same class of change as
+those in Table~\ref{tab:latencies} rather than making it a one-module edit.
+Chapter~\ref{chap:timing} returns to this decision and uses both tables as its
+reference for which depths move together.
 % SOURCE: docs/latency_map.md. Pipeline depths are restated in five feeders, so
 % a kernel cannot change in isolation. This is the structural fact that made
 % the timing work in Chapter~\ref{chap:timing} expensive, and A-2 (dw_array exporting
