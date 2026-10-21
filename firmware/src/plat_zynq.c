@@ -1,10 +1,11 @@
 /*============================================================================
- *  plat_zynq.c  -  the four platform hooks, for a baremetal ZU+ APU
+ *  plat_zynq.c  -  the five platform hooks, for a baremetal ZU+ APU
  *
  *  Not built by firmware/Makefile: it needs a standalone BSP generated from
  *  build/bd_<cfg>/accel_bd_wrapper.xsa. See README.md for the Vitis side. The
- *  tests supply their own versions of these four functions, which is what lets
- *  accel_drv.c be tested on a PC.
+ *  tests supply their own versions of these five functions, which is what lets
+ *  accel_drv.c be tested on a PC. firmware/linux/src/plat_linux.c is the same
+ *  five for a Linux process.
  *
  *  ---- the flush is the only one with anything to get wrong ---------------
  *
@@ -42,6 +43,16 @@ uint32_t accel_plat_rd32(uintptr_t addr)
 void accel_plat_flush(const void *addr, size_t len)
 {
     Xil_DCacheFlushRange((INTPTR)addr, (unsigned)len);
+}
+
+/*  The standalone BSP's MMU table is an identity map: a pointer IS the physical
+ *  address, so there is nothing to translate. The driver still checks the
+ *  result fits its 32-bit base registers - which on this board it always does,
+ *  because the linker places every buffer in DDR_LOW, below 2 GB. */
+uint64_t accel_plat_phys(const void *addr, size_t len)
+{
+    (void)len;
+    return (uint64_t)(uintptr_t)addr;
 }
 
 void accel_plat_relax(void)

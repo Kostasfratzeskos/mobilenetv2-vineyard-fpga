@@ -2206,3 +2206,116 @@ Recorded as **DD-034**; `thesis_numbers.py` now emits `\thAccFloat` 99.84, `\thA
 are for `mobilenetv2_grape_leafsplit.pth`, and `software/export/`, the golden vectors and every
 simulation are still from `mobilenetv2_grape.pth`. Until they are regenerated from the new checkpoint,
 `numbers.tex` says so in a WARNING line.
+
+### 2026-10-20 - Option B: the camera on the board, and the resampler DD-033 left out
+
+Branch `linux-usb-camera`, from `5b7c618` (main plus the per-class known answers). The stretch tier
+- a live camera on the board - for the presentation. Everything below was built and tested on the
+PC; **nothing has run on a board**, and the README's first board step is a known answer with no
+camera for exactly that reason.
+
+#### The shape of it
+
+A webcam needs a USB host stack and a UVC driver, so the camera path runs under Linux: PetaLinux
+2022.2 from the ZCU104 BSP plus our XSA, the bitstream in `BOOT.BIN` as before. The FPGA design does
+not change - the board preset already enables USB 3.0, DisplayPort, Ethernet and SD, which I read
+back from the `.hwh` inside the XSA rather than assumed. New: `firmware/linux/` (the application,
+`vinecam`, and its platform layer), `firmware/linux/petalinux/` (the device-tree fragment, a kernel
+config fragment, and `build.sh`), two scripts.
+
+#### The driver could not have worked under Linux, silently
+
+`accel_set_blobs` and `accel_load_image` wrote `(uint32_t)(uintptr_t)pointer` into the base
+registers. On baremetal the pointer is the physical address; in a Linux process it is virtual, and
+the DMA would have read an unrelated physical page and **completed** - a confident wrong class, the
+failure shape this project keeps designing out. So a fifth platform hook, `accel_plat_phys`, and a
+new refusal, `ACCEL_ERR_ADDR`: the platform translates (or says it cannot), the driver translates all
+four blobs before writing any register, checks the result fits 32 bits end to end and is aligned,
+and refuses an untranslatable image before `LOAD_IMAGE`. `test_drv_seq` has six new cases, and its
+mock now maps buffers to "physical" addresses that differ from their pointers, so the old code fails
+it instead of passing by coincidence.
+
+#### Memory the DMA can read: a `no-map` carve-out, through UIO
+
+16 MB at `0x3800_0000`, `no-map`, exposed with the CSR as one UIO device (map0 the CSR, map1 the
+region). Out of the kernel's linear map and mapped Device-nGnRnE by UIO, it is never cached anywhere,
+so the flush hook becomes a `DSB` - and that is a property of the mapping, not something to remember.
+Device memory faults on unaligned accesses, so writes go through `dmaregion_write`: 64-bit stores
+through a volatile pointer. Checked in the aarch64 disassembly: `ldr x` / `str x` per word, `strb`
+for a tail, no `stp`, no `dc zva`, no call to `memcpy`. `vine_uio.c` refuses a region above 2 GB
+(HP0 reaches only DDR_LOW), unaligned, or listed as System RAM in `/proc/iomem`.
+
+`test_platform` runs the real `plat_linux.c` hooks and the real driver against a register file in
+ordinary memory: the base registers receive the region's physical addresses, and an aligned
+`malloc`-style buffer is refused with `IMG_BASE` left as it was. It also covers the allocator, every
+write length 0-299 from an unaligned source, sysfs parsing against a fake `/sys` (including a
+duplicated name, refused, and a prefix of the name, not matched) and `/proc/iomem` (System RAM caught
+at both edges; an all-zero file - what a non-root reader sees - reported as unreadable, not as a pass).
+
+#### The resampler: Pillow's, transcribed, and bit-exact on the first run
+
+DD-033 rejected a Pillow-compatible resampler as unneeded and named it as the extension point for a
+camera. `camfront.c` is that: `precompute_coeffs`, `normalize_coeffs_8bpc` and the two 8-bit passes
+of `libImaging/Resample.c`, restricted to RGB, BILINEAR and a full box, evaluated only on the 256×256
+window whose centre is `CenterCrop(224)`. Evaluating a window is exact because each output depends
+only on its own coefficients (from the full geometry) and the input under them.
+
+The reference is `scripts/gen_camfront_vectors.py`: the real torchvision 0.27.1 / Pillow 11.1.0 on
+frames built from an integer formula the C test reproduces, so only digests are stored. It does not
+trust its own geometry - the crop offsets are checked against `CenterCrop`'s output pixels, and
+torchvision's resize against a direct `Image.resize`. **All 15 frame sizes matched on the first run.**
+
+Then on photographs: a real ESCA and a real healthy leaf pasted into 640×480 and 1280×720 frames,
+through `tools/render_ui --dump` and `scripts/check_camera_frame.py`. Window and int8 tensor
+identical to torchvision + `export.py` in all four; the reference model calls them ESCA and Healthy.
+
+#### Verified to bite - and one mistake that does not matter, settled by counting
+
+| mutation | 640×480 bytes that differ | test |
+|:--|--:|:--|
+| xmin/xmax by `floor` | 126,196 | fails (12 checks) |
+| accumulator starts at 0 | 173,040 | fails (13) |
+| weights truncated to 22 bits | **1,385**, each by 1 | fails (11) |
+| support not widened (naive bilinear) | 194,270 | fails (11) |
+| corner-aligned centres | 193,733 | fails (13) |
+| `filterscale` not clamped when enlarging | upscales only | fails (2) |
+| crop offset rounded half up | 194,198 | fails (20) |
+| weights not normalised | 196,608 | fails (12) |
+| divide by `filterscale`, not multiply by `1/filterscale` | 0 | **passes** |
+
+The last is DD-033's `floor(x + 0.5)` again: algebraically equal, possibly different in a double's
+last bit. Enumerated rather than argued - identical 22-bit weights for every short side 2-4096 and
+21,283 long-side pairs from common aspect ratios. Kept in Pillow's form by construction. Two of my
+own first-draft claims did not survive the measuring: `camfront.c`'s header listed the reciprocal
+among the changes that "alter output bytes" (it does not), and said half-up rounding moves the 720p
+and 1080p windows - it moves ten other cases, but 115.5 rounds to 116 either way. Both corrected.
+What *is* real, measured on a Python port that matches Pillow exactly: dropping the uint8 rounding
+between the passes changes 36,863 of 261,888 bytes.
+
+#### DD-033's float32/float64 question, closed for every input
+
+The goldens' tensor comes through torchvision in float32; `preproc.c` tabulates in float64. Five
+golden images agreeing does not cover all inputs, and the camera check needs byte equality. The map
+has 768 inputs, so: all 768 agree, nearest approach to a tie on the float32 path 6.6e-05.
+
+#### The screen
+
+`ui.c` draws the camera picture with the network's 224×224 square bright and the rest dimmed, the
+class (green only for Healthy - `test_ui` checks every class), a softmax per class from a new
+generated constant `QP_LOGIT_SCALE`, the FPGA time and the loop rate. Rendered on the PC from the
+photographs above at 1920×1080 and 1280×720 and looked at; `test_ui` renders 10 sizes, 64×48 to 4K,
+between guard words. Looking was worth it: centring a 16:9 picture vertically also moved the result
+panel down, off the bottom of the screen - clipped, so the guard words saw nothing. `test_ui` now
+requires the bottom margin row to be one colour for 4:3 and 16:9 frames, and fails 14 times with the
+bug put back. `--http` serves the same screen as a BMP to a browser - for a talk, the laptop already
+on the projector is a better display than a DisplayPort monitor needing an active adapter.
+
+#### Built, not run
+
+`make check` builds `vinecam` for aarch64 Linux, static, with `-Wall -Wextra -Werror`, using the
+cross compiler Vitis 2022.2 ships (842 KB, no shared libraries). The device-tree fragment was not
+compiled here - the `dtc` in Vitis is a Linux binary - so `build.sh` checks the built `system.dtb`
+with `dtc` on the Linux host and fails if a node or a boot argument is missing. Untested until the
+board: the PetaLinux build itself, V4L2, UIO, the framebuffer, the HTTP view, and the real timing.
+
+Recorded as **DD-035** (DD-034 is on `accuracy-test-split`).

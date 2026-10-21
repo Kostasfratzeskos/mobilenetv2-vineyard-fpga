@@ -47,8 +47,36 @@ const char *accel_strerror(accel_status_t s)
     case ACCEL_ERR_TIMEOUT:    return "timed out polling STATUS";
     case ACCEL_ERR_FAULT:      return "the accelerator reported fault / dma_error / tag_error";
     case ACCEL_ERR_NO_RESULT:  return "the run finished but no result was captured";
+    case ACCEL_ERR_ADDR:       return "a buffer has no 32-bit physical address the DMA can use - "
+                                      "not in the accelerator's DMA region, or above 4 GB";
     default:                   return "unknown";
     }
+}
+
+/*  The address the DMA must be given for a buffer, or why there is none.
+ *
+ *  It comes from the platform, NOT from the pointer. On baremetal the two are
+ *  the same, which is how (uint32_t)(uintptr_t)ptr worked here until there was a
+ *  second platform; under Linux a pointer is virtual, and writing one into a
+ *  base register sends the DMA to an unrelated physical page.
+ *
+ *  Then the two limits that are the hardware's rather than the platform's: the
+ *  base registers are 32 bits, so the buffer must start AND end below 4 GB - a
+ *  buffer that crossed it would have its tail read from the bottom of memory -
+ *  and the physical address must be aligned, because the DMA's bursts assume
+ *  it whatever the virtual pointer looked like. */
+static accel_status_t dma_addr(const void *p, size_t len, uint32_t *out)
+{
+    uint64_t pa = accel_plat_phys(p, len);
+
+    if (pa == ACCEL_PHYS_NONE)
+        return ACCEL_ERR_ADDR;
+    if (pa > 0xFFFFFFFFull || (uint64_t)len > 0x100000000ull - pa)
+        return ACCEL_ERR_ADDR;
+    if (pa & (ACCEL_ALIGN - 1u))
+        return ACCEL_ERR_ALIGN;
+    *out = (uint32_t)pa;
+    return ACCEL_OK;
 }
 
 /*  Wait for `want` to appear in STATUS, giving up on an error bit or the poll
@@ -124,6 +152,9 @@ accel_status_t accel_set_blobs(accel_t *a,
                                const void *pm,  size_t pm_len,
                                const void *ps,  size_t ps_len)
 {
+    uint32_t       pa_wgt, pa_pb, pa_pm, pa_ps;
+    accel_status_t s;
+
     if (misaligned(wgt) || misaligned(pb) || misaligned(pm) || misaligned(ps))
         return ACCEL_ERR_ALIGN;
     if (wgt_len == 0u || pb_len == 0u || pm_len == 0u || ps_len == 0u)
@@ -140,6 +171,15 @@ accel_status_t accel_set_blobs(accel_t *a,
     if (rd(a, ACCEL_STATUS) & (ACCEL_ST_RUNNING | ACCEL_ST_IMG_BUSY))
         return ACCEL_ERR_BUSY;
 
+    /*  All four translated BEFORE any is written: a refusal half way through
+     *  would leave the accelerator pointed at two new blobs and two old ones,
+     *  a mixture no single call asked for. */
+    if ((s = dma_addr(wgt, wgt_len, &pa_wgt)) != ACCEL_OK ||
+        (s = dma_addr(pb,  pb_len,  &pa_pb))  != ACCEL_OK ||
+        (s = dma_addr(pm,  pm_len,  &pa_pm))  != ACCEL_OK ||
+        (s = dma_addr(ps,  ps_len,  &pa_ps))  != ACCEL_OK)
+        return s;
+
     /*  THE FLUSH. See accel_drv.h: without this the DMA reads stale DDR while
      *  the real bytes sit dirty in L1/L2, and the run completes with a wrong
      *  answer and no error. Done here rather than left to the caller because a
@@ -149,16 +189,17 @@ accel_status_t accel_set_blobs(accel_t *a,
     accel_plat_flush(pm,  pm_len);
     accel_plat_flush(ps,  ps_len);
 
-    wr(a, ACCEL_WGT_BASE, (uint32_t)(uintptr_t)wgt);
-    wr(a, ACCEL_PB_BASE,  (uint32_t)(uintptr_t)pb);
-    wr(a, ACCEL_PM_BASE,  (uint32_t)(uintptr_t)pm);
-    wr(a, ACCEL_PS_BASE,  (uint32_t)(uintptr_t)ps);
+    wr(a, ACCEL_WGT_BASE, pa_wgt);
+    wr(a, ACCEL_PB_BASE,  pa_pb);
+    wr(a, ACCEL_PM_BASE,  pa_pm);
+    wr(a, ACCEL_PS_BASE,  pa_ps);
     return ACCEL_OK;
 }
 
 accel_status_t accel_load_image(accel_t *a, const void *img, size_t img_len)
 {
     accel_status_t s;
+    uint32_t       pa;
 
     if (misaligned(img))
         return ACCEL_ERR_ALIGN;
@@ -173,8 +214,11 @@ accel_status_t accel_load_image(accel_t *a, const void *img, size_t img_len)
     if (rd(a, ACCEL_STATUS) & (ACCEL_ST_RUNNING | ACCEL_ST_IMG_BUSY))
         return ACCEL_ERR_BUSY;
 
+    if ((s = dma_addr(img, img_len, &pa)) != ACCEL_OK)
+        return s;
+
     accel_plat_flush(img, img_len);
-    wr(a, ACCEL_IMG_BASE, (uint32_t)(uintptr_t)img);
+    wr(a, ACCEL_IMG_BASE, pa);
 
     /*  Clear the previous load's sticky bit BEFORE starting, or the wait below
      *  returns immediately on a stale IMG_DONE and the run begins on a

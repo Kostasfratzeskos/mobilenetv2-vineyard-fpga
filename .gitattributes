@@ -1,1 +1,8 @@
 software/runs/*.pth filter=lfs diff=lfs merge=lfs -text
+
+# The PetaLinux inputs run on a LINUX build host - bash, dtc, the kernel's
+# config merge - and this repository is checked out on Windows with
+# core.autocrlf=true, which would hand them over with CRLF: bash then stops at
+# the first '\r', and a fragment line reads CONFIG_UIO=y plus a carriage
+# return. Pinned to LF whatever the checkout.
+firmware/linux/petalinux/** text eol=lf

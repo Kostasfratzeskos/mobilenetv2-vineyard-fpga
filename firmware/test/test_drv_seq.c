@@ -69,6 +69,15 @@ typedef struct {
     int      flushes;
     const void *flushed[8];
     size_t   flushed_len[8];
+
+    /*  address translation: which buffers the "platform" refuses, or places
+     *  where the DMA cannot use them, and what the driver asked */
+    const void *phys_none;       /* not in any DMA region                     */
+    const void *phys_high;       /* starts above 4 GB                         */
+    const void *phys_straddle;   /* starts below 4 GB, ends above it          */
+    const void *phys_odd;        /* physically misaligned                     */
+    int      phys_calls;
+    size_t   phys_last_len;
 } mock_t;
 
 static mock_t M;
@@ -233,6 +242,32 @@ void accel_plat_flush(const void *addr, size_t len)
 
 void accel_plat_relax(void) { }
 
+/*  A "physical" address that is deliberately NOT the pointer, so a driver that
+ *  still wrote (uint32_t)pointer into a base register fails the comparisons
+ *  below instead of passing by coincidence. Alignment is preserved, as a real
+ *  page-granular mapping preserves it. */
+#define MOCK_PHYS_BASE 0x38000000u
+
+static uint64_t mock_phys_of(const void *p)
+{
+    return (uint64_t)MOCK_PHYS_BASE + ((uintptr_t)p & 0x00FFFFFFu);
+}
+
+uint64_t accel_plat_phys(const void *addr, size_t len)
+{
+    M.phys_calls++;
+    M.phys_last_len = len;
+    if (addr == M.phys_none)
+        return ACCEL_PHYS_NONE;
+    if (addr == M.phys_high)
+        return 0x100000000ull + 0x1000u;
+    if (addr == M.phys_straddle)
+        return 0x100000000ull - ACCEL_ALIGN;
+    if (addr == M.phys_odd)
+        return mock_phys_of(addr) + 8u;
+    return mock_phys_of(addr);
+}
+
 /* ======================================================================
  *  the test
  * ====================================================================== */
@@ -322,12 +357,17 @@ int main(void)
                         buf_ps, sizeof buf_ps);
     ck(s == ACCEL_OK, "accel_set_blobs failed");
     ck(M.flushes == 4, "all four blobs must be flushed - S_AXI_HP is not coherent");
-    ck(M.reg[ACCEL_WGT_BASE / 4u] == (uint32_t)(uintptr_t)buf_wgt, "wgt_base wrong");
-    ck(M.reg[ACCEL_PB_BASE  / 4u] == (uint32_t)(uintptr_t)buf_pb,  "pb_base wrong");
-    ck(M.reg[ACCEL_PM_BASE  / 4u] == (uint32_t)(uintptr_t)buf_pm,  "pm_base wrong");
-    ck(M.reg[ACCEL_PS_BASE  / 4u] == (uint32_t)(uintptr_t)buf_ps,  "ps_base wrong");
+    /*  The registers must hold the PHYSICAL addresses the platform gave, not
+     *  the pointers. Checked against both, so the test cannot pass because the
+     *  two happened to coincide. */
+    ck((uint64_t)M.reg[ACCEL_WGT_BASE / 4u] == mock_phys_of(buf_wgt), "wgt_base is not the physical address");
+    ck((uint64_t)M.reg[ACCEL_PB_BASE  / 4u] == mock_phys_of(buf_pb),  "pb_base is not the physical address");
+    ck((uint64_t)M.reg[ACCEL_PM_BASE  / 4u] == mock_phys_of(buf_pm),  "pm_base is not the physical address");
+    ck((uint64_t)M.reg[ACCEL_PS_BASE  / 4u] == mock_phys_of(buf_ps),  "ps_base is not the physical address");
+    ck(M.reg[ACCEL_WGT_BASE / 4u] != (uint32_t)(uintptr_t)buf_wgt,
+       "wgt_base holds the POINTER - under Linux that is a virtual address");
     ck(M.violations == 0, M.last_violation);
-    printf("  [ok ] 4  four bases written and all four buffers flushed\n");
+    printf("  [ok ] 4  four PHYSICAL bases written and all four buffers flushed\n");
 
     /*  Misalignment must be refused: it cannot be flushed safely. */
     s = accel_set_blobs(&a, buf_wgt + 1, sizeof buf_wgt - 1,
@@ -341,6 +381,53 @@ int main(void)
     ck(s == ACCEL_ERR_SIZE, "mismatched parameter blobs were accepted");
     printf("  [ok ] 4  misalignment and mismatched parameter lengths are refused\n");
 
+    /* ---- 4b: buffers the DMA cannot be given -------------------------- */
+    {
+        /*  Each of these is a buffer that would complete a run on the WRONG
+         *  bytes if the driver wrote it anyway: one outside the mapped region
+         *  (a malloc'd buffer under Linux), one above 4 GB that the 32-bit
+         *  register would truncate, one whose tail crosses 4 GB. All must be
+         *  refused with NOTHING written and NOTHING flushed - and the refusal
+         *  of the last blob proves all four are checked before the first is
+         *  written. */
+        const void **slot[3] = { &M.phys_none, &M.phys_high, &M.phys_straddle };
+        const char  *name[3] = { "untranslatable", "above 4 GB", "crossing 4 GB" };
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            mock_reset();
+            accel_init(&a, MOCK_BASE);
+            *slot[k] = buf_wgt;
+            s = accel_set_blobs(&a, buf_wgt, sizeof buf_wgt, buf_pb, sizeof buf_pb,
+                                buf_pm, sizeof buf_pm, buf_ps, sizeof buf_ps);
+            ck(s == ACCEL_ERR_ADDR, "a weight blob the DMA cannot use was accepted");
+            ck(M.flushes == 0 && M.reg[ACCEL_WGT_BASE / 4u] == 0u,
+               "a refused set_blobs still flushed or wrote a base");
+            printf("  [ok ] 4b a weight blob %s is refused, nothing written (%s)\n",
+                   name[k], accel_strerror(s));
+        }
+
+        mock_reset();
+        accel_init(&a, MOCK_BASE);
+        M.phys_none = buf_ps;
+        s = accel_set_blobs(&a, buf_wgt, sizeof buf_wgt, buf_pb, sizeof buf_pb,
+                            buf_pm, sizeof buf_pm, buf_ps, sizeof buf_ps);
+        ck(s == ACCEL_ERR_ADDR, "an untranslatable params_shift was accepted");
+        ck(M.reg[ACCEL_WGT_BASE / 4u] == 0u && M.reg[ACCEL_PB_BASE / 4u] == 0u &&
+           M.reg[ACCEL_PM_BASE / 4u] == 0u,
+           "three bases were written before the fourth was refused - a mixed set");
+        printf("  [ok ] 4b the LAST blob failing leaves the first three unwritten\n");
+
+        mock_reset();
+        accel_init(&a, MOCK_BASE);
+        M.phys_odd = buf_pb;
+        s = accel_set_blobs(&a, buf_wgt, sizeof buf_wgt, buf_pb, sizeof buf_pb,
+                            buf_pm, sizeof buf_pm, buf_ps, sizeof buf_ps);
+        ck(s == ACCEL_ERR_ALIGN,
+           "a physically misaligned blob was accepted because its POINTER was aligned");
+        printf("  [ok ] 4b physical alignment is checked, not only the pointer's\n");
+    }
+
     /* ---- 5: the image ----------------------------------------------- */
     mock_reset();
     accel_init(&a, MOCK_BASE);
@@ -349,9 +436,23 @@ int main(void)
     ck(M.img_loads == 1, "LOAD_IMAGE was not pulsed exactly once");
     ck(M.started == 0, "loading an image must not start a run");
     ck(M.flushes == 1, "the image was not flushed");
-    ck(M.reg[ACCEL_IMG_BASE / 4u] == (uint32_t)(uintptr_t)buf_img, "img_base wrong");
+    ck((uint64_t)M.reg[ACCEL_IMG_BASE / 4u] == mock_phys_of(buf_img),
+       "img_base is not the physical address");
+    ck(M.phys_last_len == ACCEL_IMG_BYTES,
+       "the translation was not asked about the WHOLE image");
     ck(M.violations == 0, M.last_violation);
     printf("  [ok ] 5  the image is flushed, IMG_BASE set, LOAD_IMAGE pulsed once, and it waits\n");
+
+    /*  An image the DMA cannot be given must be refused BEFORE LOAD_IMAGE:
+     *  afterwards, the DMA is already reading wherever IMG_BASE pointed. */
+    mock_reset();
+    accel_init(&a, MOCK_BASE);
+    M.phys_none = buf_img;
+    s = accel_load_image(&a, buf_img, sizeof buf_img);
+    ck(s == ACCEL_ERR_ADDR, "an untranslatable image was accepted");
+    ck(M.img_loads == 0 && M.reg[ACCEL_IMG_BASE / 4u] == 0u,
+       "LOAD_IMAGE was pulsed, or IMG_BASE written, for an image the DMA cannot use");
+    printf("  [ok ] 5  an image the DMA cannot use is refused before LOAD_IMAGE\n");
 
     /*  A wrong-sized image must be refused: the length is structural in the
      *  hardware, so it cannot detect this itself (DD-032). */

@@ -226,6 +226,12 @@ static void check_manifest(void)
               && v[2] == (double)QP_STD_2,
        "QP_STD_* matches the manifest's norm_std");
 
+    /*  Only the camera app's confidence display uses it, but it is in the
+     *  generated header, so it is held to the same rule as the rest. */
+    n = read_nums(find_key(buf, "s_logit"), v, 1);
+    ok(n == 1 && v[0] == (double)QP_LOGIT_SCALE,
+       "QP_LOGIT_SCALE matches the manifest's s_logit");
+
     /*  The class ORDER, not just the count. A permuted order renames every
      *  prediction and changes no number anywhere, so nothing else here would
      *  notice it. */

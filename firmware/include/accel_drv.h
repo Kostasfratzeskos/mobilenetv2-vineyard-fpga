@@ -38,9 +38,19 @@
  *
  *  ---- the platform hooks -------------------------------------------------
  *
- *  Four functions the platform provides, so this driver is portable C with no
+ *  Five functions the platform provides, so this driver is portable C with no
  *  Xilinx headers and can therefore be TESTED ON A PC. firmware/test supplies a
- *  mock CSR and a no-op flush; firmware/src/plat_zynq.c supplies the real ones.
+ *  mock CSR and a no-op flush; firmware/src/plat_zynq.c supplies the real ones
+ *  for baremetal, and firmware/linux/src/plat_linux.c the ones for Linux.
+ *
+ *  The fifth, accel_plat_phys, exists because of Linux. On baremetal the MMU is
+ *  an identity map and a pointer IS the physical address the DMA needs, which is
+ *  what this driver used to assume by writing (uint32_t)pointer into the base
+ *  registers. A Linux process's pointer is a VIRTUAL address: written into
+ *  WGT_BASE it points the DMA at an unrelated physical page, and the run
+ *  completes on whatever that page holds - the confident wrong answer this
+ *  project keeps designing out. So the platform translates, and says when it
+ *  cannot, and the driver refuses (ACCEL_ERR_ADDR) instead of guessing.
  *==========================================================================*/
 #ifndef ACCEL_DRV_H
 #define ACCEL_DRV_H
@@ -61,7 +71,10 @@ typedef enum {
     ACCEL_ERR_BUSY,        /* asked to start while running or loading         */
     ACCEL_ERR_TIMEOUT,     /* the poll gave up                                */
     ACCEL_ERR_FAULT,       /* STATUS reported fault / dma_error / tag_error   */
-    ACCEL_ERR_NO_RESULT    /* done, but the result was never captured         */
+    ACCEL_ERR_NO_RESULT,   /* done, but the result was never captured         */
+    ACCEL_ERR_ADDR         /* a buffer has no 32-bit physical address the DMA
+                            * can be given: the platform cannot translate it,
+                            * or it lies (partly) above 4 GB                  */
 } accel_status_t;
 
 typedef struct {
@@ -87,6 +100,17 @@ void     accel_plat_flush(const void *addr, size_t len);
 /*  Somewhere to yield or spin while polling. May be empty. */
 void     accel_plat_relax(void);
 
+/*  The PHYSICAL address of the len-byte buffer at addr, as the DMA on
+ *  S_AXI_HP0_FPD will see it - or ACCEL_PHYS_NONE if the platform cannot vouch
+ *  that the WHOLE buffer is somewhere the DMA can read. Baremetal returns the
+ *  pointer unchanged; Linux translates through the one region it mapped for
+ *  the accelerator and refuses anything outside it, which is what stops a
+ *  malloc'd buffer - virtual, and possibly not even contiguous - from being
+ *  handed to the hardware. The driver checks the result fits the 32-bit base
+ *  registers; the platform only has to say where the buffer is. */
+#define ACCEL_PHYS_NONE  UINT64_MAX
+uint64_t accel_plat_phys(const void *addr, size_t len);
+
 /* ---- the driver --------------------------------------------------------- */
 accel_status_t accel_init(accel_t *a, uintptr_t csr_base);
 
@@ -95,9 +119,11 @@ accel_status_t accel_init(accel_t *a, uintptr_t csr_base);
 accel_status_t accel_load_program(accel_t *a, const uint32_t *words,
                                   size_t n_words, uint8_t n_instr);
 
-/*  The four static blobs. Addresses are PHYSICAL, which on baremetal is the
- *  same as the pointer. Lengths are taken so the flush can be done here, and
- *  checked against what the compiled program actually needs. */
+/*  The four static blobs. The registers get PHYSICAL addresses, through
+ *  accel_plat_phys - on baremetal the same as the pointer, under Linux not.
+ *  Lengths are taken so the flush can be done here, so the translation can
+ *  vouch for the whole buffer, and so they can be checked against each other.
+ *  Nothing is written unless all four translate. */
 accel_status_t accel_set_blobs(accel_t *a,
                                const void *wgt, size_t wgt_len,
                                const void *pb,  size_t pb_len,
@@ -105,7 +131,8 @@ accel_status_t accel_set_blobs(accel_t *a,
                                const void *ps,  size_t ps_len);
 
 /*  The image, HWC interleaved: byte (y*W + x)*3 + c holds channel c (DD-032).
- *  Flushes, points IMG_BASE at it, pulses LOAD_IMAGE and waits for the DMA. */
+ *  Translates, flushes, points IMG_BASE at it, pulses LOAD_IMAGE and waits for
+ *  the DMA. A buffer that does not translate is refused before LOAD_IMAGE. */
 accel_status_t accel_load_image(accel_t *a, const void *img, size_t img_len);
 
 /*  START, then poll until done. Refused if a run or an image load is in

@@ -2,6 +2,9 @@
 
 Reads an image, hands it to the accelerator in the PL, and prints the disease class.
 
+**For a live USB camera on the board, see [`linux/README.md`](linux/README.md)**: the same
+driver and preprocessing, run as a Linux process (DD-035).
+
 ```
 firmware/
 ├── include/accel_csr.h    the AXI-Lite register map (DD-031, DD-032)
@@ -11,15 +14,22 @@ firmware/
 ├── include/quant_params.h GENERATED from manifest.json — do not edit
 ├── src/accel_drv.c        the driver. Portable C — builds and is TESTED on a PC
 ├── src/preproc.c          crop, normalise, quantise. Also TESTED on a PC
-├── src/plat_zynq.c        the four platform hooks (Xil_Out32, cache flush, …)
+├── src/plat_zynq.c        the five platform hooks (Xil_Out32, cache flush, …)
 ├── src/img_src.c          the three image sources, in two formats
 ├── src/main.c             the application
 ├── test/test_csr_map.c    the header must match hardware/rtl/axi/axi_lite_csr.v
 ├── test/test_drv_seq.c    the driver against a mock of the CSR's guards
 ├── test/test_preproc.c    the front end against the golden tensor, bit for bit
 ├── test/stubs/            fake BSP headers, so `make lint` can compile main.c
+├── linux/                 the live-camera application for Linux (its own README)
 └── Makefile               the HOST build, which runs the tests and the lint
 ```
+
+The fifth hook, `accel_plat_phys`, came with the Linux port: the driver used to write
+`(uint32_t)pointer` into the base registers, which is only right where a pointer is
+a physical address. Baremetal returns the pointer unchanged; Linux translates, and
+the driver refuses (`ACCEL_ERR_ADDR`) a buffer that has no 32-bit physical address
+the DMA can use.
 
 ## What is tested, and what is not
 
@@ -181,9 +191,11 @@ step, outside the embedded path rather than hidden inside it.
 
 And **any image that is not 256×256**. `preproc_rgb` takes `w` and `h` precisely
 so it can **refuse** one, rather than fall back on a naive bilinear that does not
-match Pillow. A camera, or an arbitrary photograph, would need a verified
-resampler that does not exist here. A refusal is a visible failure; a plausible
-wrong tensor is not.
+match Pillow. A camera, or an arbitrary photograph, needs a verified resampler -
+which now exists, for the Linux camera path: `linux/src/camfront.c` computes
+torchvision's `Resize(256)` bit-exactly against Pillow and hands `preproc_rgb` a
+256×256 window, so `preproc_rgb` itself still refuses everything else (DD-035).
+A refusal is a visible failure; a plausible wrong tensor is not.
 
 ### The rounding, and a claim this README previously got wrong
 

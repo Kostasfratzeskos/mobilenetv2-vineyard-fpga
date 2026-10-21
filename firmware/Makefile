@@ -12,7 +12,7 @@
 #  xilffs for the SD card. See README.md.
 #
 #  That split is the point rather than a limitation. accel_drv.c is portable C
-#  with no Xilinx headers, talking to the hardware through four platform hooks,
+#  with no Xilinx headers, talking to the hardware through five platform hooks,
 #  precisely so that the part most likely to be wrong - the register map and the
 #  order of operations - can be tested on a machine with no board attached.
 #
@@ -76,8 +76,8 @@ $(BUILD)/%.o: $(SRC)/%.c | $(BUILD)
 $(TESTBUILD)/test_csr_map$(EXE): $(TESTDIR)/test_csr_map.c | $(TESTBUILD)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
-#  test_drv_seq IS the driver's test, and supplies the four platform hooks
-#  itself as a mock of the CSR.
+#  test_drv_seq IS the driver's test, and supplies the five platform hooks
+#  itself as a mock of the CSR (and, for accel_plat_phys, of an address map).
 $(TESTBUILD)/test_drv_seq$(EXE): $(TESTDIR)/test_drv_seq.c $(LIB_OBJS) | $(TESTBUILD)
 	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@ $(LDFLAGS)
 

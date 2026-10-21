@@ -34,4 +34,9 @@
 #define QP_N_CLASSES     4u
 #define QP_CLASS_NAMES { "Black Rot", "ESCA", "Healthy", "Leaf Blight" }
 
+/*  What one step of the int16 logits is worth (DD-011). Not used by
+ *  the arithmetic - the argmax needs no scale - only to show a
+ *  softmax next to the class, which firmware/linux/src/ui.c does. */
+#define QP_LOGIT_SCALE   0.00074642713547160391
+
 #endif /* QUANT_PARAMS_H */

@@ -520,6 +520,11 @@ def emit_quant_header(man, path):
     L.append("#define QP_CLASS_NAMES { %s }"
              % ", ".join('"%s"' % c for c in classes))
     L.append("")
+    L.append("/*  What one step of the int16 logits is worth (DD-011). Not used by")
+    L.append(" *  the arithmetic - the argmax needs no scale - only to show a")
+    L.append(" *  softmax next to the class, which firmware/linux/src/ui.c does. */")
+    L.append("#define QP_LOGIT_SCALE   %.17g" % float(man["s_logit"]))
+    L.append("")
     L.append("#endif /* QUANT_PARAMS_H */")
 
     with open(path, "w", encoding="utf-8") as fh:
