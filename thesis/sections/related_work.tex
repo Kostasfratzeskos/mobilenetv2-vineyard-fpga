@@ -20,8 +20,12 @@
 %
 % Be explicit about the dataset-leakage issue here as well as in
 % Section~\ref{sec:leakage}: published accuracies on PlantVillage-derived splits are
-% frequently inflated by augmented duplicates of the same leaf. This thesis
-% found exactly that in its own first split and resplit the data by leaf.
+% frequently inflated by images of the same leaf on both sides of the split -
+% augmented copies, and, less visibly, the several photographs PlantVillage
+% took of every leaf. [mohanty2016plantdisease] kept each leaf's photos on one
+% side and published the leaf grouping that makes this possible; a split by
+% file or by image id ignores it. This thesis found both kinds in its own
+% splits (DD-034) and now splits by leaf using that grouping.
 
 \section{CNN Accelerators on FPGAs}
 \label{sec:related-accel}

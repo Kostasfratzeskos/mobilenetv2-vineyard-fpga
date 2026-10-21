@@ -250,6 +250,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--dump-scales", default="quant_scales.json",
                     help="where to write the calibrated scales (set '' to skip)")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="seeds the shuffled, augmented calibration batches")
     ap.add_argument("--selftest", action="store_true",
                     help="verify the integer primitives and exit")
     args = ap.parse_args()
@@ -261,6 +263,9 @@ def main():
     if not (args.data and args.ckpt):
         ap.error("--data and --ckpt are required (or use --selftest)")
 
+    # calibration draws shuffled, randomly augmented TRAINING batches; unseeded,
+    # every run gave different scales and so a different int8 model
+    torch.manual_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 

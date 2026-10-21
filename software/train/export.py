@@ -220,6 +220,29 @@ def _next_scale(plan, k, act, s_logit):
     return s_logit                          # nothing after the classifier
 
 
+def calibrate_logit_scale(fused, loader, device, batches=4):
+    """DD-011: S_logit from the float logits of the first few batches, 1.2x headroom.
+    Returns (|max logit|, S_logit)."""
+    absmax = 0.0
+    with torch.no_grad():
+        for bi, (x, _) in enumerate(loader):
+            absmax = max(absmax, float(fused(x.to(device)).abs().max()))
+            if bi >= batches - 1:
+                break
+    return absmax, absmax * 1.2 / LOGIT_QMAX
+
+
+def build_int_plan(fused, act, s_logit, scales_name="the scales file"):
+    """The quantized integer plan: what export.py writes out and the hardware runs.
+    evaluate.py builds its int8 model here too, so the two cannot drift."""
+    plan = build_plan(fused)
+    missing = [op.name for op in plan if op.kind in ("conv", "linear")
+               and op.name not in act]
+    assert not missing, f"plan layers missing from {scales_name}: {missing}"
+    assign_scales(plan, act, s_logit)
+    return plan
+
+
 def assign_scales(plan, act, s_logit):
     for k, op in enumerate(plan):
         if op.kind == "conv":
@@ -385,7 +408,8 @@ def rtl_acc_w(path=RTL_TOP):
         return None
 
 
-def check_acc_width(plan, acc_w):
+def acc_bound(plan):
+    """The bound above for every compute layer -> (worst, worst_name, need_bits, rows)."""
     a_max = 128                       # the int8 input image
     worst, worst_name, rows = 0, "?", []
     for op in plan:
@@ -403,8 +427,12 @@ def check_acc_width(plan, acc_w):
             a_max = max(int(op.q6), 1)
         else:
             a_max = 128
-
     need = int(np.ceil(np.log2(max(worst, 1))) + 1)
+    return worst, worst_name, need, rows
+
+
+def check_acc_width(plan, acc_w):
+    worst, worst_name, need, rows = acc_bound(plan)
     print(f"\naccumulator bound (provable, any input):")
     print(f"  worst |acc+bias| = {worst:,}  in {worst_name}  -> needs {need} signed bits")
     if acc_w is None:
@@ -640,24 +668,14 @@ def main():
     loader, classes = make_eval_loader(args.data, batch_size=32,
                                        img_size=ckpt.get("img_size", 224),
                                        num_workers=0)
-    absmax = 0.0
-    with torch.no_grad():
-        for bi, (x, _) in enumerate(loader):
-            absmax = max(absmax, float(fused(x.to(device)).abs().max()))
-            if bi >= 3:
-                break
-    s_logit = absmax * 1.2 / LOGIT_QMAX
+    absmax, s_logit = calibrate_logit_scale(fused, loader, device)
     print(f"logit |max| = {absmax:.3f}  ->  S_logit = {s_logit:.6e} (int16)")
 
     # ---- build + quantize the plan ----
-    plan = build_plan(fused)
+    plan = build_int_plan(fused, act, s_logit, args.scales)
     n_compute = sum(1 for op in plan if op.kind in ("conv", "linear"))
-    missing = [op.name for op in plan if op.kind in ("conv", "linear")
-               and op.name not in act]
-    assert not missing, f"plan layers missing from {args.scales}: {missing}"
     print(f"plan: {len(plan)} ops ({n_compute} conv/linear) -- "
           f"json has {len(act)} layers")
-    assign_scales(plan, act, s_logit)
 
     # ---- the accumulator has to hold this model before anything is written ----
     check_acc_width(plan, rtl_acc_w())

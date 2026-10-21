@@ -94,11 +94,14 @@ a testbench that writes its cycle count to a file — move it and delete it from
 `conclusion_and_future_work`. `extended_greek` **last**, because it mirrors the English
 chapters and writing it early guarantees rework.
 
-Two gaps block Chapter 10 and neither is a big job:
+Two gaps block Chapter 10:
 
-1. **Accuracy on the leakage-free `grape_clean` split is not measured.** The only
-   accuracy figures in the repository (100.00% float and int8) are from the *leaky*
-   split. Run `evaluate.py` for both float and int8 and record the per-class breakdown.
+1. **Accuracy is measured, on a checkpoint the hardware does not yet run.** Float and
+   int8 on the held-out test split of `data/grape_leafsplit` are the `\thAcc*` macros
+   (DD-034); `grape_clean` turned out to leak whole leaves and is not quoted. The
+   accuracy checkpoint (`\thAccCkptSha`) is a retrain, while `software/export/`, the
+   golden vectors and every simulation are from `\thCkptSha`. Regenerating those from
+   the new checkpoint closes this; until then `numbers.tex` carries a WARNING line.
 2. **The 202 MHz figure is unattributed** (`docs/claude_project/05_RESULTS.md` §2).
    Either do the back-to-back re-run or quote 179.0 MHz and say why.
 

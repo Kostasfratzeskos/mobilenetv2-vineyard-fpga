@@ -3,14 +3,17 @@
 %          docs/claude_project/08_OPEN_ITEMS.md §4 and §6 (the gaps and risks)
 %          build/impl_*/ and build/bd_187p5_explore/ via numbers.tex
 %
-% TWO BLOCKING GAPS before this chapter can be written honestly:
-%   1. ACCURACY ON grape_clean IS NOT MEASURED. The only accuracy numbers in
-%      the repository (100.00% float, 100.00% int8) are from the LEAKY split.
-%      Run evaluate.py on data/grape_clean/val with the current checkpoint,
-%      float and int8, and record the per-class breakdown. Expect well below
-%      100% - that is the honest result and it is more defensible.
+% GAPS before this chapter can be written honestly:
+%   1. ACCURACY is measured (DD-034): float and int8 on the held-out test split
+%      of data/grape_leafsplit, split by leaf, scored once; every figure is a
+%      \thAcc* macro from software/runs/mobilenetv2_grape_leafsplit_test.json.
+%      STILL OPEN: it was measured on the retrained checkpoint \thAccCkptSha,
+%      while software/export/ - and so every bit-exactness result - is built
+%      from \thCkptSha. Until the export, the golden vectors and the
+%      simulations are regenerated from \thAccCkptSha, the two must not be
+%      presented as one model; numbers.tex carries a WARNING line while they
+%      differ.
 %   2. The \MHz{\thFmaxPhaseFour} figure is unattributed (Section~\ref{sec:phase4}).
-% Neither is a big job. Both are load-bearing for this chapter.
 % ===========================================================================
 \chapter{Experimental Evaluation}
 \label{chap:evaluation}
@@ -71,12 +74,31 @@
 
 \subsection{Classification Accuracy}
 \label{sec:accuracy}
-% BLOCKED - see the header of this file. Report float and int8 on the
-% leakage-free grape_clean split, the quantisation drop between them, and the
-% per-class breakdown / confusion matrix.
-% Report the leaky 100.00% too, as the thing that was wrong and how it was
-% found (Section~\ref{sec:leakage}). A thesis that explains a retracted number is
-% stronger than one that never had it.
+% The protocol first, in two sentences: trained on train, checkpoint chosen on
+% val (epoch \thAccBestEpoch), int8 scales calibrated on train, and only then
+% the test split scored - once. Then the result, from numbers.tex:
+%
+%   float \thAccFloat\%, int8 \thAccInt\% on \thAccTestImages{} test images of
+%   \thAccTestLeaves{} leaves; drop \thAccDrop{} points; int8 and float
+%   disagree on \thAccDisagree{} images.
+%
+% Quote BOTH 95% intervals and say why there are two: the photos of a leaf
+% are not independent, so "per image" [\thAccIntCiImageLo, \thAccIntCiImageHi]
+% is too narrow and "per leaf" [\thAccIntCiLeafLo, \thAccIntCiLeafHi] is
+% conservative. Per-class precision / recall / F1 and macro-F1
+% (\thAccIntMacroF) as a table, and the confusion matrix (\thAccIntConf*).
+%
+% The int8 figure is the INTEGER PIPELINE's, not fake-quant's: the arithmetic
+% the RTL reproduces bit for bit (Section~\ref{sec:bit-exactness-result}), checked
+% against the accumulator bound of Section~\ref{sec:acc-bound}. So it is the
+% accelerator's accuracy - for the checkpoint it was measured on (see the
+% header of this file).
+%
+% Report the retracted number too, as the thing that was wrong and how it was
+% found (Section~\ref{sec:leakage}): 100.00% on data/grape (rotated copies) -
+% and that the first fix, grape_clean, leaked at the level of the leaf, so
+% nothing measured on it is quoted either. A thesis that explains a retracted
+% number is stronger than one that never had it.
 % Separately: export.py --check 32 gives 32/32 agreement between the integer
 % pipeline and both the float and fake-quant models. That measures the
 % QUANTISATION, not the model, and the distinction should be explicit.
