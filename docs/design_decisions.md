@@ -48,13 +48,16 @@ Copy the template below, give it the next id, and fill it in.
 - Revisit if: a specific layer needs a specialized datapath for performance.
 
 ### DD-004 — Tiered success criteria
-- Status: Accepted
+- Status: Accepted — amended by DD-036
 - Date: 2026-06-06
 - Context: full network + live camera from zero in ~5.5 months is high-risk if treated as all-or-nothing.
 - Decision: core = full network bit-exact in simulation, plus image-from-SD on the board; stretch = live camera.
 - Rationale: guarantees a defensible result even if on-board / camera work runs late.
 - Alternatives considered: aiming straight for live camera (a single point of failure).
 - Revisit if: ahead of schedule by the end of Phase 4 → pull the camera work forward.
+- Amended 2026-10-21 (DD-036): the tiers stand. The evaluation adds a measured comparison — the
+  same model, test images and measurements on a Raspberry Pi 4 and a Jetson Nano — and the dataset
+  is final (PlantVillage grape, split by leaf; no field photographs).
 
 ### DD-005 — Quantization scheme: int8, TFLite-style
 - Status: Accepted
@@ -1962,3 +1965,107 @@ argmax over the 4 int16 logits is the predicted class.
   the ramdisk over `0x3800_0000` (the kernel then refuses the initrd at boot — move the carve-out);
   or the model is redeployed from the leaf-split checkpoint (DD-034), which regenerates
   `quant_params.h`, `QP_LOGIT_SCALE` and the blobs, and needs the known answers remade.
+
+### DD-036 — Scope: the dataset stays, and the same model runs on a Raspberry Pi 4 and a Jetson Nano
+- Status: Accepted — agreed with the supervisor; nothing measured yet
+- Date: 2026-10-21
+- Context: two scope questions, settled together.
+  - **The dataset.** The plan since kickoff (`data/README.md`, the notebook's first entry) was to
+    add real vine photographs from field contacts, as extra fine-tuning data and a realistic test
+    set. None arrived, and DD-034 left "field photographs arrive" as the condition that reopens the
+    accuracy result.
+  - **The comparison the thesis keeps promising.** The introduction asks why an FPGA rather than a
+    CPU or a GPU, the background has a section for the question, and the evaluation chapter planned
+    three comparisons: the C model on the development PC, the Xilinx DPU, and published FPGA
+    accelerators. None of the three runs this model on hardware a vineyard deployment would
+    actually use. The closest published work (Karim et al., *Scientific Reports* 2024) classifies
+    grape leaves on a Jetson Nano, with its own network and dataset — set beside this thesis, it
+    would compare two models, two datasets and two splits at once.
+
+- Decision:
+  - **The dataset is final:** PlantVillage grape, split by leaf (`data/grape_leafsplit`, DD-034).
+    No field photographs in this thesis. They are future work, and DD-034's revisit condition
+    stands as written.
+  - **One model on every platform:** `software/runs/mobilenetv2_grape_leafsplit.pth`
+    (`1b536a3033c8`), the checkpoint the test accuracy was measured on. The FPGA is redeployed from
+    it — export, golden vectors, simulations, `quant_params.h` / `QP_LOGIT_SCALE`, the SD-card known
+    answers — which closes DD-034's open consequence. The new golden sets come from the **test**
+    split, one original photograph per class: every current set is a training or validation image
+    of this model (table below), so a board demonstration on them would show the model photographs
+    it learned from.
+  - **Three platforms, each with the arithmetic it is built for:**
+
+    | platform | what runs | precision |
+    |:--|:--|:--|
+    | ZCU104, this accelerator | `vinecam`, which times each run (the bare-metal app prints no time) | int8, the integer pipeline |
+    | Raspberry Pi 4, 4× Cortex-A72 | ONNX Runtime, and the bit-exact C model (`software/cmodel/`) | FP32; int8 (ONNX Runtime's own); int8 (the integer pipeline) |
+    | Jetson Nano, 128-core Maxwell GPU | TensorRT, the engine built on the device | FP32, FP16 |
+
+    The Nano has **no int8 row**, by necessity rather than choice: TensorRT's int8 path needs a GPU
+    of compute capability 6.1 or later, and the Nano's is 5.3. ONNX Runtime's int8 is a different
+    quantisation from this project's — its own calibration and its own rounding — so its accuracy
+    is reported on its own line and is not expected to match the accelerator's. The C model's
+    predictions match by construction.
+  - **Two comparisons, never mixed in one number.** *Same arithmetic*: the C model on the Pi
+    against the accelerator, the identical integer operations on two kinds of hardware — this
+    measures the architecture. *Best available stack*: each platform's own runtime at its own best
+    precision — this measures what someone deploying on that platform would actually get.
+  - **The same measurement everywhere:**
+    - the same checkpoint, and the same 617 test images (155 leaves);
+    - the same preprocessing: Pillow's resize (not OpenCV's), and `camfront.c` for camera frames
+      (DD-035);
+    - batch 1; warm-up before timing, then at least 500 timed runs, reported as median and p95;
+      inference alone and end to end;
+    - the same USB webcam, at the same resolution, for the live comparison;
+    - one wall-plug power meter for all three boards, idle and under load, plus on-board sensors
+      where they exist (`tegrastats` on the Nano; the ZCU104's power monitors if the PetaLinux
+      image exposes them); energy per inference from the two;
+    - fixed clocks: on the Pi the `performance` governor, a heatsink and fan, and
+      `vcgencmd get_throttled` reading `0x0` after the run; on the Nano `nvpmodel -m 0` and
+      `jetson_clocks`, on a 5 V 4 A barrel supply;
+    - every software version recorded: OS image, JetPack, TensorRT, ONNX Runtime, compiler.
+  - **No number typed by hand:** each platform's run writes a JSON report that
+    `scripts/thesis_numbers.py` turns into macros, exactly as `evaluate.py`'s report already is
+    (DD-034).
+  - **Order:** the camera runs on the board first (DD-035), with today's blobs — they are the ones
+    already proven on the board, so a failure there is Linux and not the model. Then the redeploy,
+    then the Pi and the Nano. One change at a time.
+
+- The current golden sets against the new split (`data/grape_leafsplit/split.csv`, checked
+  2026-10-21):
+
+  | golden set | where its photograph is in the leaf split |
+  |:--|:--|
+  | `blackrot_0376` | train (leaf 14) |
+  | `blight_1461` | val (leaf 38) |
+  | `esca_4399` | a flipped copy of a train photograph (leaf 322) |
+  | `healthy_6067` | a rotated copy of a train photograph (run 6064) |
+  | `healthy_hl6025` | a rotated copy of a train photograph (run 6024) — the 2026-10-07 board image |
+  | `image_1` | no checkpoint hash in its manifest; its source image is gone |
+
+- Alternatives considered:
+  - **Collect field photographs now.** A new dataset means a new model, new golden vectors and a
+    new verification pass, with too little time left to do them properly. Deferred, not rejected.
+  - **Compare against published numbers only.** Different networks, datasets, splits, precisions
+    and power conventions. Kept for the related work, not used as the comparison.
+  - **Run each edge device on a model chosen for it** (a MobileNetV3, as Karim et al. do). That
+    compares models, not platforms.
+  - **TensorFlow Lite on the Pi.** The usual int8 route on a Pi, but a second conversion out of
+    PyTorch to check; one ONNX file serves both edge devices, since TensorRT reads ONNX too.
+
+- Consequences:
+  - DD-004's tiers are unchanged. The evaluation adds the comparison, and DD-004 now points here.
+  - The thesis's scope statements change: the introduction (motivation, objectives,
+    contributions), the background (a CPU and a GPU, not only "FPGAs against"), the experimental
+    setup (two more boards, a meter, a webcam, two more runtimes), the evaluation (measured latency
+    and power, the comparison table) and the conclusion.
+  - The dataset limit is stated as a limit: every accuracy figure is on PlantVillage photographs,
+    taken under controlled conditions, and says nothing yet about photographs from a vineyard.
+
+- Still open, for the supervisor: whether the title should name the comparison; whether the
+  Xilinx DPU stays a discussion point or is dropped now that measured baselines exist; and whether
+  the ZCU104's own Cortex-A53 cores — the same chip, without the accelerator — join as a fourth
+  row.
+
+- Revisit if: field photographs arrive (DD-034); a Jetson with int8 tensor cores (an Orin) becomes
+  available, which would give the GPU an int8 row; or the schedule forces a platform out.

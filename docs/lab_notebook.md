@@ -2094,6 +2094,86 @@ Recorded as **DD-033**. Still outstanding project-wide: the accuracy measurement
 in float and int8 — the only accuracy numbers in the repository are 100.00% from the *leaky* split,
 which is not a result — and `docs/latency_map.md` §6 still stops at Phase 2d.
 
+### 2026-09-27 - The SD card gets a known answer, and the console keeps its baud rate
+
+*Written up on 2026-10-21 from commits `a55591b`, `c3a28bf` and `95ab906`; nothing here goes beyond
+what they record.*
+
+Bring-up goes badly when the accelerator and the test data are debugged at the same time. Every
+golden set has already been through the full simulation, so its logits are known exactly, and there
+is no floating point anywhere in the datapath: the board must produce **the same four integers** or
+it is wrong. `scripts/make_sdcard.py` stages `build/sdcard/` with the five blobs, the known-answer
+image in both formats, and `EXPECTED.txt`:
+
+```
+healthy_hl6025 -> logits -4950 -6177 15185 -5486, argmax 2 = Healthy
+```
+
+- `image.bin` starts as the **int8** copy - nothing between the file and the DMA, so a wrong answer
+  is the accelerator and not the front end. Copying `image_rgb.bin` over it then exercises
+  `preproc.c` on the board, and the logits must be identical. The script's CHW→HWC transpose and
+  `preproc.c`'s own output from the RGB file were checked byte-identical, so a difference on the
+  board would be the board, not the two files disagreeing.
+- No numpy: a lab machine may have Python and nothing else.
+- Next morning (`95ab906`): `EXPECTED.txt` is tracked and the blobs are not. They are
+  `software/export/`'s bytes plus the image, rebuilt in one run; the answer is the one file in there
+  that would be expensive to lose.
+
+The bug found by reading rather than running (`c3a28bf`): `IMG_UART_BAUD` was 921600 on
+`psu_uart_0`, **the device the BSP routes `printf` to**. Opening the image source changed the
+console's baud rate underneath the terminal watching it, so every line after the one naming the image
+source would have arrived as garbage - on a bench, a crash during start-up that is not one. Nothing
+could have caught it: the host tests do not link `img_src.c`, and the simulation has no UART. `0`
+now means "leave the baud alone" and is the default; an image then takes ~13 s at 115200. Slow,
+correct and readable, which is the right trade for a first power-on.
+
+### 2026-10-07 - First run on the board: the known answer, bit for bit
+
+*Written up on 2026-10-21 from the bring-up report; the register values are the ones read on the
+bench.*
+
+The lab's ZCU104, booted over JTAG from Vitis 2022.2, with the card from 2026-09-27: `image.bin` =
+the int8 `healthy_hl6025` image. After the run:
+
+```
+STATUS    0x00003F22   bit 1 DONE, bit 5 RESULT, PC [15:8] = 63 (the last of 64), no error bit
+ARGMAX    0x00000006   [1:0] = 2 (Healthy), [2] = result captured
+RESULT_LO 0xE7DFECAA   logit0 = 0xECAA = -4950    logit1 = 0xE7DF = -6177
+RESULT_HI 0xEA923B51   logit2 = 0x3B51 = 15185    logit3 = 0xEA92 = -5486
+```
+
+`EXPECTED.txt` says `-4950 -6177 15185 -5486`, argmax 2 = Healthy. **The same four integers: the
+accelerator is bit-exact on silicon**, on the first run that completed.
+
+#### What it took - and none of it was the design
+
+Every obstacle was in the Vitis 2022.2 flow on this laptop, or on the bench:
+
+- The BSP failed to build with parallel compiler launches (`CreateProcessA` error 5). Patching the
+  BSP Makefiles from `make -j 14` to `-j 1` fixed it. The antivirus is the suspect, not proven.
+- `xilffs` with long file names (`use_lfn=1`) belongs in the **standalone** domain only: in the
+  `zynqmp_fsbl` domain it overflows the OCM by 21 KB.
+- `xilffs` had to be added by hand to the application's linker libraries.
+- The launch configuration must actually run the PS initialisation - the FSBL flow with its run box
+  ticked, or `psu_init` plus the PL power-up. Without it, nothing downstream means anything.
+- `can't read map: no such variable` is a stale `xsdb` connection left by a failed launch: restart
+  Vitis.
+- The first "cannot mount SD" was the card not seated.
+
+All of them are in the bring-up guide (Parts II-III). The known answer is why each was quick to rule
+in or out: the accelerator was never a suspect, because there was one exact answer to match rather
+than a class that merely looked plausible.
+
+#### Not recorded yet
+
+Tests 2-5 of the guide: the RGB image through `preproc.c` (it must give the same four integers),
+the other three classes, the UART image source, and booting from the SD card without JTAG. The cards
+for the other three classes were staged afterwards (2026-10-12, `5b7c618`): `blackrot_0376` → 0,
+`esca_4399` → 1, `blight_1461` → 3.
+
+This entry is two weeks late, which is why `firmware/README.md` and the thesis still said "never
+run on a board". They say what happened now.
+
 ### 2026-10-13 - Accuracy: the "leak-free" split leaked too, and a test set that is touched once
 
 The outstanding item above was meant to be one evaluation run on `grape_clean`. It became a new
@@ -2319,3 +2399,57 @@ with `dtc` on the Linux host and fails if a node or a boot argument is missing. 
 board: the PetaLinux build itself, V4L2, UIO, the framebuffer, the HTTP view, and the real timing.
 
 Recorded as **DD-035** (DD-034 is on `accuracy-test-split`).
+
+### 2026-10-21 - Scope: the dataset stays, and two edge devices join the evaluation
+
+Agreed with my supervisor:
+
+- **No dataset change.** PlantVillage's grape leaves, split by leaf (DD-034), and nothing else. The
+  field photographs planned since the first entry are future work. DD-034 already names them as the
+  thing that reopens the accuracy result.
+- **The trained model also runs on a Raspberry Pi 4 and a Jetson Nano**, as the CPU and GPU
+  comparison the thesis keeps promising and had never measured. This starts after the camera works on
+  the board.
+
+#### What "the same model" forces
+
+A comparison is between platforms only if they run the same weights. So the decision DD-034 left
+open is made: the FPGA is redeployed from `mobilenetv2_grape_leafsplit.pth` (`1b536a3033c8`). I
+checked what that touches before anything is regenerated:
+
+- **The golden sets are all images this model was trained or selected on.** Against
+  `data/grape_leafsplit/split.csv`: `blackrot_0376` is in train, `blight_1461` in val, and
+  `esca_4399`, `healthy_6067` and `healthy_hl6025` are flipped or rotated copies of train photographs.
+  `image_1` has no checkpoint hash in its manifest at all. A board demonstration on them would show
+  the model photographs it learned from. The new sets come from the test split, one original
+  photograph per class.
+- **Figures copied by hand into the thesis move with it.** The accumulator bound goes from 5,094,750
+  (24 bits, the classifier) to 8,971,923 (25 bits, one folded bias in `features.9.conv.0.0`).
+  `\thAccMarginNarrow` is defined at 24 bits, which the new bound no longer fits. "Largest exported
+  shift is 48" is typed in the accelerator chapter, and is today's export's (`features.0.0`). The
+  architecture chapter's "peaks in the classifier" paragraph stops being true. All are marked
+  `TODO(REDEPLOY)`, so `make todo` lists them.
+- **No RTL change is expected.** The weights are a DDR blob, and the new bound fits `ACC_W = 26`
+  with a 3.7× margin. The simulations decide that, not this sentence.
+
+#### The branches, merged
+
+`accuracy-test-split` and `linux-usb-camera` merged into `thesis-accelerator-design` (`53db7e2`,
+`556ff1f`). The only conflict: both had appended to `design_decisions.md` and to this notebook, so
+both entries were kept in date order. Checked afterwards: `firmware/` is identical to
+`linux-usb-camera`'s, `software/` to `accuracy-test-split`'s, and `scripts/` is the union of two
+changes that touch different files. `thesis_numbers.py` regenerates `numbers.tex` (270 macros), with
+the WARNING line that stays until the redeploy.
+
+#### Two facts the edge devices will need
+
+- The Nano's last JetPack (4.6) has TensorRT 8.2, which needs the ONNX file at **opset 13**. The
+  PyTorch here (2.12) still has the old exporter for that (`dynamo=False`), but it needs the `onnx`
+  package, which is not installed. The new exporter needs `onnxscript`, which is not installed either.
+- The Nano's GPU is compute capability 5.3, and TensorRT's int8 needs 6.1. **The GPU gets no int8
+  row**: FP32 and FP16 only. int8 is the accelerator's native format, so this is a result worth
+  stating rather than a gap.
+
+Recorded as **DD-036**, which also amends DD-004. The order from here: the camera on the board with
+today's blobs (the ones already proven there, so a failure is Linux and not the model); then the
+redeploy; then the ONNX file, the Pi and the Nano.
