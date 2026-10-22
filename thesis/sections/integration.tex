@@ -15,8 +15,8 @@
 % with a bitstream, a bare-metal application, and a preprocessing path that is
 % bit-exact on the host. That is the Core success tier (DD-004) - REACHED on
 % the board on 2026-10-07 (Section~\ref{sec:board-remaining}). The live camera
-% (\DD{035}) is the Stretch tier and closes the chapter
-% (Section~\ref{sec:camera-path}).
+% (\DD{035}) is the Stretch tier - REACHED on 2026-10-22 - and closes the
+% chapter (Section~\ref{sec:camera-path}).
 % ===========================================================================
 \chapter{System Integration and the Embedded Application}
 \label{chap:integration}
@@ -146,17 +146,21 @@
 % Then what is NOT yet recorded, stated as plainly: the RGB image through
 % preproc.c (it must give the same four integers), the other three classes'
 % cards, the UART image source, and booting from the SD card without JTAG.
-% Fill these in from the bench; whatever is still missing at submission goes
-% to Section~\ref{sec:future}.
+% Under Linux on 2026-10-22 the same accel_drv.c and preproc.c did pass the
+% RGB path and all four classes (Section~\ref{sec:camera-path}) - say so, and
+% keep this list honest: for the bare-metal application itself they are
+% still unrecorded. Fill them in from the bench; whatever is still missing at
+% submission goes to Section~\ref{sec:future}.
 % TODO(REDEPLOY): after DD-036's redeploy, repeat the known-answer runs on
 % the new golden sets (one test-split photograph per class).
 
 \section{The Live Camera Path under Linux}
 \label{sec:camera-path}
 % \DD{035} - the Stretch tier. A SECTION for now; if it grows past a few pages
-% it can become a chapter of its own (left open in \DD{036}). Built and tested
-% on the PC; write the board result into Section~\ref{sec:camera-result} once
-% it exists, and keep only the design here.
+% it can become a chapter of its own (left open in \DD{036}). RUN ON THE BOARD
+% on 2026-10-22: all four known answers bit-exact under Linux, and the live
+% camera classifying (docs/lab_notebook.md). The results belong to
+% Section~\ref{sec:camera-result}; keep the design here, plus item 7 below.
 %
 % In this order, each the answer to a question a reader will ask:
 %   1. WHY LINUX. A UVC webcam needs a USB host stack and a UVC driver; the
@@ -186,6 +190,15 @@
 %      is saved after it, so check_camera_frame.py can re-derive the window,
 %      the tensor and the logits from the RGB the board actually used.
 %   6. THE SCREEN, in one paragraph: DisplayPort through fbdev, and the same
-%      image over HTTP to a laptop for a projector.
+%      image over HTTP to a laptop for a projector. Neither is verified on the
+%      board yet: there was no /dev/fb0 at boot on 2026-10-22.
+%   7. WHAT THE BOARD RUN COST, one paragraph, as for the bare-metal bring-up
+%      (Section~\ref{sec:board-remaining}) - and again none of it was the design:
+%      the image was built on WSL2 (Section~\ref{sec:petalinux}); the kit's SD
+%      card booted its own PetaLinux 2022.1 from an ext4 partition, so the
+%      board ran the wrong system until it was booted without image.ub; the
+%      UIO driver came out as a module despite the configuration fragment; the
+%      card mounts root-only. The known answers made each quick to isolate:
+%      the first run of the Linux port was bit-exact for all four classes.
 % A figure belongs here (the camera-to-class pipeline across the PS and the
 % PL); none exists yet - see thesis/README.md, Figures.

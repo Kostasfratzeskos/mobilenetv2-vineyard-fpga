@@ -21,11 +21,14 @@
 %      differ. DD-036 settles it: the leaf-split model is redeployed to the
 %      FPGA, so this gap closes with the redeploy.
 %   2. The \MHz{\thFmaxPhaseFour} figure is unattributed (Section~\ref{sec:phase4}).
-%   3. NOTHING ON HARDWARE YET beyond the one board run of 2026-10-07: the
-%      latency measured on the board, the power of all three platforms, the
-%      Raspberry Pi 4 and Jetson Nano comparison (\DD{036}) and the live
-%      camera (\DD{035}). Each needs a JSON report that thesis_numbers.py
-%      turns into macros before its section can be written - none is typed.
+%   3. ON HARDWARE SO FAR: the board runs of 2026-10-07 (bare metal) and
+%      2026-10-22 (Linux: all four known answers bit-exact, \thBoardMs{} ms per
+%      image, the live camera running) - their numbers are in
+%      manual_numbers.tex. STILL MISSING: the live loop's own numbers (they
+%      print as red TODOs until filled in), the power of all three platforms,
+%      and the Raspberry Pi 4 and Jetson Nano comparison (\DD{036}). Each
+%      edge-device figure needs a JSON report that thesis_numbers.py turns
+%      into macros before its section can be written - none is typed.
 % ===========================================================================
 \chapter{Experimental Evaluation}
 \label{chap:evaluation}
@@ -73,14 +76,26 @@
 % Weight loading is \thDmaLoadCycles{} cycles against \thCyclesCompute{} of
 % compute: \thLoadOverheadPct\% overhead, none of it hidden (C-11).
 %
-% Then the latency MEASURED ON THE BOARD, beside the derived one: vinecam's
-% per-run time (image DMA + run; mean, min and max over its --repeat runs).
-% Say why that is the only on-board timing - the accelerator has no
-% cycle-counter register and the bare-metal app prints no time - and what the
-% gap between the two figures is made of: the image DMA (about 0.25 ms,
-% Section~\ref{sec:image-path}) and the PS polling for the result.
+% Then the latency MEASURED ON THE BOARD (2026-10-22): \thBoardMs{} ms per
+% image, \thBoardMinMs{} to \thBoardMaxMs{} over \thBoardRuns{} runs - vinecam's
+% time from LOAD_IMAGE to the result. Build the prediction up to it, every
+% step a macro, so the reader sees what each figure contains:
+%     \thLatencyBoard{} ms   the compute alone (\thCycles{} cycles)
+%     \thSimStartDoneMs{} ms   start to done with the weight loads
+%                           (\thSimStartDone{} cycles, accel_dma_tb)
+%     \thBoardPredMs{} ms   plus the image load (\thImgLoadMs{} ms,
+%                           Section~\ref{sec:image-path})
+%     \thBoardMs{} ms   measured
+% The last \thBoardGapMs{} ms (\thBoardGapPct\%) is the PS side - polling and
+% the handshakes around the image load - and is NOT attributed further: say
+% so rather than explain it away. The spread is +-3 us, because the schedule
+% does not depend on the data: \thBoardIps{} images per second through the
+% accelerator alone. Say why vinecam's is the only on-board timing: the
+% accelerator has no cycle-counter register, and the bare-metal app prints
+% no time.
 % Then the end-to-end figures the comparison needs (\DD{036}): one image
-% through preprocessing and inference, and the live camera loop's frame rate
+% through preprocessing and inference (the copy into the DMA region alone is
+% \thBoardCopyMs{} ms), and the live loop's frame rate
 % (Section~\ref{sec:camera-result}).
 
 \section{Correctness and Accuracy Assessment}
@@ -94,11 +109,17 @@
 % This is the thesis's central result. Chapter~\ref{chap:verification} is the method;
 % this is the number.
 %
-% And on silicon: on 2026-10-07 the ZCU104 reproduced the four logits of
-% healthy_hl6025 exactly - -4950 -6177 15185 -5486, class 2 - against the
-% known answer the simulation had produced (Section~\ref{sec:board-remaining}).
-% State the scope precisely: one image, one run. Add the RGB-path and the
-% per-class runs here as they are recorded.
+% And on silicon, twice:
+%   - 2026-10-07, bare metal: the ZCU104 reproduced the four logits of
+%     healthy_hl6025 exactly - -4950 -6177 15185 -5486, class 2 - against the
+%     known answer the simulation had produced (Section~\ref{sec:board-remaining});
+%   - 2026-10-22, under Linux: all four classes bit-exact through the RGB
+%     path (preproc_rgb on the A53), and the healthy image through the int8
+%     path as well, with the same driver (Section~\ref{sec:camera-path}). One
+%     golden image per class, each exercising a different argmax outcome - on
+%     silicon this time.
+% State the scope precisely: four images, one per class. For the bare-metal
+% application itself, only the first is recorded.
 % TODO(REDEPLOY): after DD-036's redeploy, both halves are re-run on the new
 % golden sets (one test-split photograph per class) and this section reports
 % those.
@@ -190,10 +211,22 @@
 \section{Live Camera Demonstration}
 \label{sec:camera-result}
 % \DD{035}, the Stretch tier; the design is Section~\ref{sec:camera-path}.
-% If it runs on the board by submission: the live loop's frame rate, the FPGA
-% time against the front end's (resize and normalise on the A53 cores), and
-% the frame check - frames saved on the board, re-derived by
-% check_camera_frame.py, window, tensor and logits equal. Then the same
-% webcam on the Pi and the Nano, for the end-to-end line of the comparison.
-% If it does not run: one paragraph saying what was built and what did not
-% run, and the rest goes to Section~\ref{sec:future}.
+% IT RUNS: on 2026-10-22 the board classified a USB webcam's frames live
+% under Linux, with the accelerator in the loop (docs/lab_notebook.md; a
+% video was recorded - a still from it is the figure this section wants).
+% What to report, in this order:
+%   1. the known answers first, because they are what make the live run
+%      trustworthy: all four classes bit-exact on the board, \thBoardMs{} ms
+%      per image (Section~\ref{sec:throughput});
+%   2. the live loop: its frame rate (\thCamFps) and where each frame's time
+%      goes - the FPGA's \thBoardMs{} ms against the front end's
+%      \thCamFrontMs{} ms (resize and normalise on the A53) and the copy's
+%      \thBoardCopyMs{} ms. Both TODO macros come from the console status line,
+%      which was not saved on 2026-10-22 - copy it on the next live run;
+%   3. the frame check - frames saved on the board, re-derived by
+%      check_camera_frame.py, window, tensor and logits equal. Not run yet; it
+%      needs frames saved with S;
+%   4. what is not verified: the DisplayPort output (no /dev/fb0 at boot) and
+%      the browser view.
+% Then the same webcam on the Pi and the Nano, for the end-to-end line of
+% the comparison.

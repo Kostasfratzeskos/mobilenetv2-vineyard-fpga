@@ -58,13 +58,14 @@
 %   5. a measured comparison of the same model, on the same test images,
 %      against a Raspberry Pi 4 and a Jetson Nano: latency, power and energy
 %      per inference (Section~\ref{sec:comparison}, \DD{036});
-%   6. only if it runs on the board by submission: the live camera path - a
-%      USB webcam to a class, with the resize bit-exact against Pillow
+%   6. the live camera path, running on the board since 2026-10-22 - a USB
+%      webcam to a class, with the resize bit-exact against Pillow
 %      (Section~\ref{sec:camera-path}, \DD{035}).
-% A board result exists: on 2026-10-07 the bare-metal application reproduced
-% the known answer on the ZCU104, bit for bit (Section~\ref{sec:board-remaining}).
-% Claim exactly that - one image, one run - and no more until the other
-% bring-up checks are recorded.
+% Board results exist, so claim them exactly: on 2026-10-07 the bare-metal
+% application reproduced one known answer bit for bit
+% (Section~\ref{sec:board-remaining}); on 2026-10-22 the Linux port reproduced
+% all four, one per class, at \thBoardMs{} ms per image, and then ran the live
+% camera (Section~\ref{sec:camera-result}).
 
 \section{Thesis Outline}
 \label{sec:outline}

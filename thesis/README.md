@@ -114,10 +114,14 @@ Three gaps block Chapter 10:
    in `manual_numbers.tex` and `sections/accelerator_design.tex`.
 2. **The 202 MHz figure is unattributed** (`docs/claude_project/05_RESULTS.md` §2).
    Either do the back-to-back re-run or quote 179.0 MHz and say why.
-3. **Nothing in Chapter 10 has been measured on hardware yet** beyond the one board
-   run: the latency on the board, the power of all three platforms, the Raspberry Pi 4
-   and Jetson Nano comparison (DD-036), and the live camera (DD-035). Each needs a
-   report `scripts/thesis_numbers.py` can read before it can appear in the text.
+3. **Part of Chapter 10 is not measured yet.** Measured on the board so far: the
+   bare-metal known answer (2026-10-07) and, under Linux (2026-10-22), all four known
+   answers bit-exact at 6.659 ms per image, with the live camera running. Those numbers
+   are `[MEASURED]` macros in `manual_numbers.tex` (`\thBoard*`). Still missing: the
+   live loop's own numbers (`\thCamFps`, `\thCamFrontMs` print as red TODOs until the
+   console output of a live run is copied in), the power of all three platforms, and
+   the Raspberry Pi 4 and Jetson Nano comparison (DD-036). Each edge-device figure
+   needs a report `scripts/thesis_numbers.py` can read before it can appear in the text.
 
 The comparison adds to the order above rather than changing it: its setup goes into
 `exper_setup_dev_tools`, its results into `exper_eval`, and its literature into

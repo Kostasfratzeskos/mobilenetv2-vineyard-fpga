@@ -21,9 +21,12 @@
 %     reproduced the known answer bit for bit (Section~\ref{sec:board-remaining}).
 %     Say exactly what that run covered - one image - and what the other
 %     bring-up checks showed, once they are recorded.
-%   Stretch - built and tested on the PC (\DD{035}). Write the board result
-%     here once it exists (Section~\ref{sec:camera-result}), or one clause
-%     saying it did not run.
+%   Stretch - REACHED on 2026-10-22: a USB webcam classified live on the
+%     board under Linux, after all four known answers had come out bit-exact
+%     there, at \thBoardMs{} ms per image (Section~\ref{sec:camera-result}).
+%     Say what is not verified as plainly: the live loop's frame rate (until
+%     its console numbers are recorded), the DisplayPort output, the frame
+%     check.
 %
 % Then the comparison (\DD{036}), answered as plainly as the tiers: against a
 % Raspberry Pi 4 and a Jetson Nano running the same model on the same images,
@@ -76,8 +79,10 @@
 %     zero spare, and the weight address width has 22% headroom FOR THIS MODEL -
 %     features.18.0 is 800/1024 and the classifier is small only because there
 %     are \thClasses{} classes. A 1000-class head would need 2,560.
-%   - The Stretch tier is built (\DD{035}); whatever of it has not run on the
-%     board by submission goes here, sized.
+%   - The camera path's loose ends, if still open at submission: the
+%     DisplayPort output, the frame check, and the two build defects found on
+%     the board - the UIO driver built as a module, and the boot image that
+%     switches into any ext4 root filesystem on the card (\DD{035}).
 %   - Field data: out of scope by decision (\DD{036}). Photographs from the
 %     grapevine IoT deployment [morellos2024iot] - first as a test set of their
 %     own, since every accuracy figure here is on PlantVillage photographs taken

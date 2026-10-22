@@ -49,9 +49,9 @@
 \newcommand{\thLoadOverheadPct}{17.3}
 % [DERIVED] \thCycles / \thClkBoard, i.e. 951833 / 187.5e6.
 % NOTE: "Board" means AT THE BOARD'S CLOCK - this is not measured on the
-% board. The measured figure will be vinecam's per-run time (image DMA + run,
-% DD-036): the accelerator has no cycle-counter register, and the bare-metal
-% app prints no time. When it exists, quote both and the gap between them.
+% board, and it is the COMPUTE alone (feeder busy). The measured figure is
+% \thBoardMs (the block below, 2026-10-22), which also contains the weight
+% loads and the image load. Quote both, and say which is which.
 \newcommand{\thLatencyBoard}{5.08}
 % [DERIVED] the one-MAC-per-cycle baseline that Section~\ref{sec:parallelism}
 % rejects: \thMacs / \thClkBoard, i.e. 299562112 / 187.5e6 = 1.598 s. The
@@ -65,6 +65,49 @@
 % cycle counts, so it is clock-independent; equivalently \thLatencySeq /
 % \thLatencyBoard.
 \newcommand{\thSpeedupSeq}{315}
+
+% --- measured on the board (DD-035, DD-036) -------------------------------
+% [MEASURED] 2026-10-22, docs/lab_notebook.md: `vinecam --image image_q8.bin
+% --repeat 100` on the ZCU104 under PetaLinux 2022.2, timed with clock_gettime
+% on the A53 from LOAD_IMAGE to the result - the image DMA plus the whole run.
+% The only on-board timing there is: the accelerator has no cycle-counter
+% register, and the bare-metal app prints no time. Blobs: the export of
+% \thCkptSha. The spread is +-3 us, because the schedule does not depend on
+% the data.
+\newcommand{\thBoardMs}{6.659}
+\newcommand{\thBoardMinMs}{6.657}
+\newcommand{\thBoardMaxMs}{6.663}
+\newcommand{\thBoardRuns}{100}
+% [MEASURED] same run: the CPU's copy of one 150,528-byte tensor into the
+% uncached DMA region, per image.
+\newcommand{\thBoardCopyMs}{0.160}
+% [MEASURED] accel_dma_tb, 2026-09-25 (docs/lab_notebook.md): start to done in
+% simulation, weight loads included. The image is loaded BEFORE start, so it
+% is not in this figure.
+\newcommand{\thSimStartDone}{1\,151\,347}
+% [DERIVED] \thSimStartDone / \thClkBoard, i.e. 1151347 / 187.5e6 = 6.141 ms.
+\newcommand{\thSimStartDoneMs}{6.14}
+% [DERIVED] the image load at one pixel per cycle (DD-032): 50,176 / 187.5e6
+% = 0.268 ms.
+\newcommand{\thImgLoadMs}{0.27}
+% [DERIVED] what vinecam times, predicted from simulation: 6.141 + 0.268 =
+% 6.408 ms.
+\newcommand{\thBoardPredMs}{6.41}
+% [DERIVED] measured minus predicted, 6.659 - 6.408 = 0.251 ms, 3.8% of the
+% measurement: the PS side (polling, the handshakes around the image load).
+% NOT attributed further - say so wherever it is quoted.
+\newcommand{\thBoardGapMs}{0.25}
+\newcommand{\thBoardGapPct}{3.8}
+% [DERIVED] 1000 / \thBoardMs = 150.2 images per second, accelerator alone.
+\newcommand{\thBoardIps}{150}
+% TODO(REDEPLOY): the schedule does not depend on the weights, so none of the
+% above should move. Re-run --repeat 100 once after the redeploy, and say so.
+%
+% [MEASURED - NOT YET] the live camera loop (lab guide C5, 2026-10-22). It ran
+% on the board, but its console status line was not saved. Copy the console
+% on the next live run and fill these in. Until then they print as red TODOs.
+\newcommand{\thCamFps}{\TODO{live frame rate, from the console}}
+\newcommand{\thCamFrontMs}{\TODO{front-end ms per frame, from the console}}
 
 % --- the Tm/Tn design space (DD-013) --------------------------------------
 % [DERIVED] scripts/analyze_workload.py, "Tm/Tn sweep at constant P=512".

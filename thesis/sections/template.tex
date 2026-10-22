@@ -197,9 +197,10 @@
 %   \thElements elements bit-exact over \thInstructions instructions
 %   \thDspAccelAxi DSPs (\thDspPctAccelAxi\%)
 %   \MHz{\thClkBoard} in context on the ZCU104, and that it RAN there,
-%     bit-exact against the known answer (2026-10-07)
-%   the latency MEASURED on the board - \thLatencyBoard{} is derived from the
-%     simulated cycle count, so quote the measured figure once it exists
+%     bit-exact against the known answers (2026-10-07, 2026-10-22)
+%   \thBoardMs{} ms per image, MEASURED on the board (\thLatencyBoard{} is
+%     the compute alone, derived from simulation - do not quote it as latency)
+%   the live camera, classifying on the board (the Stretch tier)
 %   int8 accuracy on the held-out test split, \thAccInt\%
 %   against the Raspberry Pi 4 and the Jetson Nano running the same model:
 %     latency and energy per inference (DD-036), from their reports
