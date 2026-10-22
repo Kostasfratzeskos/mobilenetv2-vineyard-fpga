@@ -2453,3 +2453,107 @@ the WARNING line that stays until the redeploy.
 Recorded as **DD-036**, which also amends DD-004. The order from here: the camera on the board with
 today's blobs (the ones already proven there, so a failure is Linux and not the model); then the
 redeploy; then the ONNX file, the Pi and the Nano.
+
+### 2026-10-22 - The camera path on the board: four known answers bit-exact, and the live camera running
+
+*From today's bench session. The console lines below are pasted from the board.*
+
+#### The image
+
+PetaLinux 2022.2, built by `firmware/linux/petalinux/build.sh` on **WSL2 (Ubuntu 20.04) on this
+laptop** - the first Linux build host the project has had. It needed `libtinfo5` and `libncurses5`
+installed first. The first build reported `Failed to build project` although all 7,794 tasks had
+succeeded: two packages (`socat`, `python3-pygobject`) timed out downloading from the sstate
+mirror (`ConnectionError`), were built locally instead, and left two `ERROR:` lines behind.
+`build.sh` stops on any failure, so it stopped before packaging `BOOT.BIN`. The re-run finished
+cleanly. Before the card went into the board, every file on it was compared byte for byte with the
+build.
+
+The ZCU104 kit has no camera; an ordinary UVC webcam was used.
+
+#### Three things only the board could show - none of them the design
+
+1. **The board booted somebody else's Linux.** The SD card from the kit also carries a PetaLinux
+   **2022.1** root filesystem on an ext4 second partition. `image.ub`'s small ramdisk looks for a
+   root filesystem on ext4 and switches into it, so the board came up as `xilinx-zcu104-20221`: my
+   kernel, the old system's userland, no matching modules, and `/sys/class/uio` listing only four
+   `axi-pmon`. The fix was to boot without `image.ub`: `Image`, `system.dtb` and
+   `rootfs.cpio.gz.u-boot` copied to the card, `image.ub` renamed off it. The prompt then said
+   `xilinx-zcu104-20222`.
+2. **The UIO driver came out as a module.** `CONFIG_UIO_PDRV_GENIRQ` is `=m` in the built kernel,
+   although `vinecam.cfg` asks for `=y`. The fragment is fetched and merged, so something merged
+   after it wins - most likely the BSP's own `bsp.cfg`, which is listed in `KERNEL_FEATURES`. Until
+   `build.sh` fixes that, `sudo modprobe uio_pdrv_genirq` after every boot; `vine-accel` then
+   appears, as `/dev/uio4`.
+3. **The card is mounted root-only** (`fmask=0007`), so even `cd` into it fails as `petalinux`.
+   Work from `sudo -s`.
+
+#### The known answers (lab guide C4)
+
+```
+/dev/uio4: CSR at 0xa0000000, DMA region 0x38000000 + 16384 KB
+accelerator alive (ID reads VINE)
+blobs written to the DMA region and read back intact
+...
+image: image_q8.bin
+  int8 224x224x3 - straight to the DMA, no preprocessing
+  logits:  -4950  -6177  15185  -5486
+  class : 2 = Healthy (100.0 %)
+  PASS - all four logits and the class equal EXPECTED.txt, bit for bit
+```
+
+| image | path | logits | class | |
+|:--|:--|:--|:--|:--|
+| `image_q8.bin` | int8, straight to the DMA | -4950 -6177 15185 -5486 | 2 Healthy | PASS |
+| `image_rgb.bin` | RGB, `preproc_rgb` on the A53 | -4950 -6177 15185 -5486 | 2 Healthy | PASS |
+| `esca/image_rgb.bin` | RGB | -8592 23216 -10575 -3925 | 1 ESCA | PASS |
+| `blackrot/image_rgb.bin` | RGB | 12405 -2762 -5686 -3679 | 0 Black Rot | PASS |
+| `blight/image_rgb.bin` | RGB | -1751 -7243 -4688 13659 | 3 Leaf Blight | PASS |
+
+**Every class, bit for bit, on the first run of the Linux port.** It checks what no PC test could:
+the UIO mapping, the `no-map` region, the physical-address hook, and the write ordering before each
+start. The 2.37 MB of blobs written through the uncached mapping came back intact. On the
+bare-metal side the RGB path and the other three classes are still unrecorded (tests 2-3 of
+2026-10-07). Here they ran through the same `preproc.c` and `accel_drv.c`.
+
+#### How long it takes
+
+```
+accelerator: 6.659 ms mean, 6.657 min, 6.663 max over 100 runs
+             (image DMA + run; the copy into the region is 0.160 ms more)
+```
+
+What the simulation predicts for the same interval:
+
+```
+start -> done, accel_dma_tb (2026-09-25), weight loads included   1,151,347 cycles   6.14 ms
+the image load before start: 50,176 pixels at one per cycle          50,176 cycles   0.27 ms
+predicted, at 187.5 MHz                                                              6.41 ms
+measured                                                                             6.66 ms
+```
+
+So 0.25 ms (3.8%) is on the PS side - polling, and the handshakes around the image load - and is
+not attributed further yet. The spread is ±3 µs over 100 runs, because nothing in the schedule
+depends on the data. That is **150 images a second** through the accelerator alone. The copy into
+the uncached region costs 0.160 ms a frame, 2.4% of the accelerator's time - DD-035 accepted that
+cost, and it is small enough to stay accepted.
+
+`\thLatencyBoard` (5.08 ms) is the compute alone, at the board's clock. 6.14 ms adds the weight
+loads, and 6.66 ms is what the board measures. The thesis has to say which is which.
+
+#### The live camera (lab guide C5)
+
+It runs. The webcam came up as `/dev/video0` (and `video1`, its metadata node), and the board
+classified its frames live. There is a video of it. Not recorded:
+
+- the console's per-second status line - frame rate, front-end time and FPGA time per frame. These
+  are the camera path's numbers for the thesis; copy the console on the next run;
+- the DisplayPort output. `/dev/fb0` was absent at boot (no monitor detected), and its checks were
+  not run;
+- the browser view and the frame check (C6-C7). The frame check needs frames saved with `S`.
+
+That is the **Stretch tier reached**: a live camera, classified by the accelerator, on the board.
+Recorded in DD-035. Still to fix in the repository: `vinecam` should load its UIO driver itself,
+`build.sh` should build that driver into the kernel, and the README's card instructions should warn
+about an ext4 partition (today's README update does the last). Next, by DD-036's order: the
+redeploy.

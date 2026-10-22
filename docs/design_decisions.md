@@ -1832,7 +1832,8 @@ argmax over the 4 int16 logits is the predicted class.
   regenerated from the new checkpoint, which closes the consequence above.
 
 ### DD-035 — The live camera on the board: Linux, a fifth platform hook, and a Pillow-exact resize
-- Status: Accepted — built and tested on the PC; **not yet run on the board**
+- Status: Accepted — built and tested on the PC; **run on the board on 2026-10-22**: the known
+  answers bit-exact for all four classes, the live camera classifying (see "Board result" below)
 - Date: 2026-10-20
 - Numbering: DD-034 is the accuracy entry on branch `accuracy-test-split`; this one follows it so
   the two branches merge without a collision.
@@ -1960,6 +1961,22 @@ argmax over the 4 int16 logits is the predicted class.
   the built `system.dtb` instead. The first board run is `vinecam --image image_q8.bin --expect
   EXPECTED.txt`, a known answer with no camera, before anything new is trusted.
 
+- **Board result, 2026-10-22** (`docs/lab_notebook.md`, that date). The image was built on WSL2
+  (Ubuntu 20.04). `vinecam --image … --expect …` was **bit-exact for all four classes**, through the
+  int8 path and through `preproc_rgb` on the A53. The accelerator takes **6.659 ms** per image (image
+  DMA + run; mean of 100 runs, 6.657 to 6.663). The copy into the uncached region costs 0.160 ms,
+  2.4% of that, so the first revisit condition below did not occur. The live camera ran and
+  classified. Not yet verified: the DisplayPort output (no `/dev/fb0` at boot), the browser view and
+  the frame check.
+
+  Two defects in the build were found on the bench, worked around there, and are still to be fixed
+  here:
+  - `CONFIG_UIO_PDRV_GENIRQ` comes out as a module despite `vinecam.cfg` - most likely the BSP's
+    `bsp.cfg` (in `KERNEL_FEATURES`) is merged after it. Workaround: `modprobe uio_pdrv_genirq`
+    after each boot.
+  - `image.ub`'s ramdisk switches into any ext4 root filesystem it finds on the card, such as the
+    kit card's PetaLinux 2022.1. Workaround: boot `Image` + `system.dtb` + `rootfs.cpio.gz.u-boot`.
+
 - Revisit if: the board run shows the poll limit or the copy mattering (then u-dma-buf, or HPC0);
   a camera that offers only MJPEG has to be supported; a larger root filesystem makes U-Boot place
   the ramdisk over `0x3800_0000` (the kernel then refuses the initrd at boot — move the carve-out);
@@ -2029,7 +2046,8 @@ argmax over the 4 int16 logits is the predicted class.
     (DD-034).
   - **Order:** the camera runs on the board first (DD-035), with today's blobs — they are the ones
     already proven on the board, so a failure there is Linux and not the model. Then the redeploy,
-    then the Pi and the Nano. One change at a time.
+    then the Pi and the Nano. One change at a time. (2026-10-22: the camera step is done, see
+    DD-035's board result. The redeploy is next.)
 
 - The current golden sets against the new split (`data/grape_leafsplit/split.csv`, checked
   2026-10-21):
