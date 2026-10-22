@@ -12,7 +12,8 @@ network matches.
   Linux, with the same accelerator and preprocessing: `firmware/linux/README.md` (DD-035).
 
 Status: Foundation reached; Core reached on 2026-10-07 (the bare-metal app on the ZCU104,
-bit-exact against the known answer); Stretch built and tested on the PC, not yet run on the board.
+bit-exact against the known answer); Stretch reached on 2026-10-22 (a USB webcam classified live
+on the board under Linux, the known answers bit-exact for all four classes, 6.66 ms per image).
 
 The evaluation also runs **the same model on two edge devices** — a Raspberry Pi 4 (CPU) and a
 Jetson Nano (GPU) — on the same test images, with the same measurements (DD-036). The dataset is

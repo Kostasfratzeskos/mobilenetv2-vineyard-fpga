@@ -58,7 +58,10 @@ firmware/linux/
 | the screen layout | `test_ui` at 10 sizes, 64×48 to 4K, with guard words; `render_ui` looked at | nothing drawn outside the canvas or into the bottom margin, for 4:3 and 16:9 frames; green only for Healthy |
 | everything else compiles for the board | `make check`: aarch64 Linux, `-Wall -Wextra -Werror`, static | builds clean |
 | the device-tree fragment | — | **not compiled here** (the Vitis `dtc` is a Linux binary). `build.sh` checks the *built* `system.dtb` with `dtc` on the build host |
-| PetaLinux build, V4L2, UIO, DisplayPort, the HTTP view | — | **untested: needs the Linux build host and the board** |
+| the PetaLinux build | `build.sh` on WSL2, Ubuntu 20.04 (2026-10-22) | **builds**. The first run reported failure after every task had succeeded (two sstate download time-outs); the re-run was clean - step 4 |
+| the Linux port on the board: UIO, the DMA region, the address hook | step 7, all four known answers (2026-10-22) | **bit-exact**, int8 and RGB, all four classes; **6.659 ms** per image over 100 runs |
+| the webcam (V4L2) and the live loop | step 8 (2026-10-22) | **runs and classifies on the board**; its per-second numbers are not recorded yet |
+| DisplayPort (`/dev/fb0`), the browser view, the saved-frame check | steps 8-10 | **not yet**: no `/dev/fb0` at boot (no monitor was detected); the other two not run |
 
 The order of operations below is designed around that: the first thing to run on the board
 is a **known answer with no camera** (step 7), which tests the whole Linux port against
@@ -158,6 +161,11 @@ and a `BOOT.BIN` that carries the bitstream. The first build takes an hour or mo
 by checking that the built device tree contains the accelerator node, the carve-out with
 `no-map`, and the boot arguments, and then lists the three files for the card.
 
+On Ubuntu 20.04 - WSL2 works; that is how it was built on 2026-10-22 - install `libtinfo5` and
+`libncurses5` first. If `petalinux-build` ends with `Failed to build project` although every
+task succeeded, look for `ConnectionError` in the log: the sstate mirror timed out on a package,
+which was then built locally anyway. `build.sh` stops there, before `BOOT.BIN`; run it again.
+
 ### 5. Prepare the SD card
 
 One FAT32 partition, everything in its root:
@@ -172,6 +180,14 @@ One FAT32 partition, everything in its root:
 
 `vinecam` looks for the blobs in its own directory, so keeping them together needs no options.
 
+**Use a card whose only partition is this FAT32 one.** The card in the ZCU104 kit also carries
+an ext4 partition with PetaLinux 2022.1, and `image.ub`'s ramdisk switches into any root
+filesystem it finds there. The board then runs the old system (the prompt says
+`xilinx-zcu104-20221`) and no `vine-accel` appears. Either use a clean card, or leave
+`image.ub` off this one and copy `Image`, `system.dtb` and `rootfs.cpio.gz.u-boot` from
+`images/linux/` instead: `boot.scr` then boots the kernel with the full root filesystem in RAM.
+That is how the board ran on 2026-10-22.
+
 ### 6. Boot
 
 1. Set the boot-mode switch **SW6 to SD** (check UG1267's boot-mode table for your board revision).
@@ -179,8 +195,13 @@ One FAT32 partition, everything in its root:
 3. Plug in the monitor *before* power-on (`/dev/fb0` is created at boot), and the webcam.
 4. Power on. Linux boots to a login prompt. PetaLinux 2022.2 logs in as `petalinux` and asks
    you to set a password on the first login. Root commands use `sudo`.
-5. Find the SD card: `mount | grep mmcblk`. It is usually `/run/media/mmcblk0p1` (or
-   `…/mmcblk1p1`). Then `cd` there.
+5. Become root and load the UIO driver. Both are needed after every boot, for now:
+   ```
+   sudo -s                       # the card is mounted root-only (fmask=0007)
+   modprobe uio_pdrv_genirq      # this build makes it a module, despite vinecam.cfg (DD-035)
+   ```
+6. Find the SD card: `mount | grep mmcblk`. It is usually `/run/media/mmcblk0p1` (or
+   `…/mmcblk1p1`). Then `cd` there. Not `…p2`: on the kit's card that is the old system.
 
 Quick checks before vinecam:
 
@@ -188,7 +209,7 @@ Quick checks before vinecam:
 ls /sys/class/uio/              # a uioN whose name is vine-accel:
 cat /sys/class/uio/uio*/name
 ls /dev/video*                  # the camera (video0; video1 is its metadata node)
-ls /dev/fb0                     # the monitor
+ls /dev/fb0                     # the monitor - absent if none was detected at boot
 cat /proc/cmdline               # contains clk_ignore_unused and uio_pdrv_genirq.of_id=...
 ```
 
@@ -296,7 +317,9 @@ from the RGB the board actually used.
 
 | symptom | likely cause |
 |:--|:--|
-| `no UIO device called vine-accel` | the image was not built with `vinecam.dtsi`. Check `ls /proc/device-tree/ \| grep vine`. If the node is there but no uio: vinecam binds it itself and says so. If that fails, `uio_pdrv_genirq` is not in the kernel (`vinecam.cfg`) |
+| the prompt says `xilinx-zcu104-20221`, and `/sys/class/uio` lists only `axi-pmon` | the board booted the old system from the card's ext4 partition - see step 5 |
+| `petalinux-build` says `Failed to build project`, but every task succeeded | sstate download time-outs (`ConnectionError` in the log): run `build.sh` again - see step 4 |
+| `no UIO device called vine-accel` | first `modprobe uio_pdrv_genirq` (step 6): this build makes it a module. If that does not help, the image was not built with `vinecam.dtsi`: check `ls /proc/device-tree/ \| grep vine`. If the node is there but no uio, vinecam binds it itself and says so |
 | the board **freezes** at `reading the accelerator's ID` | the PL is not clocked or not programmed: a read of a dead AXI slave never completes. Check `cat /proc/cmdline` for `clk_ignore_unused`, and that `BOOT.BIN` was packaged with `--fpga` (step 4 does) |
 | `the ID register did not read VINE` | the PL is clocked but holds another design: wrong `.bit` in `BOOT.BIN` |
 | `the DMA region ... is listed as System RAM` | the carve-out is missing or lacks `no-map`: the kernel is using that memory |
@@ -304,9 +327,9 @@ from the RGB the board actually used.
 | `image_q8.bin` passes, `image_rgb.bin` fails | the board's `preproc_rgb`: the FPU rounding mode (the self-test should already have said so) |
 | `offers neither YUYV nor UYVY` | an MJPEG-only camera: use another webcam |
 | `no frames from the camera` on screen | the USB cable/adapter, or a USB 2 camera on a marginal hub. `dmesg \| tail` shows UVC errors |
-| no picture on the monitor | the monitor was not connected at boot, or the HDMI adapter is passive. Use `--http` instead |
+| no picture on the monitor, or no `/dev/fb0` | no monitor was detected at boot: DisplayPort **P11** (HDMI P7 is not driven), an *active* adapter if the screen is HDMI, the monitor on before power-on. `cat /sys/class/drm/card*-DP-*/status` says whether it is seen. Meanwhile run with `--no-display`, or `--http` |
 | the text console looks dead after a crash | `sudo ./vinecam --restore-console` |
-| `Permission denied` on `/dev/uio*` or `/dev/fb0` | run with `sudo` |
+| `Permission denied` on `/dev/uio*`, `/dev/fb0`, or inside the card's folder | run as root (`sudo -s`): the card is mounted root-only |
 
 ---
 
@@ -357,6 +380,8 @@ Per frame: the camera delivers YUYV, `camfront` converts and resizes (CPU), `pre
 quantises (CPU, a table lookup), the tensor is copied into the region (CPU), and the
 accelerator loads the image and runs (PL). The console's status line reports the FPGA time,
 the front end's time and the copy separately, so a slow frame rate can be traced to its
-stage. The FPGA's share is fixed, about 6 ms. The rest depends on the camera resolution
+stage. The FPGA's share is fixed: **6.659 ms**, measured on the board on 2026-10-22 (mean of
+100 runs, 6.657 to 6.663 ms), against 6.41 ms predicted from simulation. The copy into the
+region adds 0.160 ms. The rest depends on the camera resolution
 (640×480 is the default and the fastest that is still sharp enough) and on the monitor's
 resolution, since the whole screen is redrawn every frame.

@@ -33,11 +33,18 @@ the DMA can use.
 
 ## What is tested, and what is not
 
-**It has run on the board once** — 2026-10-07, the ZCU104 booted over JTAG with the
-int8 `healthy_hl6025` image: logits `-4950 -6177 15185 -5486`, class 2 (Healthy), the
-same four integers as `EXPECTED.txt` (`docs/lab_notebook.md`, that date). The other
-bring-up checks — the RGB image through `preproc.c`, the other three classes, the UART
-source, booting from the SD card — are not recorded yet.
+**It has run on the board**, twice:
+
+- **Bare metal, 2026-10-07.** The ZCU104 booted over JTAG with the int8 `healthy_hl6025`
+  image: logits `-4950 -6177 15185 -5486`, class 2 (Healthy), the same four integers as
+  `EXPECTED.txt`.
+- **Under Linux, 2026-10-22**, as the camera application, which is built from the same
+  `accel_drv.c` and `preproc.c`. All four classes were bit-exact, through the int8 path and
+  through the RGB path, at 6.659 ms per image ([`linux/README.md`](linux/README.md)).
+
+Both are in `docs/lab_notebook.md`, under their dates. For the bare-metal application itself,
+the RGB image, the other three classes, the UART source and booting from the SD card are still
+unrecorded.
 
 The code was written before there was a board, so it is split so that the part most
 likely to be wrong can be checked without one:
