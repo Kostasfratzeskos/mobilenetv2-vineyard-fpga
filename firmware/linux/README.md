@@ -59,7 +59,7 @@ firmware/linux/
 | everything else compiles for the board | `make check`: aarch64 Linux, `-Wall -Wextra -Werror`, static | builds clean |
 | the device-tree fragment | — | **not compiled here** (the Vitis `dtc` is a Linux binary). `build.sh` checks the *built* `system.dtb` with `dtc` on the build host |
 | the PetaLinux build | `build.sh` on WSL2, Ubuntu 20.04 (2026-10-22) | **builds**. The first run reported failure after every task had succeeded (two sstate download time-outs); the re-run was clean - step 4 |
-| the Linux port on the board: UIO, the DMA region, the address hook | step 7, all four known answers (2026-10-22) | **bit-exact**, int8 and RGB, all four classes; **6.659 ms** per image over 100 runs |
+| the Linux port on the board: UIO, the DMA region, the address hook | step 7, all four known answers (2026-10-22) | **bit-exact**: all four classes through RGB, the healthy one through int8 as well; **6.659 ms** per image over 100 runs |
 | the webcam (V4L2) and the live loop | step 8 (2026-10-22) | **runs and classifies on the board**; its per-second numbers are not recorded yet |
 | DisplayPort (`/dev/fb0`), the browser view, the saved-frame check | steps 8-10 | **not yet**: no `/dev/fb0` at boot (no monitor was detected); the other two not run |
 

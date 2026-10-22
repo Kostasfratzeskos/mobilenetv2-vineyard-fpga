@@ -1962,8 +1962,9 @@ argmax over the 4 int16 logits is the predicted class.
   EXPECTED.txt`, a known answer with no camera, before anything new is trusted.
 
 - **Board result, 2026-10-22** (`docs/lab_notebook.md`, that date). The image was built on WSL2
-  (Ubuntu 20.04). `vinecam --image … --expect …` was **bit-exact for all four classes**, through the
-  int8 path and through `preproc_rgb` on the A53. The accelerator takes **6.659 ms** per image (image
+  (Ubuntu 20.04). `vinecam --image … --expect …` was **bit-exact for all four classes** through
+  `preproc_rgb` on the A53, and for the healthy image through the int8 path as well. The
+  accelerator takes **6.659 ms** per image (image
   DMA + run; mean of 100 runs, 6.657 to 6.663). The copy into the uncached region costs 0.160 ms,
   2.4% of that, so the first revisit condition below did not occur. The live camera ran and
   classified. Not yet verified: the DisplayPort output (no `/dev/fb0` at boot), the browser view and

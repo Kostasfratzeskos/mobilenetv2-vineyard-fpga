@@ -39,8 +39,9 @@ the DMA can use.
   image: logits `-4950 -6177 15185 -5486`, class 2 (Healthy), the same four integers as
   `EXPECTED.txt`.
 - **Under Linux, 2026-10-22**, as the camera application, which is built from the same
-  `accel_drv.c` and `preproc.c`. All four classes were bit-exact, through the int8 path and
-  through the RGB path, at 6.659 ms per image ([`linux/README.md`](linux/README.md)).
+  `accel_drv.c` and `preproc.c`. All four classes were bit-exact through the RGB path, and
+  the healthy image through the int8 path too, at 6.659 ms per image
+  ([`linux/README.md`](linux/README.md)).
 
 Both are in `docs/lab_notebook.md`, under their dates. For the bare-metal application itself,
 the RGB image, the other three classes, the UART source and booting from the SD card are still
