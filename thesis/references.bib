@@ -1,9 +1,10 @@
 % ===========================================================================
 % Bibliography.
 %
-% The 36 entries below are the reference list from the supervisor's template,
-% transcribed. Several of the papers are already in the repository under
-% docs/references/ - that directory is the read-first list.
+% The first 36 entries below are the reference list from the supervisor's
+% template, transcribed. Several of the papers are already in the repository
+% under docs/references/ - that directory is the read-first list. Entries
+% added since carry a comment naming the decision that needed them.
 %
 % Keys are author+year+shortname. Add new entries at the end of the relevant
 % section rather than re-sorting: stable keys keep diffs readable.
@@ -39,6 +40,20 @@
   volume  = {7},
   pages   = {1419},
   year    = {2016},
+}
+
+% DD-036: the closest published deployment - grape leaves on a Jetson Nano.
+@article{karim2024grapeedge,
+  author  = {Karim, Md. Jawadul and Goni, Md. Omaer Faruq and Nahiduzzaman, Md.
+             and Ahsan, Mominul and Haider, Julfikar and Kowalski, Marcin},
+  title   = {Enhancing Agriculture through Real-Time Grape Leaf Disease
+             Classification via an Edge Device with a Lightweight {CNN}
+             Architecture and {Grad-CAM}},
+  journal = {Scientific Reports},
+  volume  = {14},
+  pages   = {16022},
+  year    = {2024},
+  doi     = {10.1038/s41598-024-66989-9},
 }
 
 % --- networks and training ------------------------------------------------
@@ -345,4 +360,64 @@
   title        = {{Vivado} Design Suite User Guide: Synthesis},
   howpublished = {UG901},
   organization = {Xilinx, Inc.},
+}
+
+% DD-035: the Linux image the live camera runs under.
+@misc{xilinx_ug1144,
+  title        = {{PetaLinux} Tools Documentation: Reference Guide},
+  howpublished = {UG1144 (v2022.2)},
+  organization = {Xilinx, Inc.},
+}
+
+% --- edge platforms and runtimes (DD-036) ---------------------------------
+% Vendor web documentation. Before submission, check each URL and cite the
+% version actually used on the device (the Nano runs JetPack 4.6, i.e.
+% TensorRT 8.2), and add the date it was accessed if the style asks for one.
+
+@misc{rpi4_brief,
+  title        = {{Raspberry Pi} 4 {Model B}: Product Brief},
+  organization = {Raspberry Pi Ltd},
+  url          = {https://datasheets.raspberrypi.com/rpi4/raspberry-pi-4-product-brief.pdf},
+}
+
+@misc{nvidia_jetson_nano,
+  title        = {{Jetson Nano} Developer Kit},
+  organization = {NVIDIA Corporation},
+  url          = {https://developer.nvidia.com/embedded/jetson-nano-developer-kit},
+}
+
+@misc{nvidia_tensorrt,
+  title        = {{NVIDIA TensorRT} Developer Guide},
+  organization = {NVIDIA Corporation},
+  url          = {https://docs.nvidia.com/deeplearning/tensorrt/},
+}
+
+% The source for "no int8 on the Nano": int8 needs compute capability 6.1 or
+% later, and the Nano's GPU is 5.3.
+@misc{nvidia_tensorrt_support,
+  title        = {{NVIDIA TensorRT} Support Matrix},
+  howpublished = {Supported precisions by {GPU} compute capability},
+  organization = {NVIDIA Corporation},
+  url          = {https://docs.nvidia.com/deeplearning/tensorrt/},
+}
+
+@misc{onnx,
+  title        = {{ONNX}: Open Neural Network Exchange},
+  organization = {{LF AI \& Data} Foundation},
+  url          = {https://onnx.ai},
+}
+
+@misc{onnxruntime,
+  author       = {{ONNX Runtime developers}},
+  title        = {{ONNX Runtime}},
+  organization = {Microsoft},
+  year         = {2021},
+  url          = {https://onnxruntime.ai},
+}
+
+% DD-035: camfront.c transcribes Pillow's resampler, so the claim cites it.
+@misc{pillow,
+  author       = {Clark, Alex and others},
+  title        = {Pillow ({PIL} Fork) Documentation},
+  url          = {https://python-pillow.org},
 }

@@ -1,6 +1,8 @@
 % ===========================================================================
-% SOURCES: docs/claude_project/01_PROJECT_BRIEF.md
-%          docs/design_decisions.md (DD-004, the tiered scope)
+% SOURCES: docs/claude_project/01_PROJECT_BRIEF.md (a snapshot of 2026-09-24:
+%            its status table and its "field contact" dataset are out of date)
+%          docs/design_decisions.md (DD-004, the tiered scope; DD-036, the
+%            scope as amended - the dataset and the comparison)
 %
 % WRITE THIS LAST but one. The introduction promises what the thesis delivers,
 % and you cannot write the promise honestly until chapters 5-10 exist.
@@ -15,6 +17,11 @@
 % power); why an FPGA rather than a CPU, a GPU or a phone.
 % Ground this in [morellos2024iot] - the IoT grapevine-monitoring service is
 % the application context this thesis accelerates.
+% The CPU-or-GPU question is no longer only rhetorical: this thesis MEASURES
+% it, running the same model on a Raspberry Pi 4 and a Jetson Nano - the
+% boards such deployments actually use [karim2024grapeedge] - with the same
+% test images and the same meter (\DD{036}). Say here only that it is
+% measured; the numbers belong to Section~\ref{sec:comparison}.
 
 \section{Objectives and Scope}
 \label{sec:objectives}
@@ -26,6 +33,14 @@
 % State also the deliberate constraint: hand-written Verilog-2001, not HLS and
 % not a vendor IP core. Say why (layer-level control and understanding), and
 % forward-reference Section~\ref{sec:hls} where the alternative is discussed.
+%
+% Then the two scope statements of \DD{036}, both early:
+%   - the comparison with a Raspberry Pi 4 (CPU) and a Jetson Nano (GPU) is an
+%     objective of the thesis, not an afterthought - the same model, images
+%     and measurements on all three platforms;
+%   - the data is PlantVillage's grape leaves, split by leaf (\DD{034}), and
+%     nothing else: no field photographs. State it as a limit HERE, so the
+%     conclusion repeats it instead of discovering it.
 
 \section{Contributions}
 \label{sec:contributions}
@@ -39,8 +54,17 @@
 %      (Chapter~\ref{chap:timing});
 %   4. a complete PS integration - DMA, CSR, block design, bit-exact C
 %      preprocessing - closing at \MHz{\thClkBoard} in context
-%      (Chapter~\ref{chap:integration}).
-% Do not claim a board result unless one exists by submission.
+%      (Chapter~\ref{chap:integration}), and running on the ZCU104;
+%   5. a measured comparison of the same model, on the same test images,
+%      against a Raspberry Pi 4 and a Jetson Nano: latency, power and energy
+%      per inference (Section~\ref{sec:comparison}, \DD{036});
+%   6. only if it runs on the board by submission: the live camera path - a
+%      USB webcam to a class, with the resize bit-exact against Pillow
+%      (Section~\ref{sec:camera-path}, \DD{035}).
+% A board result exists: on 2026-10-07 the bare-metal application reproduced
+% the known answer on the ZCU104, bit for bit (Section~\ref{sec:board-remaining}).
+% Claim exactly that - one image, one run - and no more until the other
+% bring-up checks are recorded.
 
 \section{Thesis Outline}
 \label{sec:outline}

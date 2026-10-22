@@ -14,7 +14,12 @@
 %   - the two examining-committee members besides the supervisor, and their
 %     ranks, once they are known;
 %   - the exact approval date (the template PDF has it as "ηη Νοεμβρίου");
-%   - the two abstracts and the acknowledgements.
+%   - the two abstracts and the acknowledgements;
+%   - the title, if the supervisor wants it to name the edge-device comparison
+%     (DD-036 leaves that open). It appears twice below, and in main.tex's
+%     \hypersetup;
+%   - the month ("Νοέμβριος 2026", twice), once the comparison's schedule is
+%     known.
 % ===========================================================================
 
 \begin{titlepage}
@@ -164,6 +169,9 @@
 % Μία σελίδα. Η δομή που δουλεύει: πρόβλημα -> προσέγγιση -> τι χτίστηκε ->
 % ΤΙ ΜΕΤΡΗΘΗΚΕ (με αριθμούς) -> τι δεν έγινε. Η τελευταία πρόταση να είναι
 % ειλικρινής για το όριο της εργασίας.
+% Στα μετρημένα μπαίνει και η σύγκριση με το Raspberry Pi 4 και το Jetson Nano
+% (DD-036)· στο όριο, ότι η ακρίβεια είναι σε φωτογραφίες PlantVillage και όχι
+% από αμπελώνα.
 %
 % Ιδιωματισμός του προτύπου: το κείμενο μένει στα αγγλικά και τα ελληνικά
 % τμήματα τυλίγονται σε \textgreek{...}, με τις λατινικές λέξεις έξω από αυτά.
@@ -188,9 +196,15 @@
 % The numbers that belong here, all as macros so they cannot go stale:
 %   \thElements elements bit-exact over \thInstructions instructions
 %   \thDspAccelAxi DSPs (\thDspPctAccelAxi\%)
-%   \MHz{\thClkBoard} in context on the ZCU104
-%   \thLatencyBoard{} ms per inference
-% End on the limitation, not on the achievement.
+%   \MHz{\thClkBoard} in context on the ZCU104, and that it RAN there,
+%     bit-exact against the known answer (2026-10-07)
+%   the latency MEASURED on the board - \thLatencyBoard{} is derived from the
+%     simulated cycle count, so quote the measured figure once it exists
+%   int8 accuracy on the held-out test split, \thAccInt\%
+%   against the Raspberry Pi 4 and the Jetson Nano running the same model:
+%     latency and energy per inference (DD-036), from their reports
+% End on the limitation, not on the achievement - and the honest one now
+% includes the data: PlantVillage photographs, not vineyard ones.
 \chapter*{Abstract}
 \addcontentsline{toc}{chapter}{Abstract}
 
@@ -201,7 +215,8 @@
 \noindent \keywords{}
 % e.g.: convolutional neural networks, MobileNetV2, int8 quantization, FPGA,
 % Zynq UltraScale+, hardware accelerator, Verilog, bit-exact verification,
-% vineyard disease detection
+% vineyard disease detection, edge computing (if the comparison stays central:
+% Raspberry Pi, Jetson Nano)
 
 %-----------------------%
 % ACKNOWLEDGMENTS GREEK %

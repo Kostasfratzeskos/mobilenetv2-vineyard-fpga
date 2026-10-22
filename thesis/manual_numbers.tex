@@ -16,6 +16,11 @@
 % ===========================================================================
 
 % --- verification ---------------------------------------------------------
+% TODO(REDEPLOY): re-measure this block after DD-036's redeploy. \thElements
+% should not move (it counts elements, and the network is the same);
+% \thImagesVerified becomes the new golden sets - one TEST-split photograph
+% per class, because every current set is a training or validation image of
+% the leaf-split model (DD-036 has the table).
 % [MEASURED] accel_tb, end-to-end run, 2026-09-22. Element count of the
 % full-network comparison against the golden vectors.
 \newcommand{\thElements}{6\,895\,780}
@@ -43,6 +48,10 @@
 % stands for features.18.0 alone, the worst single layer.
 \newcommand{\thLoadOverheadPct}{17.3}
 % [DERIVED] \thCycles / \thClkBoard, i.e. 951833 / 187.5e6.
+% NOTE: "Board" means AT THE BOARD'S CLOCK - this is not measured on the
+% board. The measured figure will be vinecam's per-run time (image DMA + run,
+% DD-036): the accelerator has no cycle-counter register, and the bare-metal
+% app prints no time. When it exists, quote both and the gap between them.
 \newcommand{\thLatencyBoard}{5.08}
 % [DERIVED] the one-MAC-per-cycle baseline that Section~\ref{sec:parallelism}
 % rejects: \thMacs / \thClkBoard, i.e. 299562112 / 187.5e6 = 1.598 s. The
@@ -156,6 +165,19 @@
 \newcommand{\thDspPredShared}{442}
 
 % --- the accumulator width (DD-019) ---------------------------------------
+% TODO(REDEPLOY): every [DERIVED] figure in this block was replayed from
+% software/export/ as built from 268f85f714d3, and the redeploy of DD-036
+% makes each one wrong at once - the DD-019 failure, in prose. DD-034 already
+% has the new bound: 8,971,923 (25 bits) at channel 80 of features.9.conv.0.0,
+% so \thAccBound and \thAccBoundBits move, \thAccMargin becomes 3.7, and
+% \thAccUnsafeLayers needs recomputing. \thAccMarginNarrow is defined at
+% ACC_W=24, which the new bound does not fit at all (2^23 = 8,388,608):
+% redefine it at \thAccBoundBits (25 bits: 1.9x). \thAccGeom depends only on
+% the format and stays. \thBadBias names a file the re-export overwrites -
+% point its comment at DD-019 and the commit it came from. \thAccMeasured and
+% \thBadElements are history and stay. Better than all of that: move the
+% derived figures into scripts/thesis_numbers.py, so the next retrain moves
+% them by itself.
 % [DERIVED] replayed from software/export/ on 2026-10-12 with export.py's own
 % check_acc_width() walk: per output channel,
 %     |acc + bias| <= (sum_taps |w[oc,tap]|) * max|a| + |bias_oc|

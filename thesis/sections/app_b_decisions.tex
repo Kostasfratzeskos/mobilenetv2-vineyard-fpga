@@ -1,5 +1,5 @@
 % ===========================================================================
-% SOURCES: docs/design_decisions.md  (DD-001 .. DD-033, already written)
+% SOURCES: docs/design_decisions.md  (DD-001 .. DD-036, already written)
 %
 % THIS APPENDIX REPLACES "Appendix B: Source Code" from the first outline.
 % A source dump costs pages and is read by nobody; the repository is the
@@ -11,12 +11,15 @@
 %     DD-nnn | date | the decision | the alternatives | why | the measurement
 % Mark each supporting number as MEASURED, DERIVED or ESTIMATED. That
 % distinction is the project's own standard (Section~\ref{sec:acc-bound}) and showing
-% it applied consistently across 33 decisions is itself an argument.
+% it applied consistently across 36 decisions is itself an argument.
 %
 % Cross-reference the load-bearing ones from the body rather than repeating
 % them: DD-004 (Section~\ref{sec:objectives}), DD-013/014 (Section~\ref{sec:parallelism}),
 % DD-019 (Section~\ref{sec:acc-bound}), DD-020..DD-026 (Chapter~\ref{chap:timing}),
-% DD-030..DD-033 (Chapter~\ref{chap:integration}).
+% DD-030..DD-033 (Chapter~\ref{chap:integration}), DD-034 (Section~\ref{sec:leakage}),
+% DD-035 (Section~\ref{sec:camera-path}), DD-036 (Section~\ref{sec:comparison}).
+% DD-036 also amends DD-004: show the amendment where DD-004 is summarised,
+% so the scope a reader meets first is the scope the thesis delivers.
 % ===========================================================================
 \chapter*{Appendix B: Design Decision Log}
 \label{appendix:decisions}
@@ -38,3 +41,9 @@
 
 \section{System Integration (DD-030--DD-033)}
 \label{sec:decisions-integration}
+
+\section{Accuracy, the Live Camera and the Comparison (DD-034--DD-036)}
+\label{sec:decisions-evaluation}
+% DD-034 the split by leaf and the test set scored once; DD-035 the camera on
+% the board under Linux; DD-036 the scope - the dataset final, one model on
+% three platforms, and the measurement rules.

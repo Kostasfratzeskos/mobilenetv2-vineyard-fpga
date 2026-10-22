@@ -17,7 +17,18 @@
 \label{sec:repro-sw}
 % Training, quantisation, export. State the checkpoint hash (\thCkptSha) and
 % that it is tracked in Git LFS - a reader who gets a different hash is not
-% reproducing this thesis and should know immediately.
+% reproducing this thesis and should know immediately. (After DD-036's
+% redeploy that hash is the leaf-split checkpoint's, \thAccCkptSha; check that
+% the two macros agree before quoting either.)
+
+\section{Reproducing the Accuracy Evaluation}
+\label{sec:repro-accuracy}
+% \DD{034}. software/train/resplit_dataset.py rebuilds data/grape_leafsplit
+% from the downloaded images and PlantVillage's leaf maps - not committed, so
+% say where to fetch them and which upstream commit they are pinned to; then
+% train.py, quantize.py, and `evaluate.py --split test --report', whose JSON
+% is what thesis_numbers.py reads. The test split is scored once: say so, so
+% nobody "reproduces" it by tuning on it.
 
 \section{Running the Simulations}
 \label{sec:repro-sim}
@@ -41,6 +52,22 @@
 \label{sec:repro-ps}
 % firmware/Makefile: the host unit tests, `make lint', and the bare-metal
 % build. Then make_sdcard.py and the known-answer file it stages.
+
+\section{The Live Camera Image}
+\label{sec:repro-camera}
+% \DD{035}. firmware/linux/petalinux/build.sh on a Linux host (PetaLinux does
+% not run on Windows), the static vinecam binary, and the first board step:
+% vinecam with a known-answer image and its EXPECTED.txt, before any camera.
+% firmware/linux/README.md has the commands; point at it rather than copy it.
+
+\section{The Edge-Device Measurements}
+\label{sec:repro-edge}
+% \DD{036}. The ONNX export (opset 13) and its check against PyTorch on the
+% test images; ONNX Runtime on the Raspberry Pi 4; trtexec on the Jetson Nano
+% (the engine is built on the device); the C model built natively on the Pi;
+% the power-meter procedure; and the JSON reports thesis_numbers.py reads.
+% Give the software versions and the clock settings - a different governor or
+% power mode is a different measurement.
 
 \section{Regenerating the Numbers in This Document}
 \label{sec:repro-numbers}

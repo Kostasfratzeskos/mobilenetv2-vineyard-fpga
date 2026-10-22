@@ -1,7 +1,12 @@
 % ===========================================================================
 % SOURCES: docs/claude_project/08_OPEN_ITEMS.md (§5 open findings, §6 risks,
-%            §7 the suggested order of work)
-%          docs/claude_project/10_TIMELINE.md (the closing observations)
+%            §7 the suggested order of work) - a snapshot of 2026-09-25: its
+%            status ("never run on a board", "accuracy not recorded") is out
+%            of date
+%          docs/claude_project/10_TIMELINE.md (the closing observations; it
+%            ends in September)
+%          docs/design_decisions.md: DD-034, DD-035, DD-036, and
+%            docs/lab_notebook.md from 2026-10-07 on, for everything later
 % ===========================================================================
 \chapter{Conclusion and Future Work}
 \label{chap:conclusion}
@@ -12,16 +17,33 @@
 % hedging:
 %   Foundation - REACHED. Full MobileNetV2 bit-exact in simulation,
 %     \thElements elements.
-%   Core - state exactly where it stands at submission. The RTL, the block
-%     design, the bitstream, the XSA and the PS application exist; what is
-%     untested is silicon.
-%   Stretch - not started, and say so in one clause.
+%   Core - REACHED on 2026-10-07: the bare-metal application on the ZCU104
+%     reproduced the known answer bit for bit (Section~\ref{sec:board-remaining}).
+%     Say exactly what that run covered - one image - and what the other
+%     bring-up checks showed, once they are recorded.
+%   Stretch - built and tested on the PC (\DD{035}). Write the board result
+%     here once it exists (Section~\ref{sec:camera-result}), or one clause
+%     saying it did not run.
+%
+% Then the comparison (\DD{036}), answered as plainly as the tiers: against a
+% Raspberry Pi 4 and a Jetson Nano running the same model on the same images,
+% where the accelerator is ahead, where it is not, and by how much - latency
+% and energy per inference. Do not soften a loss: a measured loss on one axis
+% is a result too, and the committee will trust the wins more for it.
 %
 % Then the three observations the lab notebook supports, which are the
 % methodological conclusions and the most transferable part of the thesis:
-%   1. The software model was finished before any RTL was written and never
-%      changed afterwards. That is what made every later step a comparison
-%      rather than a negotiation.
+%   1. The software model was finished before any RTL was written. It changed
+%      exactly once afterwards, by decision - the leaf-split retrain
+%      (\DD{034}), redeployed to every platform (\DD{036}) - and the hardware
+%      did not have to change: the weights are a DDR blob, the accumulator
+%      bound was rechecked by the exporter rather than remembered
+%      (Section~\ref{sec:acc-bound}), and the golden vectors re-proved the
+%      whole chain. That is what made every later step a comparison rather
+%      than a negotiation.
+%      TODO(REDEPLOY): this wording is true once the redeploy is done and the
+%      simulations pass unchanged; until then "never changed afterwards" is
+%      the accurate sentence.
 %   2. Each verification level found bugs the level below structurally could
 %      not, and each was added BEFORE the phase that needed it.
 %   3. The estimates were mostly right and the assumptions were not. The cycle
@@ -37,8 +59,9 @@
 % Concrete and sized, not a wish list. Each item should say what it costs and
 % what it buys:
 %
-%   - A BOARD RUN. The only thing between the Core tier and a complete result
-%     (Section~\ref{sec:board-remaining}).
+%   - (The board run used to head this list. It happened on 2026-10-07 -
+%     Section~\ref{sec:board-remaining}. Only bring-up checks still unrecorded
+%     at submission belong here now.)
 %   - \DD{023}, the act_buffer read pipeline: the stated route to 250 MHz, but
 %     Section~\ref{sec:board-impl} found the in-context critical path is elsewhere -
 %     replicating wgt_dma's 216-bit output register per destination buffer is
@@ -53,6 +76,16 @@
 %     zero spare, and the weight address width has 22% headroom FOR THIS MODEL -
 %     features.18.0 is 800/1024 and the classifier is small only because there
 %     are \thClasses{} classes. A 1000-class head would need 2,560.
-%   - The Stretch tier: a live camera path.
-%   - Retraining on field data from the grapevine IoT deployment
-%     [morellos2024iot].
+%   - The Stretch tier is built (\DD{035}); whatever of it has not run on the
+%     board by submission goes here, sized.
+%   - Field data: out of scope by decision (\DD{036}). Photographs from the
+%     grapevine IoT deployment [morellos2024iot] - first as a test set of their
+%     own, since every accuracy figure here is on PlantVillage photographs taken
+%     under controlled conditions; DD-034 names them as the thing that reopens
+%     the accuracy result. Retraining on them comes after that.
+%   - An int8 GPU row: a Jetson with int8 tensor cores (an Orin) would give the
+%     comparison the column the Nano cannot (\DD{036}).
+%   - A cycle counter in the CSR, so the board reports its own latency instead
+%     of the PS timing it (Section~\ref{sec:throughput}).
+%   - The vendor DPU, measured on the same board - if \DD{036} leaves it as a
+%     discussion point.

@@ -2,10 +2,14 @@
 % SOURCES: docs/claude_project/11_REPO_MAP.md
 %          scripts/README.md, scripts/run_*.sh, scripts/*.tcl
 %          firmware/README.md, firmware/Makefile
+%          firmware/linux/README.md (the PetaLinux image, DD-035)
+%          docs/design_decisions.md: DD-036 (the edge devices and the rules
+%            every measurement follows)
 %
-% KEEP THIS CHAPTER SHORT - 4 to 6 pages. It is the chapter most likely to
-% bloat into product descriptions nobody reads. The test for every sentence:
-% does a reader need it to reproduce or to judge a result in chapter 10?
+% KEEP THIS CHAPTER SHORT - 4 to 6 pages, perhaps 7 with the two edge
+% devices. It is the chapter most likely to bloat into product descriptions
+% nobody reads. The test for every sentence: does a reader need it to
+% reproduce or to judge a result in chapter 10?
 % ===========================================================================
 \chapter{Experimental Setup and Development Tools}
 \label{chap:setup}
@@ -20,10 +24,41 @@
 %   DSP48E2 1728 | CLB LUT 230400 | CLB FF 460800 | BRAM 312 | URAM 96
 % Section~\ref{sec:ps-pl} covers the architecture; this covers the board.
 
+\subsection{Raspberry Pi 4}
+\label{sec:rpi4}
+% \DD{036}. The CPU platform of the comparison [rpi4_brief]: four Cortex-A72
+% cores (state the clock), the RAM size of the unit used, 64-bit Raspberry Pi
+% OS (state the release). What runs on it: ONNX Runtime at FP32 and int8, and
+% the bit-exact C model compiled natively (Section~\ref{sec:c-model}).
+% The conditions, because they decide the numbers: the `performance' CPU
+% governor, a heatsink and fan, and `vcgencmd get_throttled' reading 0x0
+% after every run - a throttled Pi measures its cooling, not its CPU.
+
+\subsection{Jetson Nano}
+\label{sec:jetson-nano}
+% \DD{036}. The GPU platform [nvidia_jetson_nano]: the 128-core Maxwell GPU
+% beside four Cortex-A57 cores, memory shared between the two (4 GB on the B01
+% kit, 2 GB on the smaller one - state which unit), JetPack 4.6.x - the last
+% release for this board, with TensorRT 8.2. What runs on it: TensorRT
+% engines at FP32 and FP16, built on the device from the ONNX file (an engine
+% is not portable between devices). No int8: Section~\ref{sec:fpga-vs}.
+% The conditions: `nvpmodel -m 0' (the 10 W mode) and `jetson_clocks', on a
+% 5 V 4 A barrel supply - a micro-USB supply browns out under load.
+
+\subsection{Measurement Equipment}
+\label{sec:measure-equipment}
+% \DD{036}. One wall-plug power meter for all three boards, so every watt in
+% Section~\ref{sec:power} is measured the same way (name the model and its
+% resolution). The on-board sensors where they exist - tegrastats on the
+% Nano, the ZCU104's power monitors if the PetaLinux image exposes them - as a
+% second, per-rail view. One USB webcam, at one resolution, for every live
+% measurement (name it).
+
 \subsection{Host Development System}
 \label{sec:host}
-% CPU, RAM, OS. This matters for exactly one number - the CPU baseline in
-% Section~\ref{sec:comparison} - so state it precisely and move on.
+% CPU, RAM, OS. It used to matter for the CPU baseline; that baseline is now
+% the Raspberry Pi 4 (Section~\ref{sec:rpi4}, \DD{036}), so the PC is only
+% where training, synthesis and the builds run. One sentence, and move on.
 
 \section{Development Tools}
 \label{sec:tools}
@@ -44,12 +79,16 @@
 \label{sec:pytorch}
 % [paszke2019pytorch]. Training and post-training quantisation only - the
 % integer pipeline that the hardware matches is the exporter's, not PyTorch's.
+% Plus one export for the edge devices: the same checkpoint to ONNX, opset 13,
+% because TensorRT 8.2 on the Nano reads nothing newer (Section~\ref{sec:runtimes}).
 
 \subsection{C Toolchain}
 \label{sec:c-toolchain}
-% Two distinct toolchains, and the distinction is worth one sentence each:
+% Four distinct toolchains now, and the distinction is worth one sentence each:
 % the host gcc that builds the bit-exact reference model and the firmware unit
-% tests, and the aarch64 bare-metal toolchain for the PS application.
+% tests; the aarch64 bare-metal toolchain for the PS application; the aarch64
+% Linux toolchain that builds vinecam as one static binary (\DD{035}); and the
+% Raspberry Pi's own gcc, building the C model natively for the comparison.
 
 \subsection{Automation Scripts and Version Control}
 \label{sec:automation}
@@ -64,3 +103,21 @@
 \label{sec:vitis}
 % Where the XSA from Section~\ref{sec:board-impl} goes, and how the PS application is
 % built against it.
+
+\subsection{PetaLinux 2022.2}
+\label{sec:petalinux}
+% \DD{035}, [xilinx_ug1144]. Built from the ZCU104 BSP plus this design's XSA,
+% matching Vivado 2022.2, on a Linux host - it does not run on Windows. Say
+% what it provides that the bare-metal BSP cannot (the USB host stack and the
+% UVC driver a webcam needs, DisplayPort, the network) and that the bitstream
+% is still loaded by the FSBL from BOOT.BIN, so the FPGA design does not change.
+
+\subsection{ONNX, ONNX Runtime and TensorRT}
+\label{sec:runtimes}
+% \DD{036}. One exported file serves both edge devices: ONNX [onnx], opset 13.
+% ONNX Runtime [onnxruntime] runs it on the Pi at FP32, and at int8 after its
+% own static quantisation - a different quantiser from this project's, which
+% is why its accuracy gets its own line. TensorRT [nvidia_tensorrt] builds an
+% engine from it on the Nano, at FP32 and FP16. Give every version, and say
+% that the ONNX file was checked against PyTorch on all test images before it
+% went to either device.

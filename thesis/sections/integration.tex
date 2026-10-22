@@ -6,11 +6,17 @@
 %          scripts/make_bd.tcl, scripts/run_bd.sh, scripts/make_sdcard.py
 %          firmware/** (driver, preprocessing, tests, stubs)
 %          build/bd_187p5_explore/
+%          docs/lab_notebook.md: 2026-10-07 (the first board run),
+%            2026-10-20 (the camera path)
+%          docs/design_decisions.md: DD-035, firmware/linux/README.md
 %
 % This was §6.8 - one section - in the first outline. It is now a chapter
 % because the work is: an AXI4 master, a CSR block, a board design that closes
 % with a bitstream, a bare-metal application, and a preprocessing path that is
-% bit-exact on the host. That is the Core success tier (DD-004).
+% bit-exact on the host. That is the Core success tier (DD-004) - REACHED on
+% the board on 2026-10-07 (Section~\ref{sec:board-remaining}). The live camera
+% (\DD{035}) is the Stretch tier and closes the chapter
+% (Section~\ref{sec:camera-path}).
 % ===========================================================================
 \chapter{System Integration and the Embedded Application}
 \label{chap:integration}
@@ -94,6 +100,9 @@
 % and test_preproc.c run on the host against stubs, and `make lint`
 % compile-checks the bare-metal sources. Say what that does and does not buy
 % (Section~\ref{sec:verification-limits}).
+% Then that it has since run on one (Section~\ref{sec:board-remaining}), and
+% that the two halves belong together: the host tests are why the first board
+% run had nothing left to find in the driver.
 
 \section{Preprocessing on the Target}
 \label{sec:preproc-target}
@@ -109,11 +118,74 @@
 % blobs - so a board bring-up can fail loudly rather than plausibly. One
 % paragraph; it is a small script with a good idea in it.
 
-\section{What Remains for a Board Run}
+\section{Bring-Up on the ZCU104}
 \label{sec:board-remaining}
-% Be exact and unhedged. There is no more accelerator RTL and no more Vivado
-% work between here and bring-up. What is untested is hardware itself: DDR
-% training, the application on silicon, and real inference.
-% If a board run happens before submission, this section becomes a result and
-% moves into Chapter~\ref{chap:evaluation}. If it does not, this is the honest state and
-% Section~\ref{sec:future} carries it.
+\label{sec:bringup}
+% WAS "What Remains for a Board Run". The board run happened, so the section
+% keeps the PROCESS and the RESULT moves to
+% Section~\ref{sec:bit-exactness-result}, as this note always said it would.
+% (The old label is kept so the cross-references still resolve.)
+%
+% The run, from docs/lab_notebook.md 2026-10-07: the lab's ZCU104, booted
+% over JTAG; image.bin on the SD card = the int8 healthy_hl6025 image staged
+% by make_sdcard.py (Section~\ref{sec:sdcard}). The registers read back:
+%     STATUS    0x3F22   done, result captured, program counter 63, no error bit
+%     ARGMAX    0x6      class 2 (Healthy), valid
+%     RESULT_LO 0xE7DFECAA, RESULT_HI 0xEA923B51
+%               -> logits -4950 -6177 15185 -5486
+% the same four integers as EXPECTED.txt. Bit-exact on silicon, first time.
+%
+% What it cost is worth one honest paragraph, because none of it was the
+% design: every obstacle was in the Vitis 2022.2 flow on the development PC
+% or on the bench - parallel BSP builds failing (make -j 1), xilffs with long
+% file names in the standalone domain only (in the FSBL it overflows the OCM),
+% a launch configuration that skipped the PS initialisation, a stale debugger
+% connection, and an SD card not seated. The known answer is what made each
+% of those quick to rule in or out: the accelerator was never a suspect.
+%
+% Then what is NOT yet recorded, stated as plainly: the RGB image through
+% preproc.c (it must give the same four integers), the other three classes'
+% cards, the UART image source, and booting from the SD card without JTAG.
+% Fill these in from the bench; whatever is still missing at submission goes
+% to Section~\ref{sec:future}.
+% TODO(REDEPLOY): after DD-036's redeploy, repeat the known-answer runs on
+% the new golden sets (one test-split photograph per class).
+
+\section{The Live Camera Path under Linux}
+\label{sec:camera-path}
+% \DD{035} - the Stretch tier. A SECTION for now; if it grows past a few pages
+% it can become a chapter of its own (left open in \DD{036}). Built and tested
+% on the PC; write the board result into Section~\ref{sec:camera-result} once
+% it exists, and keep only the design here.
+%
+% In this order, each the answer to a question a reader will ask:
+%   1. WHY LINUX. A UVC webcam needs a USB host stack and a UVC driver; the
+%      bare-metal BSP has neither. PetaLinux 2022.2 [xilinx_ug1144], built
+%      from the ZCU104 BSP plus this design's XSA, provides both - and the
+%      bitstream is still loaded by the FSBL from BOOT.BIN, so the FPGA design
+%      does not change at all.
+%   2. A FIFTH PLATFORM HOOK. The driver wrote (uint32_t)pointer into the base
+%      registers - right only where a pointer is a physical address. Under
+%      Linux it would point the DMA at an unrelated page and complete on
+%      whatever was there: the failure shape this project designs out
+%      everywhere else. accel_plat_phys translates all four blobs before any
+%      register is written, and ACCEL_ERR_ADDR refuses what cannot be reached.
+%   3. MEMORY THE DMA CAN READ. 16 MB of `no-map' reserved memory at
+%      0x3800_0000, mapped through UIO - so no cache can hold a line of it,
+%      stale data is impossible by construction, and the bare-metal cache
+%      flush becomes a barrier. The cost, accepted: aligned 64-bit stores only,
+%      and an uncached 150 KB copy per frame.
+%   4. THE RESIZE. A camera frame is not 256x256, so Resize(256) is a real
+%      resampling and DD-033's crop is not enough. camfront.c transcribes
+%      Pillow's resampler [pillow], and is bit-exact against it on 15 frame
+%      sizes. Of nine deliberate mistakes, eight are caught; the ninth changes
+%      no byte, and that was settled by enumeration rather than argument. This is
+%      Section~\ref{sec:preproc}'s method, extended to any frame.
+%   5. WHAT STAYS OUTSIDE THE CHAIN, named: the camera's YUV-to-RGB conversion,
+%      which has no reference to be exact against. A frame saved on the board
+%      is saved after it, so check_camera_frame.py can re-derive the window,
+%      the tensor and the logits from the RGB the board actually used.
+%   6. THE SCREEN, in one paragraph: DisplayPort through fbdev, and the same
+%      image over HTTP to a laptop for a projector.
+% A figure belongs here (the camera-to-class pipeline across the PS and the
+% PL); none exists yet - see thesis/README.md, Figures.

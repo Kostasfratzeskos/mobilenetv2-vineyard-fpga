@@ -3,6 +3,8 @@
 %          docs/references/rtl_review.md (the 43 findings)
 %          docs/claude_project/07_RTL_REVIEW_STATUS.md
 %          sim/** (31 testbenches)
+%          docs/lab_notebook.md, 2026-10-07 (the first board run - what the
+%            method bought when it met silicon)
 %
 % THIS CHAPTER IS THE THESIS'S METHODOLOGICAL CONTRIBUTION. It was §6.2 in the
 % first outline - four subsections inside the design chapter - which badly
@@ -92,6 +94,14 @@
 %   - until \DD{033} the \thElements-element check started at 000_input.hex,
 %     so resize and quantisation were unverified (Section~\ref{sec:preproc} closed it);
 %   - bit-exactness is checked on \thImagesVerified{} images, one per class, not on
-%     the validation set - it is a check of the ARITHMETIC, and
-%     Section~\ref{sec:accuracy} is what measures the model;
-%   - simulation is not silicon: nothing here says the design works on a board.
+%     the test set - it is a check of the ARITHMETIC, and
+%     Section~\ref{sec:accuracy} is what measures the model. After DD-036's
+%     redeploy those images are test-split photographs the model never saw;
+%     today's are not (they are training or validation images of the
+%     leaf-split model);
+%   - simulation is not silicon - and that line now has an answer: on
+%     2026-10-07 the board reproduced a golden image's four logits exactly
+%     (Section~\ref{sec:board-remaining}). The method is WHY that was a
+%     comparison rather than a debugging session: the board had one known
+%     answer to match, not a plausible-looking class. Say what it does not
+%     cover yet: one image, one run, and the other bring-up checks unrecorded.

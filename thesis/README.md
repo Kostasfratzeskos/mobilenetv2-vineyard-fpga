@@ -57,13 +57,20 @@ vector prints better and needs no second pipeline.
 | `preamble_additions.tex` | siunitx, the number macros, shorthands |
 | `sections/` | front matter (`template.tex`), one file per chapter, the Greek summary, three appendices |
 | `images/` | SVG sources under `images/<chapter>/`; `make figures` converts them to PDF |
-| `references.bib` | 36 entries, transcribed from the template's bibliography |
+| `references.bib` | 45 entries: the 36 transcribed from the template's bibliography, plus the edge-device platforms, runtimes and the closest related deployment (DD-036) |
 | `generated/numbers.tex` | **generated** — every measured figure, as LaTeX macros |
 | `manual_numbers.tex` | the few figures that are not yet derivable, each with its source |
 
 Every chapter file opens with a comment block naming the documents in `docs/` it is
 written from. The material is already written; the chapters are mostly a matter of
 following those pointers.
+
+One caution about those pointers: `docs/claude_project/` is a snapshot of 24–25
+September. It predates the PS application, the board run of 2026-10-07, the accuracy
+measurement (DD-034), the camera (DD-035) and the edge-device comparison (DD-036), and
+in places it still says the opposite — "never run on a board", "accuracy not recorded".
+For anything after 25 September, `docs/design_decisions.md` and `docs/lab_notebook.md`
+are the sources.
 
 ## The rule about numbers
 
@@ -94,23 +101,36 @@ a testbench that writes its cycle count to a file — move it and delete it from
 `conclusion_and_future_work`. `extended_greek` **last**, because it mirrors the English
 chapters and writing it early guarantees rework.
 
-Two gaps block Chapter 10:
+Three gaps block Chapter 10:
 
 1. **Accuracy is measured, on a checkpoint the hardware does not yet run.** Float and
    int8 on the held-out test split of `data/grape_leafsplit` are the `\thAcc*` macros
    (DD-034); `grape_clean` turned out to leak whole leaves and is not quoted. The
    accuracy checkpoint (`\thAccCkptSha`) is a retrain, while `software/export/`, the
    golden vectors and every simulation are from `\thCkptSha`. Regenerating those from
-   the new checkpoint closes this; until then `numbers.tex` carries a WARNING line.
+   the new checkpoint closes this — DD-036 decides that it will be regenerated, with the
+   new golden sets taken from the test split; until then `numbers.tex` carries a
+   WARNING line. Several hand-copied figures move with it: they are marked `REDEPLOY`
+   in `manual_numbers.tex` and `sections/accelerator_design.tex`.
 2. **The 202 MHz figure is unattributed** (`docs/claude_project/05_RESULTS.md` §2).
    Either do the back-to-back re-run or quote 179.0 MHz and say why.
+3. **Nothing in Chapter 10 has been measured on hardware yet** beyond the one board
+   run: the latency on the board, the power of all three platforms, the Raspberry Pi 4
+   and Jetson Nano comparison (DD-036), and the live camera (DD-035). Each needs a
+   report `scripts/thesis_numbers.py` can read before it can appear in the text.
+
+The comparison adds to the order above rather than changing it: its setup goes into
+`exper_setup_dev_tools`, its results into `exper_eval`, and its literature into
+`related_work`.
 
 ## Figures
 
 Sources are SVG (vector, editable in Inkscape); `make figures` converts them to PDF,
-which is what `pdflatex` wants. See [figures/README.md](figures/README.md) for the
+which is what `pdflatex` wants. See [images/README.md](images/README.md) for the
 conventions — including that the two buses in `pe_array.svg` stay distinguishable in
 black and white.
 
-`figures/` currently holds one diagram. The top-level accelerator block diagram is the
-most valuable one missing.
+`images/accelerator-design/` holds the seven figures of the architecture chapter,
+the top-level block diagram among them. Still missing: the board's Linux camera path
+(DD-035) for the integration chapter, and the comparison charts — latency and energy
+per inference across the three platforms (DD-036) — for the evaluation.

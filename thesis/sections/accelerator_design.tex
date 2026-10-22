@@ -708,6 +708,11 @@ Section~\ref{sec:buffers}.
   \end{tabular}
 \end{table}
 
+% TODO(REDEPLOY): "largest exported shift is 48" - in Table~\ref{tab:widths} and
+% in the paragraph below - is typed by hand and belongs to today's export
+% (\thCkptSha; the 48 is features.0.0's, checked 2026-10-21). Recheck it after
+% DD-036's redeploy, or better make it a macro that thesis_numbers.py takes
+% from software/export/*_shift.hex.
 The width of the activations and the weights is 8 bits by the choice of
 quantization scheme (\DD{005}), and the width of the output is the same,
 because the output of one layer is the input of the next. The product of two
@@ -752,6 +757,16 @@ a ReLU6, and so lies in $[0, q_6]$, or a plain int8 in $[-128, 127]$. Both
 limits are properties of the number format, not of the data, so no image ---
 including one chosen adversarially --- can exceed them.
 
+% TODO(REDEPLOY): the next two paragraphs describe the checkpoint software/export/
+% is built from today (\thCkptSha). For the leaf-split model DD-036 deploys, the
+% bound is 8,971,923 (25 bits), set by ONE FOLDED BIAS - channel 80 of
+% features.9.conv.0.0, 8,590,995 of it (DD-034) - not by the classifier's long
+% dot product. So "peaks ... in the classifier", "the longest dot product in
+% the network" and "more than four times the measured peak" (about 7.5x then)
+% must be rewritten, and the 26-bit margin sentence rechecked (3.7x then). The
+% new version is the stronger story: the bound and the measurement still name
+% different layers, and the bound is again set by a bias, which is exactly
+% the failure the bound exists to catch.
 Evaluated over this network, Equation~\eqref{eq:acc-bound-widths} peaks at
 \thAccBound{} in the classifier, which requires \thAccBoundBits{} signed bits.
 Two things about that figure are worth noting. The first is that it is more

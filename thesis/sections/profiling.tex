@@ -1,13 +1,20 @@
 % ===========================================================================
-% SOURCES: docs/claude_project/02_SOFTWARE_AND_QUANTIZATION.md
+% SOURCES: docs/claude_project/02_SOFTWARE_AND_QUANTIZATION.md (a snapshot of
+%            2026-09-24: its dataset section - grape_clean "used now", split
+%            "per leaf" - is superseded by DD-034)
 %          docs/phase2_export_explained.md
 %          docs/references/ReferenceModelExplained.md
 %          software/export/manifest.json, scripts/analyze_workload.py
-%          docs/design_decisions.md: DD-009, DD-010, DD-011, DD-019
+%          docs/design_decisions.md: DD-009, DD-010, DD-011, DD-019, DD-034
+%            (the split and the test evaluation), DD-036 (one model everywhere)
 %
-% START HERE. This is the first chapter to write: the work is finished, it has
-% not changed since 2026-07-24, and it is documented better than any other
-% part of the project.
+% START HERE. This is the first chapter to write: the method is finished and
+% documented better than any other part of the project. It has changed once
+% since 2026-07-24, by decision: the model was retrained on the leaf split
+% (2026-10-13, \DD{034}) and is being redeployed to every platform (\DD{036}).
+% So every model-specific figure in this chapter is a macro, and the redeploy
+% moves it - check that numbers.tex no longer carries its WARNING line before
+% treating any of them as final.
 % ===========================================================================
 \chapter{Software Reference Model and Workload Analysis}
 \label{chap:software}
@@ -125,12 +132,27 @@
 %   max|a| is a property of the number format, not of the data, so no image can
 %   exceed it. Land the general lesson, because it recurs in Chapter~\ref{chap:timing}
 %   and Section~\ref{sec:risks}: a retrain invalidates measurements, not bounds.
+%
+%   Then the second retrain, which is the evidence the guard works: the
+%   leaf-split model (\DD{034}) moved the bound from 24 to 25 bits - set once
+%   more by one folded bias, channel 80 of features.9.conv.0.0 - and the
+%   exporter reported it against ACC_W = 26 with a 3.7x margin instead of
+%   leaving it to be discovered. Two sentences; it is the DD-019 story's
+%   ending. TODO(REDEPLOY): quote those figures as macros once the export is
+%   regenerated from that checkpoint (manual_numbers.tex, accumulator block).
 
 \section{Bit-Exact C Reference Model}
 \label{sec:c-model}
 % Op by op, the same integer arithmetic as the exporter, in C. It is the
-% executable specification the RTL is written against, and it is also what
-% runs on the PS in Chapter~\ref{chap:integration}.
+% executable specification the RTL is written against.
+% It does NOT run on the PS - an earlier version of this note said it did.
+% The PS application has its own driver and preprocessing, and the
+% accelerator does the arithmetic (Chapter~\ref{chap:integration}).
+% Its second job is new (\DD{036}): compiled natively on the Raspberry Pi 4,
+% it is the same-arithmetic CPU baseline of Section~\ref{sec:comparison} - the
+% identical integer operations on a CPU, so its predictions equal the
+% accelerator's by construction and only time and energy differ. (For that it
+% needs a batch and timing mode; today it compares one golden set.)
 
 \section{Input Preprocessing}
 \label{sec:preproc}
@@ -141,6 +163,11 @@
 % (and why fenv.h rather than a C99 version test), and the bit-exactness
 % against the golden input tensor.
 % Verified on the host without a board - see firmware/test/test_preproc.c.
+% Forward reference: the camera path extends this to frames of any size with
+% a transcription of Pillow's resampler [pillow], bit-exact on 15 frame sizes
+% (\DD{035}, Section~\ref{sec:camera-path}). The edge devices use the same
+% front end - Pillow's resize, never OpenCV's - so all three platforms see the
+% same tensor (\DD{036}).
 
 \section{Workload Analysis}
 \label{sec:workload}

@@ -110,6 +110,18 @@
 \label{sec:fpga-vs}
 % [sze2017efficient]. Keep to the energy-per-inference framing that
 % Section~\ref{sec:power} will return to.
+% No longer only a framing section: Chapter~\ref{chap:evaluation} MEASURES two
+% of the competitors (\DD{036}), so introduce exactly what that comparison
+% needs to be read, and nothing more:
+%   - the CPU: the Raspberry Pi 4's four Cortex-A72 cores and their NEON SIMD
+%     [rpi4_brief] - general-purpose cores running a tuned runtime;
+%   - the GPU: the Jetson Nano's 128-core Maxwell GPU [nvidia_jetson_nano],
+%     whose fast path is FP16;
+%   - the one fact that decides the precision column of the comparison:
+%     TensorRT's int8 path needs compute capability 6.1 or later, and the
+%     Nano's GPU is 5.3 [nvidia_tensorrt_support] - so the GPU runs FP16 at
+%     best, while int8 is the FPGA design's native format.
+% ASICs stay in one paragraph: none is measured here.
 
 \section{The Zynq UltraScale+ MPSoC}
 \label{sec:zynq}

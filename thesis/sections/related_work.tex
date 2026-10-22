@@ -2,6 +2,10 @@
 % SOURCES: docs/references/*.pdf (the papers are already in the repository)
 %          docs/controller_design.md sections 1-2 (the Angel-Eye / WP486 study
 %          that chose this architecture) - in Greek, translate as you go
+%          [karim2024grapeedge]: the PDF is OUTSIDE the repository, in the
+%          parent folder ("real-time grape leaf disease classification via an
+%          edge device with a lightweight CNN.pdf"); copy it to docs/references/
+%          with the others
 %
 % WRITE THIS AFTER the design chapters. "Positioning" is a claim about what you
 % built, so it cannot be written before you have written what you built.
@@ -27,6 +31,25 @@
 % file or by image id ignores it. This thesis found both kinds in its own
 % splits (DD-034) and now splits by leaf using that grouping.
 
+\section{Plant-Disease Classifiers on Edge Devices}
+\label{sec:related-edge}
+% NEW SECTION (\DD{036}): the CPU and GPU boards a deployment would use,
+% because Section~\ref{sec:comparison} measures two of them.
+% The anchor is [karim2024grapeedge]: a MobileNetV3-Large-based CNN for grape
+% leaves on a Jetson Nano B01 with TensorFlow Lite, about 3.4 W on average
+% while predicting (their figure) - the closest published work to this one.
+% Read it for three things and say each plainly:
+%   - what it reports: accuracy, frames per second, watts;
+%   - what it does not: energy per inference measured at batch 1 the way
+%     Section~\ref{sec:power} measures it, and any check that the deployed
+%     model computes what the trained one does;
+%   - how it split its data (a Kaggle copy of the grape images): the leakage
+%     of Section~\ref{sec:leakage} applies to any per-image split, so if theirs
+%     is one, say so as a fact about the split, not as an accusation.
+% Then the point to land: this thesis does not quote their Nano numbers as
+% its baseline - it measures its own model on a Nano (and a Raspberry Pi 4),
+% so the comparison is between platforms, not between papers.
+
 \section{CNN Accelerators on FPGAs}
 \label{sec:related-accel}
 % Organise by what each one decided, not chronologically:
@@ -45,7 +68,7 @@
 
 \section{Positioning of This Thesis}
 \label{sec:positioning}
-% Three honest distinctions, none of them "ours is faster":
+% Four honest distinctions, none of them "ours is faster":
 %
 %   1. VERIFICATION. Most of the accelerator literature reports accuracy after
 %      quantisation. This design reports bit-exactness against its own software
@@ -61,3 +84,10 @@
 %   3. SCOPE. A single network, fully specialised, rather than a general
 %      framework. The instruction set exists (Chapter~\ref{appendix:isa}) but it compiles one
 %      model. Say so; it is a limitation, not a feature.
+%
+%   4. THE COMPARISON IS MEASURED, NOT QUOTED (\DD{036}). The CPU and GPU
+%      figures come from this model, these test images and this meter on a
+%      Raspberry Pi 4 and a Jetson Nano - not from other papers' tables, which
+%      mix networks, datasets, splits and power conventions. Published numbers
+%      ([karim2024grapeedge], Section~\ref{sec:related-accel}) appear only as
+%      context, with that caveat stated before them.

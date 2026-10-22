@@ -1,7 +1,13 @@
 % ===========================================================================
-% SOURCES: docs/claude_project/05_RESULTS.md  (every measured number)
-%          docs/claude_project/08_OPEN_ITEMS.md §4 and §6 (the gaps and risks)
+% SOURCES: docs/claude_project/05_RESULTS.md  (every measured number - up to
+%            2026-09-24: it predates the board run, the accuracy and the
+%            comparison, and still says "accuracy not recorded")
+%          docs/claude_project/08_OPEN_ITEMS.md §4 and §6 (the gaps and risks,
+%            as of 2026-09-25 - most of them since closed)
 %          build/impl_*/ and build/bd_187p5_explore/ via numbers.tex
+%          docs/design_decisions.md: DD-034 (accuracy), DD-035 (the camera),
+%            DD-036 (the comparison and its measurement rules)
+%          docs/lab_notebook.md, 2026-10-07 (the first board run)
 %
 % GAPS before this chapter can be written honestly:
 %   1. ACCURACY is measured (DD-034): float and int8 on the held-out test split
@@ -12,8 +18,14 @@
 %      from \thCkptSha. Until the export, the golden vectors and the
 %      simulations are regenerated from \thAccCkptSha, the two must not be
 %      presented as one model; numbers.tex carries a WARNING line while they
-%      differ.
+%      differ. DD-036 settles it: the leaf-split model is redeployed to the
+%      FPGA, so this gap closes with the redeploy.
 %   2. The \MHz{\thFmaxPhaseFour} figure is unattributed (Section~\ref{sec:phase4}).
+%   3. NOTHING ON HARDWARE YET beyond the one board run of 2026-10-07: the
+%      latency measured on the board, the power of all three platforms, the
+%      Raspberry Pi 4 and Jetson Nano comparison (\DD{036}) and the live
+%      camera (\DD{035}). Each needs a JSON report that thesis_numbers.py
+%      turns into macros before its section can be written - none is typed.
 % ===========================================================================
 \chapter{Experimental Evaluation}
 \label{chap:evaluation}
@@ -60,6 +72,16 @@
 % because it is a validation of the model in Section~\ref{sec:roofline-analysis}.
 % Weight loading is \thDmaLoadCycles{} cycles against \thCyclesCompute{} of
 % compute: \thLoadOverheadPct\% overhead, none of it hidden (C-11).
+%
+% Then the latency MEASURED ON THE BOARD, beside the derived one: vinecam's
+% per-run time (image DMA + run; mean, min and max over its --repeat runs).
+% Say why that is the only on-board timing - the accelerator has no
+% cycle-counter register and the bare-metal app prints no time - and what the
+% gap between the two figures is made of: the image DMA (about 0.25 ms,
+% Section~\ref{sec:image-path}) and the PS polling for the result.
+% Then the end-to-end figures the comparison needs (\DD{036}): one image
+% through preprocessing and inference, and the live camera loop's frame rate
+% (Section~\ref{sec:camera-result}).
 
 \section{Correctness and Accuracy Assessment}
 \label{sec:correctness}
@@ -71,6 +93,15 @@
 % exercised, all ALL PASS. \thTestbenches/\thTestbenches{} testbenches passing.
 % This is the thesis's central result. Chapter~\ref{chap:verification} is the method;
 % this is the number.
+%
+% And on silicon: on 2026-10-07 the ZCU104 reproduced the four logits of
+% healthy_hl6025 exactly - -4950 -6177 15185 -5486, class 2 - against the
+% known answer the simulation had produced (Section~\ref{sec:board-remaining}).
+% State the scope precisely: one image, one run. Add the RGB-path and the
+% per-class runs here as they are recorded.
+% TODO(REDEPLOY): after DD-036's redeploy, both halves are re-run on the new
+% golden sets (one test-split photograph per class) and this section reports
+% those.
 
 \subsection{Classification Accuracy}
 \label{sec:accuracy}
@@ -102,22 +133,67 @@
 % Separately: export.py --check 32 gives 32/32 agreement between the integer
 % pipeline and both the float and fake-quant models. That measures the
 % QUANTISATION, not the model, and the distinction should be explicit.
+%
+% Then the same test split on every configuration of Section~\ref{sec:comparison}
+% (\DD{036}), one line each. What to expect, so a surprise is visible: FP32 on
+% the Pi should reproduce the float figure; FP16 on the Nano may move an image
+% that sits near the decision boundary; ONNX Runtime's int8 is its own
+% quantisation, not this one, so it gets its own line; the C model on the Pi
+% matches the accelerator by construction. Report what each one does.
 
 \section{Power Consumption}
 \label{sec:power}
-% Vivado's post-route estimate, clearly labelled ESTIMATED (Section~\ref{sec:overall}
-% is measured; do not let the two sit in one table without a marker).
-% Energy per inference is the comparable quantity for Section~\ref{sec:comparison}.
+% Two kinds of number, never in one table without a marker:
+%   - Vivado's post-route estimate, clearly labelled ESTIMATED
+%     (Section~\ref{sec:overall} is measured);
+%   - the MEASURED power of all three boards (\DD{036}): one wall-plug meter
+%     for all of them, idle and under load, plus the on-board sensors where
+%     they exist (Section~\ref{sec:measure-equipment}).
+% Energy per inference is the comparable quantity for Section~\ref{sec:comparison}:
+% the average power under load times the time per inference. Give it two ways
+% - the whole board, and load minus idle - because the ZCU104 is a
+% development board whose idle draw (its fan, its DDR and every peripheral)
+% says nothing about the accelerator, and the reader deserves both.
 
 \section{Comparison with Baselines and Related Work}
 \label{sec:comparison}
-% RENAMED from "Comparison with the Reference Implementation", which was
-% ambiguous and too narrow. Three comparisons, in increasing order of risk:
-%   1. the bit-exact C model on the host CPU (Section~\ref{sec:c-model}) - a fair,
-%      like-for-like baseline because it is the SAME arithmetic;
-%   2. the vendor DPU [xilinx_pg338] on the same device class - the "why not
-%      Vitis-AI?" question, which will be asked;
-%   3. the FPGA accelerators of Section~\ref{sec:related-accel} - and here state the
-%      caveat before the table, not after: different networks, devices,
-%      precisions and reporting conventions make GOP/s comparisons weak. Say
-%      what is comparable (DSP efficiency, MAC/cycle/DSP) and what is not.
+% RESTRUCTURED around \DD{036}. Everything below runs the same model
+% (\thAccCkptSha, deployed to the FPGA by then), on the same \thAccTestImages{}
+% test images, with the same preprocessing, at batch 1, measured with the same
+% meter - and every figure comes from a report via thesis_numbers.py.
+% Four comparisons, in increasing order of risk:
+%   1. SAME ARITHMETIC: the bit-exact C model (Section~\ref{sec:c-model}) built
+%      natively on the Raspberry Pi 4 (Section~\ref{sec:rpi4}), against the
+%      accelerator. The identical integer operations, so the predictions are
+%      identical and only time and energy differ - this measures the
+%      architecture. (It replaces the first plan, the C model on the host PC:
+%      a desktop CPU is not a deployment platform.)
+%   2. BEST AVAILABLE STACK: each platform's own runtime at its best
+%      precision - ONNX Runtime FP32 and int8 on the Pi, TensorRT FP32 and FP16
+%      on the Nano (Section~\ref{sec:jetson-nano}; no int8 on that GPU,
+%      Section~\ref{sec:fpga-vs}), the accelerator's int8 on the ZCU104. This
+%      measures what someone deploying on each platform would actually get.
+%      The table: platform | precision | accuracy | latency (median, p95) |
+%      frames per second | W (idle / load) | mJ per inference.
+%   3. THE VENDOR DPU [xilinx_pg338] - the "why not Vitis AI?" question, which
+%      will be asked. Open in \DD{036}: a discussion, or dropped now that
+%      measured baselines exist. Do not put an unmeasured DPU row in the table.
+%   4. PUBLISHED WORK: the FPGA accelerators of Section~\ref{sec:related-accel}
+%      and the Jetson Nano deployment of [karim2024grapeedge]. State the caveat
+%      BEFORE the table, not after: different networks, devices, precisions
+%      and reporting conventions make GOP/s comparisons weak. Say what is
+%      comparable (DSP efficiency, MAC/cycle/DSP; energy per inference where it
+%      was measured the same way) and what is not.
+% Charts belong here - latency and energy per inference across the three
+% platforms; none exists yet (thesis/README.md, Figures).
+
+\section{Live Camera Demonstration}
+\label{sec:camera-result}
+% \DD{035}, the Stretch tier; the design is Section~\ref{sec:camera-path}.
+% If it runs on the board by submission: the live loop's frame rate, the FPGA
+% time against the front end's (resize and normalise on the A53 cores), and
+% the frame check - frames saved on the board, re-derived by
+% check_camera_frame.py, window, tensor and logits equal. Then the same
+% webcam on the Pi and the Nano, for the end-to-end line of the comparison.
+% If it does not run: one paragraph saying what was built and what did not
+% run, and the rest goes to Section~\ref{sec:future}.
