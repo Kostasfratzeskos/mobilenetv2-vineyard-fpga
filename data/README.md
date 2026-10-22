@@ -2,8 +2,9 @@
 
 Datasets live here but are **gitignored** (see `.gitignore`).
 
-- Start with the **PlantVillage grape subset** (classes such as black rot, esca, leaf blight, healthy).
-- Add **real diseased-vine photos** from field contacts as extra fine-tuning data and a realistic test set.
+- The **PlantVillage grape subset**: Black Rot, ESCA, Healthy, Leaf Blight.
+- **The dataset is final for this thesis** (DD-036): no field photographs. Real vine photos stay
+  the natural next step — as a test set of their own, not pooled with this one (DD-034).
 
 Do not commit large image sets. Keep them local, or use Git LFS / external storage and note the source here.
 

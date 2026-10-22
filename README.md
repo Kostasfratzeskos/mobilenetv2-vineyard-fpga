@@ -11,6 +11,13 @@ network matches.
 - **Stretch:** live camera → disease result, in real time. A USB webcam on the board, under
   Linux, with the same accelerator and preprocessing: `firmware/linux/README.md` (DD-035).
 
+Status: Foundation reached; Core reached on 2026-10-07 (the bare-metal app on the ZCU104,
+bit-exact against the known answer); Stretch built and tested on the PC, not yet run on the board.
+
+The evaluation also runs **the same model on two edge devices** — a Raspberry Pi 4 (CPU) and a
+Jetson Nano (GPU) — on the same test images, with the same measurements (DD-036). The dataset is
+final: PlantVillage's grape leaves, split by leaf (DD-034); no field photographs in this thesis.
+
 ## The verification spine
 The software int8 model produces the exact integer output of every layer — the *golden vectors*.
 Every hardware block is checked against those numbers bit-for-bit before moving on, and the

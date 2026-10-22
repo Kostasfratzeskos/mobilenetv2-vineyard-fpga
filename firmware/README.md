@@ -33,8 +33,14 @@ the DMA can use.
 
 ## What is tested, and what is not
 
-**Nothing here has run on hardware.** There is no board. So the code is split so
-that the part most likely to be wrong can still be checked:
+**It has run on the board once** — 2026-10-07, the ZCU104 booted over JTAG with the
+int8 `healthy_hl6025` image: logits `-4950 -6177 15185 -5486`, class 2 (Healthy), the
+same four integers as `EXPECTED.txt` (`docs/lab_notebook.md`, that date). The other
+bring-up checks — the RGB image through `preproc.c`, the other three classes, the UART
+source, booting from the SD card — are not recorded yet.
+
+The code was written before there was a board, so it is split so that the part most
+likely to be wrong can be checked without one:
 
 ```
 cd firmware && make test
