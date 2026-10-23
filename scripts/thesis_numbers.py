@@ -174,6 +174,94 @@ def network_macros(lines):
     lines.append("")
 
 
+RTL_TOP = os.path.join(ROOT, "hardware", "rtl", "control", "accel_top.v")
+EXPORT_DIR = os.path.dirname(MANIFEST)
+
+
+def _hex_values(path, bits):
+    """One two's-complement value per line, as export.py writes them."""
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for tok in fh.read().split():
+            v = int(tok, 16)
+            out.append(v - (1 << bits) if v >= 1 << (bits - 1) else v)
+    return out
+
+
+def accumulator_macros(lines):
+    """The accumulator bound (DD-019), replayed from the export on every run.
+
+    These figures used to be copied by hand into manual_numbers.tex, and a retrain
+    (DD-034) made every one of them wrong at once - DD-019's failure, in prose. The
+    walk is export.py's acc_bound(): a_max starts at 128 (the int8 image), is a
+    ReLU6 layer's relu6_qmax after it and 128 otherwise, and per output channel
+
+        |acc + bias| <= (sum over taps of |w|) * a_max + |bias|
+
+    It is repeated here rather than imported because export.py needs torch, and
+    `make numbers` should not. Checked on 2026-10-22: replayed on the previous
+    export it gives the hand-copied figures exactly (5,094,750 / 24 bits /
+    classifier.1 / 14 layers over 21 bits / largest shift 48).
+    """
+    with open(MANIFEST, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    a_max = 128
+    worst = (0, "?", -1, 0)               # bound, layer, channel, that channel's bias
+    geo = (0, "?")                        # taps * 128 * 128, the format-only bound
+    shift = (0, "?")
+    peaks = []
+    for op in manifest["ops"]:
+        if op["kind"] in ("conv", "linear"):
+            files = op["files"]
+            w = _hex_values(os.path.join(EXPORT_DIR, files["w"]), 8)
+            b = _hex_values(os.path.join(EXPORT_DIR, files["b"]), 32)
+            sh = _hex_values(os.path.join(EXPORT_DIR, files["shift"]), 8)
+            oc = op["weight_shape"][0]
+            taps = len(w) // oc
+            peak = 0
+            for c in range(oc):
+                bound = sum(abs(x) for x in w[c * taps:(c + 1) * taps]) * a_max + abs(b[c])
+                peak = max(peak, bound)
+                if bound > worst[0]:
+                    worst = (bound, op["name"], c, b[c])
+            peaks.append(peak)
+            if taps * 128 * 128 > geo[0]:
+                geo = (taps * 128 * 128, op["name"])
+            top = max(v & 0xFF for v in sh)
+            if top > shift[0]:
+                shift = (top, op["name"])
+        if op["kind"] == "save":
+            continue
+        a_max = max(int(op["relu6_qmax"]), 1) if op["kind"] == "conv" and op.get("relu6") else 128
+
+    with open(RTL_TOP, encoding="utf-8") as fh:
+        m = re.search(r"parameter\s+ACC_W\s*=\s*(\d+)", fh.read())
+    acc_w = int(m.group(1)) if m else None
+    bits = (worst[0]).bit_length() + 1   # signed bits that hold +-worst
+    thin = lambda n: "{:,}".format(n).replace(",", r"\,")   # noqa: E731
+
+    lines.append("% --- the accumulator bound (DD-019), replayed from software/export ---")
+    emit(lines, "AccBound", thin(worst[0]), "the provable worst |acc + bias|, any input")
+    emit(lines, "AccBoundBits", bits, "signed bits it needs")
+    emit(lines, "AccBoundLayer", worst[1])
+    emit(lines, "AccBoundChannel", worst[2])
+    emit(lines, "AccBoundBias", thin(abs(worst[3])), "that channel's folded bias, alone")
+    if acc_w:
+        emit(lines, "AccRange", thin(1 << (acc_w - 1)), "2^(ACC_W-1), ACC_W = %d read from the RTL" % acc_w)
+        emit(lines, "AccMargin", "{:.1f}".format((1 << (acc_w - 1)) / worst[0]), "at ACC_W = %d" % acc_w)
+    else:
+        lines.append("% ACC_W not found in %s - AccRange/AccMargin not defined"
+                     % os.path.relpath(RTL_TOP, ROOT))
+    emit(lines, "AccMarginNarrow", "{:.1f}".format((1 << (bits - 1)) / worst[0]),
+         "at the narrowest safe width, ACC_W = AccBoundBits")
+    emit(lines, "AccGeom", thin(geo[0]), "taps * 128 * 128, maximised over the network: %s" % geo[1])
+    emit(lines, "AccUnsafeLayers", sum(1 for p in peaks if p >= 1 << 20),
+         "layers whose bound does not fit the original 21-bit accumulator")
+    emit(lines, "MaxShift", shift[0], "the largest requantization shift exported")
+    emit(lines, "MaxShiftLayer", shift[1])
+    lines.append("")
+
+
 def accuracy_macros(lines):
     """Float and int8 accuracy on the held-out test split, from evaluate.py's report.
 
@@ -292,6 +380,7 @@ def main():
         "",
     ]
     network_macros(lines)
+    accumulator_macros(lines)
     accuracy_macros(lines)
     run_macros(lines)
 

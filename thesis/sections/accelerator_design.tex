@@ -700,7 +700,7 @@ Section~\ref{sec:buffers}.
     Accumulator            & 26 & worst-case $|acc + b|$, any input (\DD{019}) & bound \\
     Bias                   & 32 & int32, as exported                       & construction \\
     Requant.\ multiplier   & 32 & normalized to $[2^{30}, 2^{31})$         & bound \\
-    Requant.\ shift        & 6  & largest exported shift is 48             & bound \\
+    Requant.\ shift        & 6  & largest exported shift is \thMaxShift    & bound \\
     Requant.\ intermediate & 59 & $\mathit{ACC\_W} + \mathit{M0\_W} + 1$   & exact \\
     Activation output      & 8  & the quantization scheme                  & construction \\
     Logit output           & 16 & $S_{\mathrm{logit}}$, calibrated (\DD{011}) & observation \\
@@ -708,11 +708,6 @@ Section~\ref{sec:buffers}.
   \end{tabular}
 \end{table}
 
-% TODO(REDEPLOY): "largest exported shift is 48" - in Table~\ref{tab:widths} and
-% in the paragraph below - is typed by hand and belongs to today's export
-% (\thCkptSha; the 48 is features.0.0's, checked 2026-10-21). Recheck it after
-% DD-036's redeploy, or better make it a macro that thesis_numbers.py takes
-% from software/export/*_shift.hex.
 The width of the activations and the weights is 8 bits by the choice of
 quantization scheme (\DD{005}), and the width of the output is the same,
 because the output of one layer is the input of the next. The product of two
@@ -725,7 +720,7 @@ multiplier, the 6-bit shift and the 59-bit intermediate --- are those of
 Equation~\eqref{eq:requant}, discussed in Section~\ref{sec:requant-lanes}. The
 6-bit shift field deserves one remark: it is a bound rather than a convenience,
 because the exporter's normalization caps the shift well below the 63 that six
-bits can encode, the largest value in the current network being 48.
+bits can encode, the largest value in the deployed network being \thMaxShift.
 
 The accumulator is the width this design got wrong, and it is worth setting out
 why, because the failure was methodological rather than arithmetic. The width
@@ -757,29 +752,27 @@ a ReLU6, and so lies in $[0, q_6]$, or a plain int8 in $[-128, 127]$. Both
 limits are properties of the number format, not of the data, so no image ---
 including one chosen adversarially --- can exceed them.
 
-% TODO(REDEPLOY): the next two paragraphs describe the checkpoint software/export/
-% is built from today (\thCkptSha). For the leaf-split model DD-036 deploys, the
-% bound is 8,971,923 (25 bits), set by ONE FOLDED BIAS - channel 80 of
-% features.9.conv.0.0, 8,590,995 of it (DD-034) - not by the classifier's long
-% dot product. So "peaks ... in the classifier", "the longest dot product in
-% the network" and "more than four times the measured peak" (about 7.5x then)
-% must be rewritten, and the 26-bit margin sentence rechecked (3.7x then). The
-% new version is the stronger story: the bound and the measurement still name
-% different layers, and the bound is again set by a bias, which is exactly
-% the failure the bound exists to catch.
-Evaluated over this network, Equation~\eqref{eq:acc-bound-widths} peaks at
-\thAccBound{} in the classifier, which requires \thAccBoundBits{} signed bits.
-Two things about that figure are worth noting. The first is that it is more
-than four times the measured peak, which is the usual relationship between a
-bound and an observation. The second is more pointed: the bound and the
-measurement identify \emph{different layers}. The measured worst case was
-\file{features.3.conv.0.0}, an outlier bias, whereas the provable worst case is
-the classifier, which simply has the longest dot product in the network.
-Sizing from the measurement would have been unsound even if the measured number
-had been larger, because it was taken at the wrong place. A weaker bound that
-discards the weights entirely and uses only the tap count and the format,
-$\mathrm{taps} \cdot 128 \cdot 128$, gives \thAccGeom{} for the same layer and
-is also instructive: it is reached by no real weight set, yet the chosen width
+Evaluated over the deployed network, Equation~\eqref{eq:acc-bound-widths}
+peaks at \thAccBound{} in \file{\thAccBoundLayer}, which requires
+\thAccBoundBits{} signed bits, and almost all of that figure is a single folded
+bias: channel \thAccBoundChannel{} of the layer carries \thAccBoundBias{} on its
+own. This is the shape of the failure that broke the 21-bit design, recurring
+in a different layer. The model was retrained once more, on a split of the
+dataset by leaf (\DD{034}), and the bound moved with it, from \thAccBoundPrev{}
+in \file{\thAccBoundPrevLayer} (\thAccBoundPrevBits{} bits) to the figure
+above. Nothing had to be remembered for that move to be caught: the exporter
+recomputed the bound and checked it against the accumulator width before it
+wrote a single weight. Two further things are worth noting. The first is that
+the bound and the measurement that sized the original design identify
+\emph{different layers}: the measured worst case was
+\file{features.3.conv.0.0}, whereas the provable worst case is now
+\file{\thAccBoundLayer}, and for the previous checkpoint it was the classifier,
+which simply has the longest dot product in the network. Sizing from a
+measurement is unsound even when the measured number is large, because it
+describes only the place the measurement happened to look. The second is that a
+weaker bound, which discards the weights entirely and uses only the tap count
+and the format, $\mathrm{taps} \cdot 128 \cdot 128$, gives \thAccGeom{} for the
+classifier. It is reached by no real weight set, yet the chosen width
 accommodates even that.
 
 The design uses 26 bits, whose range of $\pm\thAccRange$ leaves
@@ -825,8 +818,9 @@ every layer, reads the accumulator width out of the RTL source so that the two
 cannot drift apart, and exits with an error if the network's worst case does
 not fit. Re-running that check against the current export confirms the figures
 quoted above, and also shows how far the original width was from safe:
-at 21 bits, \thAccUnsafeLayers{} layers of the network exceed the bound. Only
-one of them produced an observable error on the test image, which is precisely
+at 21 bits, \thAccUnsafeLayers{} layers of the network exceed the bound, and
+\thAccUnsafeLayersPrev{} did for the checkpoint that exposed the problem. Only
+one of those produced an observable error on the test image, which is precisely
 why the observation was misleading.
 
 One width is still justified by observation, and the table records it as such.

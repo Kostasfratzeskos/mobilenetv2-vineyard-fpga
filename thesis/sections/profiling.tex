@@ -11,10 +11,11 @@
 % START HERE. This is the first chapter to write: the method is finished and
 % documented better than any other part of the project. It has changed once
 % since 2026-07-24, by decision: the model was retrained on the leaf split
-% (2026-10-13, \DD{034}) and is being redeployed to every platform (\DD{036}).
-% So every model-specific figure in this chapter is a macro, and the redeploy
-% moves it - check that numbers.tex no longer carries its WARNING line before
-% treating any of them as final.
+% (2026-10-13, \DD{034}) and redeployed to every platform (2026-10-22/23,
+% \DD{036}). Every model-specific figure in this chapter is a macro, and the
+% redeploy moved them: numbers.tex no longer carries its WARNING line, so the
+% macros describe the deployed model. If the model ever changes again, they
+% move by themselves - that is what they are for.
 % ===========================================================================
 \chapter{Software Reference Model and Workload Analysis}
 \label{chap:software}
@@ -134,12 +135,15 @@
 %   and Section~\ref{sec:risks}: a retrain invalidates measurements, not bounds.
 %
 %   Then the second retrain, which is the evidence the guard works: the
-%   leaf-split model (\DD{034}) moved the bound from 24 to 25 bits - set once
-%   more by one folded bias, channel 80 of features.9.conv.0.0 - and the
-%   exporter reported it against ACC_W = 26 with a 3.7x margin instead of
-%   leaving it to be discovered. Two sentences; it is the DD-019 story's
-%   ending. TODO(REDEPLOY): quote those figures as macros once the export is
-%   regenerated from that checkpoint (manual_numbers.tex, accumulator block).
+%   leaf-split model (\DD{034}) moved the bound from \thAccBoundPrevBits{} to
+%   \thAccBoundBits{} bits - set once more by one folded bias, channel
+%   \thAccBoundChannel{} of \thAccBoundLayer{} (\thAccBoundBias{} of the
+%   \thAccBound) - and the exporter reported it against ACC_W = 26 with a
+%   \thAccMargin$\times$ margin instead of leaving it to be discovered. Two
+%   sentences; it is the DD-019 story's ending. Every figure in it is a macro:
+%   the deployed model's from thesis_numbers.py, the previous one's from
+%   manual_numbers.tex. Chapter~\ref{chap:architecture} tells the same story
+%   at the width table - keep the two consistent.
 
 \section{Bit-Exact C Reference Model}
 \label{sec:c-model}

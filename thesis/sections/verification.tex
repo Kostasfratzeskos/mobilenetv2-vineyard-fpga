@@ -66,16 +66,28 @@
 \section{Guards Against Stale Artefacts}
 \label{sec:guards}
 % The \DD{019} aftermath, as process rather than as arithmetic
-% (Section~\ref{sec:acc-bound} has the arithmetic). Three guards, each closing a
+% (Section~\ref{sec:acc-bound} has the arithmetic). Four guards, each closing a
 % failure that actually occurred:
 %   - export.py recomputes the accumulator bound and exits non-zero if the
 %     network's worst case does not fit the ACC_W it reads out of the RTL;
 %   - gen_program.py refuses a checkpoint-hash mismatch and a MISSING hash -
 %     the missing case is the one that bit, because the export in git was five
 %     weeks older than the checkpoint on disk and neither artefact said so;
-%   - gen_program.py asserts the residual M <= 1 property.
+%   - gen_program.py asserts the residual M <= 1 property;
+%   - the layer testbenches' per-tensor scalars are GENERATED
+%     (hardware/tb/model_scalars.svh, by gen_program.py --emit). Found by the
+%     redeploy of \DD{036}: four testbenches had the old model's avgpool and
+%     features.3.add multipliers typed in, and three of them failed - 288 of
+%     1,280 avgpool channels a code or two low - while the RTL was unchanged
+%     and accel_tb was bit-exact. (The fourth had stopped on a file lock
+%     first; it was found by reading it.)
+%     The suite caught its own stale data, which is the method working, and
+%     the fix made it impossible rather than corrected it.
 % The general statement: the project's defence against stale numbers is that
-% the build fails, not that someone remembers.
+% the build fails, not that someone remembers. The thesis's own numbers follow
+% the same rule (Section~\ref{sec:repro-numbers}): the redeploy moved every
+% accumulator figure, and the ones still copied by hand were the ones that
+% went wrong.
 
 \section{The External RTL Review}
 \label{sec:rtl-review}
@@ -95,10 +107,10 @@
 %     so resize and quantisation were unverified (Section~\ref{sec:preproc} closed it);
 %   - bit-exactness is checked on \thImagesVerified{} images, one per class, not on
 %     the test set - it is a check of the ARITHMETIC, and
-%     Section~\ref{sec:accuracy} is what measures the model. After DD-036's
-%     redeploy those images are test-split photographs the model never saw;
-%     today's are not (they are training or validation images of the
-%     leaf-split model);
+%     Section~\ref{sec:accuracy} is what measures the model. Since DD-036's
+%     redeploy those images are test-split photographs the model never saw -
+%     the first of each class in file order that it classifies correctly;
+%     before it they were training or validation images;
 %   - simulation is not silicon - and that line now has an answer: on
 %     2026-10-07 the board reproduced a golden image's four logits exactly
 %     (Section~\ref{sec:board-remaining}), and on 2026-10-22, under Linux, all

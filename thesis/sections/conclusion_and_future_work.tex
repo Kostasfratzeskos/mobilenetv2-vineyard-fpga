@@ -38,15 +38,17 @@
 % methodological conclusions and the most transferable part of the thesis:
 %   1. The software model was finished before any RTL was written. It changed
 %      exactly once afterwards, by decision - the leaf-split retrain
-%      (\DD{034}), redeployed to every platform (\DD{036}) - and the hardware
-%      did not have to change: the weights are a DDR blob, the accumulator
-%      bound was rechecked by the exporter rather than remembered
+%      (\DD{034}), redeployed to every platform (\DD{036}) - and the RTL did
+%      not have to change: the weights are a DDR blob, the accumulator bound
+%      was rechecked by the exporter rather than remembered
 %      (Section~\ref{sec:acc-bound}), and the golden vectors re-proved the
-%      whole chain. That is what made every later step a comparison rather
-%      than a negotiation.
-%      TODO(REDEPLOY): this wording is true once the redeploy is done and the
-%      simulations pass unchanged; until then "never changed afterwards" is
-%      the accurate sentence.
+%      whole chain - all \thTestbenches{} testbenches, \thElements{} elements
+%      end to end. That is what made every later step a comparison rather than
+%      a negotiation. Say the one thing that did need changing: four layer
+%      testbenches had two of the old model's scalars typed in - three failed
+%      on them, and the fourth would have - until those were generated too
+%      (Section~\ref{sec:guards}). It is the
+%      same lesson as observation 3, caught by the method itself.
 %   2. Each verification level found bugs the level below structurally could
 %      not, and each was added BEFORE the phase that needed it.
 %   3. The estimates were mostly right and the assumptions were not. The cycle

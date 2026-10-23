@@ -16,28 +16,41 @@
 % ===========================================================================
 
 % --- verification ---------------------------------------------------------
-% TODO(REDEPLOY): re-measure this block after DD-036's redeploy. \thElements
-% should not move (it counts elements, and the network is the same);
-% \thImagesVerified becomes the new golden sets - one TEST-split photograph
-% per class, because every current set is a training or validation image of
-% the leaf-split model (DD-036 has the table).
-% [MEASURED] accel_tb, end-to-end run, 2026-09-22. Element count of the
-% full-network comparison against the golden vectors.
+% Re-measured after DD-036's redeploy, on the leaf-split model (2026-10-22/23):
+% the counts did not move, the images did.
+% [MEASURED] accel_tb, end-to-end run, 2026-09-22; again on 2026-10-22/23 with
+% the redeployed model, in accel_tb, accel_dma_tb and accel_axi_tb. Element
+% count of the full-network comparison against the golden vectors. It counts
+% elements, not values, so a retrain cannot move it.
 \newcommand{\thElements}{6\,895\,780}
 % [MEASURED] scripts/gen_program.py output, software/export/program.txt.
 \newcommand{\thInstructions}{64}
-% [MEASURED] scripts/run_all_sims.sh, all passing as of 2026-09-24.
-\newcommand{\thTestbenches}{31}
-% [MEASURED] one image per class; all four argmax outcomes exercised.
+% [MEASURED] scripts/run_all_sims.sh, all 35 passing on 2026-10-23 with the
+% redeployed model. (31 as of 2026-09-24; DD-030 and DD-031 added wgt_dma_tb,
+% accel_dma_tb, axi_lite_csr_tb and accel_axi_tb on 2026-09-25.)
+\newcommand{\thTestbenches}{35}
+% [MEASURED] accel_tb bit-exact on each of the four golden sets, 2026-10-23:
+% healthy_9111, blackrot_0346, esca_1744 and blight_4740 - for each class, the
+% first test-split photograph in file order that the integer pipeline gets
+% right (DD-036). One image per class, so all four argmax outcomes are
+% exercised. (Until the redeploy the four were images the leaf-split model
+% had been trained or validated on.)
 \newcommand{\thImagesVerified}{4}
 
 % --- throughput -----------------------------------------------------------
-% [MEASURED] accel_tb feeder-busy cycle count, 2026-09-13.
+% [MEASURED] feeders-busy cycle count of one inference: accel_tb, accel_dma_tb
+% and accel_axi_tb all print 952,062, on 2026-09-25 and again on 2026-10-22
+% with the redeployed model - the schedule does not depend on the weights.
+% (The first measurement, 2026-09-13, was 951,833: before the pipelining of
+% Chapter~\ref{chap:timing} changed the pipeline and drain depths. This macro
+% carried that stale value until 2026-10-22; the figures derived from it round
+% the same.)
 % TODO: have the testbench write this to a file and move the macro into
 % thesis_numbers.py - it is the most-quoted number in the thesis that is still
 % transcribed by hand.
-\newcommand{\thCycles}{951\,833}
-% [MEASURED] compute cycles excluding weight load, from the same run.
+\newcommand{\thCycles}{952\,062}
+% [MEASURED] compute cycles excluding weight load - the same count as
+% \thCycles, kept under its own name where the text sets it against the load.
 \newcommand{\thCyclesCompute}{952\,062}
 % [MEASURED] accel_dma_tb: whole-network weight load with the real DMA.
 \newcommand{\thDmaLoadCycles}{199\,285}
@@ -47,7 +60,7 @@
 % C-11, which was computed against a fill rate nobody had measured. 65% still
 % stands for features.18.0 alone, the worst single layer.
 \newcommand{\thLoadOverheadPct}{17.3}
-% [DERIVED] \thCycles / \thClkBoard, i.e. 951833 / 187.5e6.
+% [DERIVED] \thCycles / \thClkBoard, i.e. 952062 / 187.5e6 = 5.078 ms.
 % NOTE: "Board" means AT THE BOARD'S CLOCK - this is not measured on the
 % board, and it is the COMPUTE alone (feeder busy). The measured figure is
 % \thBoardMs (the block below, 2026-10-22), which also contains the weight
@@ -61,7 +74,7 @@
 % number was out by 1000x, which made the rejected baseline look three times
 % FASTER than \thLatencyBoard and inverted the argument for parallelising.
 \newcommand{\thLatencySeq}{1.60}
-% [DERIVED] \thMacs / \thCycles, i.e. 299562112 / 951833 = 314.7. A ratio of
+% [DERIVED] \thMacs / \thCycles, i.e. 299562112 / 952062 = 314.6. A ratio of
 % cycle counts, so it is clock-independent; equivalently \thLatencySeq /
 % \thLatencyBoard.
 \newcommand{\thSpeedupSeq}{315}
@@ -100,8 +113,9 @@
 \newcommand{\thBoardGapPct}{3.8}
 % [DERIVED] 1000 / \thBoardMs = 150.2 images per second, accelerator alone.
 \newcommand{\thBoardIps}{150}
-% TODO(REDEPLOY): the schedule does not depend on the weights, so none of the
-% above should move. Re-run --repeat 100 once after the redeploy, and say so.
+% TODO(BOARD): measured with the previous model's blobs (268f85f714d3). The
+% schedule does not depend on the weights, so none of the above should move.
+% Re-run --repeat 100 once with the redeployed cards, and say that it did not.
 %
 % [MEASURED - NOT YET] the live camera loop (lab guide C5, 2026-10-22). It ran
 % on the board, but its console status line was not saved. Copy the console
@@ -208,50 +222,38 @@
 \newcommand{\thDspPredShared}{442}
 
 % --- the accumulator width (DD-019) ---------------------------------------
-% TODO(REDEPLOY): every [DERIVED] figure in this block was replayed from
-% software/export/ as built from 268f85f714d3, and the redeploy of DD-036
-% makes each one wrong at once - the DD-019 failure, in prose. DD-034 already
-% has the new bound: 8,971,923 (25 bits) at channel 80 of features.9.conv.0.0,
-% so \thAccBound and \thAccBoundBits move, \thAccMargin becomes 3.7, and
-% \thAccUnsafeLayers needs recomputing. \thAccMarginNarrow is defined at
-% ACC_W=24, which the new bound does not fit at all (2^23 = 8,388,608):
-% redefine it at \thAccBoundBits (25 bits: 1.9x). \thAccGeom depends only on
-% the format and stays. \thBadBias names a file the re-export overwrites -
-% point its comment at DD-019 and the commit it came from. \thAccMeasured and
-% \thBadElements are history and stay. Better than all of that: move the
-% derived figures into scripts/thesis_numbers.py, so the next retrain moves
-% them by itself.
-% [DERIVED] replayed from software/export/ on 2026-10-12 with export.py's own
-% check_acc_width() walk: per output channel,
-%     |acc + bias| <= (sum_taps |w[oc,tap]|) * max|a| + |bias_oc|
-% with max|a| taken from the FORMAT (ReLU6 output in [0,q6], else int8), not
-% from any image. Agrees with DD-019 exactly: 5,094,750 at classifier.1.
-\newcommand{\thAccBound}{5\,094\,750}
-\newcommand{\thAccBoundBits}{24}
+% The DERIVED figures for the deployed model - \thAccBound, \thAccBoundBits,
+% \thAccBoundLayer/Channel/Bias, \thAccRange, \thAccMargin,
+% \thAccMarginNarrow, \thAccGeom, \thAccUnsafeLayers, \thMaxShift - moved to
+% scripts/thesis_numbers.py on 2026-10-22, which replays them from
+% software/export/ on every `make numbers`. They used to be copied here by
+% hand, and the leaf-split redeploy (DD-036) made every one of them wrong at
+% once: DD-019's failure, in prose. What stays here is history, which no
+% export can regenerate.
+%
+% [DERIVED, HISTORY] the previous checkpoint's bound, 268f85f714d3 (the
+% DD-019 retrain, deployed until 2026-10-22): the same replay on
+% software/export/ as committed at ae0d079 gives 5,094,750 at classifier.1,
+% 24 bits, margins 6.6x at ACC_W=26 and 1.6x at 24 - DD-019's own figures -
+% and 14 layers over 21 bits. The redeploy moved the bound to a different
+% layer and one bit wider; the exporter caught that, nobody had to.
+\newcommand{\thAccBoundPrev}{5\,094\,750}
+\newcommand{\thAccBoundPrevBits}{24}
+\newcommand{\thAccBoundPrevLayer}{classifier.1}
+\newcommand{\thAccUnsafeLayersPrev}{14}
 % [MEASURED] DD-019: the largest |acc + bias| actually SEEN, one image through
 % one checkpoint, at features.3.conv.0.0. Quoted only to be contrasted with the
 % bound - it is an observation, and sizing from it is what DD-019 forbids.
 \newcommand{\thAccMeasured}{1\,198\,084}
 \newcommand{\thAccMeasuredBits}{22}
-% [DERIVED] same replay: 2^(26-1), and the margin the bound leaves at ACC_W=26
-% and at ACC_W=24. Both reproduce DD-019's 6.6x and 1.6x.
-\newcommand{\thAccRange}{33\,554\,432}
-\newcommand{\thAccMargin}{6.6}
-\newcommand{\thAccMarginNarrow}{1.6}
-% [DERIVED] same replay, the looser bound that uses only the FORMAT and the tap
-% count, taps * 128 * 128, maximised over the network (classifier.1, 1280 taps).
-% NOTE: DD-019's table gives 15,743,028 / 25 bits for this row, which is the
-% largest CONVOLUTION (~960 taps) and omits the classifier - the very layer the
-% row above it identifies as the worst case. 20,971,520 is the correct figure
-% and still fits ACC_W=26. Reported in the thesis as recomputed; DD-019's row
-% should be corrected. TODO: fix DD-019.
-\newcommand{\thAccGeom}{20\,971\,520}
-% [DERIVED] same replay: layers whose BOUND exceeds the old 21-bit range, i.e.
-% layers that were not provably safe - as against the single layer that was
-% observably wrong on the test image. DD-019 does not state this number.
-\newcommand{\thAccUnsafeLayers}{14}
-% [DERIVED] software/export/features_3_conv_0_0_b.hex, channel 110: the bias
-% that overflows a 21-bit accumulator on its own, for any input.
+% NOTE on \thAccGeom (now generated): DD-019's table gives 15,743,028 / 25
+% bits for that row, which is the largest CONVOLUTION (~960 taps) and omits the
+% classifier (1280 taps). 20,971,520 is the correct figure and fits ACC_W=26.
+% TODO: fix DD-019's row.
+% [DERIVED, HISTORY] the bias that overflowed a 21-bit accumulator on its own,
+% for any input: channel 110 of features.3.conv.0.0 in the DD-019 retrain
+% (268f85f714d3) - software/export/features_3_conv_0_0_b.hex as committed at
+% ae0d079. The redeploy overwrote that file; this is the figure from git.
 \newcommand{\thBadBias}{1\,184\,089}
 % [MEASURED] DD-019: elements wrong in the end-to-end golden comparison when
 % ACC_W was 21, of \thElements{} total.

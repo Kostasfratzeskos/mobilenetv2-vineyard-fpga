@@ -13,22 +13,21 @@
 %   1. ACCURACY is measured (DD-034): float and int8 on the held-out test split
 %      of data/grape_leafsplit, split by leaf, scored once; every figure is a
 %      \thAcc* macro from software/runs/mobilenetv2_grape_leafsplit_test.json.
-%      STILL OPEN: it was measured on the retrained checkpoint \thAccCkptSha,
-%      while software/export/ - and so every bit-exactness result - is built
-%      from \thCkptSha. Until the export, the golden vectors and the
-%      simulations are regenerated from \thAccCkptSha, the two must not be
-%      presented as one model; numbers.tex carries a WARNING line while they
-%      differ. DD-036 settles it: the leaf-split model is redeployed to the
-%      FPGA, so this gap closes with the redeploy.
+%      CLOSED 2026-10-23: the checkpoint it was measured on (\thAccCkptSha) is
+%      the one software/export/, the golden vectors and every simulation are
+%      built from (\thCkptSha), since the redeploy of \DD{036}; the exported
+%      logit scale equals the report's, so the int8 figure IS the accelerator's.
 %   2. The \MHz{\thFmaxPhaseFour} figure is unattributed (Section~\ref{sec:phase4}).
 %   3. ON HARDWARE SO FAR: the board runs of 2026-10-07 (bare metal) and
 %      2026-10-22 (Linux: all four known answers bit-exact, \thBoardMs{} ms per
 %      image, the live camera running) - their numbers are in
-%      manual_numbers.tex. STILL MISSING: the live loop's own numbers (they
-%      print as red TODOs until filled in), the power of all three platforms,
-%      and the Raspberry Pi 4 and Jetson Nano comparison (\DD{036}). Each
-%      edge-device figure needs a JSON report that thesis_numbers.py turns
-%      into macros before its section can be written - none is typed.
+%      manual_numbers.tex. Both used the previous model; the redeployed one is
+%      bit-exact in simulation and waits for its board run (TODO(BOARD)).
+%      STILL MISSING: the live loop's own numbers (they print as red TODOs
+%      until filled in), the power of all three platforms, and the Raspberry
+%      Pi 4 and Jetson Nano comparison (\DD{036}). Each edge-device figure
+%      needs a JSON report that thesis_numbers.py turns into macros before its
+%      section can be written - none is typed.
 % ===========================================================================
 \chapter{Experimental Evaluation}
 \label{chap:evaluation}
@@ -120,9 +119,11 @@
 %     silicon this time.
 % State the scope precisely: four images, one per class. For the bare-metal
 % application itself, only the first is recorded.
-% TODO(REDEPLOY): after DD-036's redeploy, both halves are re-run on the new
-% golden sets (one test-split photograph per class) and this section reports
-% those.
+% Both board runs above used the previous model (268f85f714d3). Since the
+% redeploy (2026-10-22) the simulation half is on the leaf-split model and its
+% four test-split golden sets.
+% TODO(BOARD): re-run the four known answers on the board with the new cards
+% (build/sdcard*/), and report those runs here in place of the old ones.
 
 \subsection{Classification Accuracy}
 \label{sec:accuracy}
