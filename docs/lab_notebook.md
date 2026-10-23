@@ -2557,3 +2557,146 @@ Recorded in DD-035. Still to fix in the repository: `vinecam` should load its UI
 `build.sh` should build that driver into the kernel, and the README's card instructions should warn
 about an ext4 partition (today's README update does the last). Next, by DD-036's order: the
 redeploy.
+
+### 2026-10-23 - The redeploy: the leaf-split model on the FPGA, in simulation
+
+DD-036's second step, started yesterday evening. `software/export/` is rebuilt from
+`mobilenetv2_grape_leafsplit.pth` (`1b536a3033c8`) with that model's own int8 scales. It is the
+checkpoint DD-034 measured, and the one the Pi and the Nano will run.
+
+#### What the exporter said
+
+```
+logit |max| = 22.194  ->  S_logit = 8.127818e-04 (int16)
+accumulator bound (provable, any input):
+  worst |acc+bias| = 8,971,923  in features.9.conv.0.0  -> needs 25 signed bits
+  RTL ACC_W = 26  -> range +/-33,554,432  (3.7x margin)
+crosscheck on 32 val images (integer vs float vs fake-quant)...
+  agree with FLOAT     model: 32/32
+  agree with FAKE-QUANT model: 32/32
+  max |accumulator| seen: 8639400 -> needs 25 signed bits
+```
+
+- **The logit scale is the test report's.** It equals the one `evaluate.py` used to score the int8
+  pipeline on the test split. So the integers the FPGA produces are the ones whose 99.68% was
+  measured, not a second quantisation of the same weights that happens to land close.
+- **The bound moved where the 2026-10-21 entry said it would:** 25 bits, in `features.9.conv.0.0`.
+  8,590,995 of it is one folded bias (channel 80), which every input pays, and the 32 cross-check
+  images reached 8,639,400, 96% of the bound. It is still 3.7× inside `ACC_W = 26`.
+
+#### The golden sets
+
+The rule, written before any image was looked at: for each class, the first test-split photograph
+in the order `ImageFolder` lists them that the integer pipeline classifies correctly, by the scored
+test report. The second clause skipped nothing. The report's two int8 errors (`Black Rot/…0400`,
+`ESCA/…1828`) come later in file order.
+
+| set | class | test photograph | split group | logits | argmax |
+|:--|:--|:--|:--|:--|:--|
+| `healthy_9111` | Healthy | `05cff9d7-…___Mt.N.V_HL 9111.JPG` | run 9111 | -3218 -5612 11851 -4427 | 2 |
+| `blackrot_0346` | Black Rot | `03423777-…___FAM_B.Rot 0346.JPG` | leaf 6 | 6352 -410 -2469 -2939 | 0 |
+| `esca_1744` | ESCA | `019afd88-…___FAM_B.Msls 1744.JPG` | leaf 137 | -6868 16581 -7421 -2876 | 1 |
+| `blight_4740` | Leaf Blight | `002e4d32-…___FAM_L.Blight 4740.JPG` | leaf 204 | -8198 -8365 -8296 25403 | 3 |
+
+The logits are the RTL's, and equal the exporter's and the C model's. `healthy_9111` is the
+testbenches' default and the one set in git. The other three regenerate with the command in
+`.gitignore`, which now names the leaf-split data, checkpoint and scales. `healthy_hl6025` is
+removed from git, and the old untracked sets from disk. `image_1` stays, for the C model's loader
+test. Each set also has its `000_rgb256.bin` (`gen_preproc_vectors`), so the preprocessing test
+runs on all four.
+
+The first export wrote its golden set into a scratch directory and failed at Windows'
+260-character path limit. A set's directory is named after its photograph, whose PlantVillage name
+is over 50 characters, and the scratch path was long. The sets were written straight into
+`software/golden/` and renamed.
+
+#### What did not change
+
+- **The RTL.** Nothing under `hardware/rtl/` was touched.
+- **The program.** `program.hex` and `program.txt` are byte-identical. The program holds shapes,
+  addresses and tilings, and the retrain changed none of them.
+- **The input scale.** So `preproc.c`, the camera front end and the int8 image path are unchanged.
+  `quant_params.h` changes only its checkpoint hash and `QP_LOGIT_SCALE` (7.464271e-04 to
+  8.127818e-04).
+- **The cycle counts.** All three full-network testbenches measure 952,062 busy cycles.
+  `accel_dma_tb` measures 1,151,347 cycles from start to done, 199,285 of them the weight load. The
+  schedule does not look at the weights.
+
+#### Verification
+
+All 35 testbenches pass. The three full-network ones are bit-exact over 6,895,780 elements on
+`healthy_9111`. `accel_tb` is bit-exact on each of the other three sets as well, with
+`program_ops.svh` regenerated per set and then put back to the default. The C model matches 66/66
+layers on each set, the preprocessing is bit-exact on each, and the firmware and Linux-side host
+tests pass.
+
+Getting there took three kinds of failure. Only the first was real:
+
+1. **Stale scalars in four testbenches.** The first full run failed nine. Three were real, with the
+   RTL unchanged and `accel_tb` bit-exact:
+   - `avgpool_layer_tb`, 288 of 1,280 channels;
+   - `gap_datapath_tb`, 289 of 2,560 elements;
+   - `residual_layer_tb`, 63,966 of 75,264 elements.
+
+   All three had two of the old model's per-tensor scalars typed in:
+   - the average pool's m0, 1,990,030,058 (now 2,055,390,192);
+   - `features.3`'s residual-add m0, 1,471,079,665 (now 1,947,355,764).
+
+   The shifts did not change. Searching the other six failures for the same numbers found one more,
+   `res_datapath_tb`, whose run had stopped before comparing anything. These two scalars live in
+   `manifest.json` itself, not in a `.hex` a testbench can `$readmemh`, which is why they were
+   typed. `gen_program.py --emit` now writes every res_add and GAP scalar into
+   `hardware/tb/model_scalars.svh`, from the same manifest in the same run, and the four include
+   it. It is DD-019's failure again, a number copied by hand from an artefact that later changed.
+   This time the suite caught it.
+2. **File locks.** The other six failures were xelab's "Could not remove the obj directory ... being
+   used by another process", most likely the antivirus. Five passed unchanged on a re-run.
+   `res_datapath_tb` passed after the fix.
+3. **Runs that never ran.** One `accel_tb` run on the ESCA set printed no result. Then, in the last
+   full run on the final tree, six testbenches never started. xsim said "Simulation engine failed
+   to start: Failed to launch child process (child exe not found)", although the freshly linked
+   `xsimk.exe` was on disk a moment later, so most likely the antivirus again. `run_sim.sh` reports
+   such a run as INCONCLUSIVE, and that is correct. My per-set wrapper script had counted the ESCA
+   one as a pass, because the INCONCLUSIVE message contains the words "ALL PASS"; it now checks for
+   a line that starts with them. Every one of them passed when re-run with nothing changed, the
+   ESCA set bit-exact.
+
+So the suite never passed anything it should not have. Every lock and every run that never ran was
+reported as a failure or as INCONCLUSIVE, never as a pass; only my wrapper got that wrong. Every
+testbench passed on the final tree, 29 in the last full run and the other six on their re-run.
+
+#### The thesis numbers
+
+- **The accumulator figures are generated now.** `thesis_numbers.py` replays the accumulator bound
+  from `software/export/` on every run. Every figure of the bound comes from it, including the ones
+  the 2026-10-21 entry found copied by hand:
+  - `\thAccBound` and its bits, layer, channel and bias;
+  - `\thAccRange`, `\thAccMargin`, `\thAccMarginNarrow` (at the narrowest safe width, now 25 bits),
+    `\thAccGeom` and `\thAccUnsafeLayers`;
+  - `\thMaxShift`.
+
+  I checked the replay on the previous export first. It reproduces the hand-copied figures exactly:
+  5,094,750, 24 bits, `classifier.1`, 14 layers, and a largest shift of 48. What no export can
+  regenerate stays in `manual_numbers.tex` as labelled history (`\thAccBoundPrev` and its bits,
+  layer and unsafe-layer count).
+- **`\thCycles` had been stale.** It was 951,833, the first measurement, of 2026-09-13, before the
+  pipelining changed the pipeline and drain depths. All three full-network testbenches printed
+  952,062 on 2026-09-25, and still do. The figures derived from it round the same.
+- **`numbers.tex`** has 282 macros, and its WARNING line is gone: `\thCkptSha` and `\thAccCkptSha`
+  are both `1b536a3033c8`.
+- **The verification block of `manual_numbers.tex`** is re-measured: 35 testbenches, and the four
+  new sets.
+
+#### Staged for the board, not run
+
+- `build/sdcard*/` is restaged by `make_sdcard.py` with the four new sets. `EXPECTED.txt` holds the
+  logits above.
+- `vinecam` is rebuilt. It compiles `QP_LOGIT_SCALE` in, for the softmax it prints next to the
+  class. With the old binary the class would still be right, since an argmax needs no scale, but
+  the percentage would not.
+- The lab guide's known answers, register values and checksum are updated for `healthy_9111`.
+
+Not done: **the board re-run.** The board results of 2026-10-07 and 2026-10-22 are the previous
+model's. The timing should carry over, because the cycle counts are identical, but the board
+decides that. The known answers have to be re-run with the new cards and the new `vinecam`; in the
+thesis they are marked `TODO(BOARD)`. Then the ONNX file, the Pi and the Nano.

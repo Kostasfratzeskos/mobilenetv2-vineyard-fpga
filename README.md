@@ -14,6 +14,8 @@ network matches.
 Status: Foundation reached; Core reached on 2026-10-07 (the bare-metal app on the ZCU104,
 bit-exact against the known answer); Stretch reached on 2026-10-22 (a USB webcam classified live
 on the board under Linux, the known answers bit-exact for all four classes, 6.66 ms per image).
+Those board runs used the previous model. Since 2026-10-23 the repository holds the leaf-split
+model on every platform (DD-036): bit-exact in all 35 testbenches, not yet run on the board.
 
 The evaluation also runs **the same model on two edge devices** — a Raspberry Pi 4 (CPU) and a
 Jetson Nano (GPU) — on the same test images, with the same measurements (DD-036). The dataset is

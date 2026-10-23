@@ -1825,7 +1825,9 @@ argmax over the 4 int16 logits is the predicted class.
   vectors and every simulation are built from `mobilenetv2_grape.pth`.** Until those are regenerated
   from the new checkpoint, the accuracy and the bit-exactness results are about two different
   models, and the thesis must not present them as one — `thesis_numbers.py` writes a WARNING line
-  into `numbers.tex` for as long as that is true.
+  into `numbers.tex` for as long as that is true. **Closed 2026-10-23** by the redeploy of DD-036:
+  the export, the golden vectors and every simulation are from `1b536a3033c8` now, and the WARNING
+  line is gone.
 
 - Revisit if: field photographs arrive — they are the real test of deployment, and they get their own
   number rather than being pooled; a leaf map for the healthy class turns up; or the export is
@@ -2048,7 +2050,8 @@ argmax over the 4 int16 logits is the predicted class.
   - **Order:** the camera runs on the board first (DD-035), with today's blobs — they are the ones
     already proven on the board, so a failure there is Linux and not the model. Then the redeploy,
     then the Pi and the Nano. One change at a time. (2026-10-22: the camera step is done, see
-    DD-035's board result. The redeploy is next.)
+    DD-035's board result. 2026-10-23: the redeploy is done in the repository, see "Redeploy"
+    below; the board has not run the new model yet.)
 
 - The current golden sets against the new split (`data/grape_leafsplit/split.csv`, checked
   2026-10-21):
@@ -2088,3 +2091,15 @@ argmax over the 4 int16 logits is the predicted class.
 
 - Revisit if: field photographs arrive (DD-034); a Jetson with int8 tensor cores (an Orin) becomes
   available, which would give the GPU an int8 row; or the schedule forces a platform out.
+
+- **Redeploy, 2026-10-22/23** (`docs/lab_notebook.md`, 2026-10-23). `software/export/` is now built
+  from `1b536a3033c8`. Its logit scale equals the test report's, so the deployed integer pipeline is
+  exactly the one whose accuracy DD-034 measured. The new golden sets are the first test-split
+  photograph of each class, in file order, that the integer pipeline gets right: `healthy_9111`
+  (the testbenches' default), `blackrot_0346`, `esca_1744` and `blight_4740`.
+  - No RTL change. The program words, the input scale and the cycle counts are identical.
+  - All 35 testbenches pass. Four had two of the old model's per-tensor scalars typed in, and three
+    of them failed on it first (the fourth had stopped on a file lock). `gen_program.py --emit` now
+    generates those scalars (`hardware/tb/model_scalars.svh`).
+  - The SD-card known answers are restaged, and `vinecam` is rebuilt for the new logit scale. The
+    board re-run is the one step left.

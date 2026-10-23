@@ -47,6 +47,10 @@ Both are in `docs/lab_notebook.md`, under their dates. For the bare-metal applic
 the RGB image, the other three classes, the UART source and booting from the SD card are still
 unrecorded.
 
+Both runs used the **previous** model (`268f85f714d3`). Since 2026-10-23 the blobs, the golden sets
+and the known answers in `build/sdcard*/` are the leaf-split model's (DD-036): bit-exact in
+simulation, not yet run on the board. Restage the card before the next run.
+
 The code was written before there was a board, so it is split so that the part most
 likely to be wrong can be checked without one:
 
@@ -255,7 +259,7 @@ python scripts/gen_preproc_vectors.py
 
 writes `000_rgb256.bin` (the decoded source image) into each golden set that has
 its source JPEG, and re-derives that set's `000_input.hex` in Python to confirm
-the match. `test_preproc` reads the vector for `healthy_hl6025`, which is the
+the match. `test_preproc` reads the vector for `healthy_9111`, which is the
 tracked set. If it is missing the test **fails** and says so rather than skipping
 — a silently skipped front-end check is how the bit-exactness claim quietly stops
 covering the input.

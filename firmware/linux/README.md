@@ -62,6 +62,7 @@ firmware/linux/
 | the Linux port on the board: UIO, the DMA region, the address hook | step 7, all four known answers (2026-10-22) | **bit-exact**: all four classes through RGB, the healthy one through int8 as well; **6.659 ms** per image over 100 runs |
 | the webcam (V4L2) and the live loop | step 8 (2026-10-22) | **runs and classifies on the board**; its per-second numbers are not recorded yet |
 | DisplayPort (`/dev/fb0`), the browser view, the saved-frame check | steps 8-10 | **not yet**: no `/dev/fb0` at boot (no monitor was detected); the other two not run |
+| the redeployed model (DD-036, 2026-10-23) | all 35 testbenches; `make check` here | **bit-exact in simulation, not yet on the board.** The board rows above used the previous model. `vinecam` was rebuilt because it carries the model's logit scale: copy the new binary and restage the card (step 2) |
 
 The order of operations below is designed around that: the first thing to run on the board
 is a **known answer with no camera** (step 7), which tests the whole Linux port against
@@ -118,10 +119,10 @@ needed in step 4.
 
 ```
 python scripts/gen_program.py --emit
-python scripts/make_sdcard.py                                        # healthy_hl6025
-python scripts/make_sdcard.py --set esca_4399     --out build/sdcard_esca
-python scripts/make_sdcard.py --set blackrot_0376 --out build/sdcard_blackrot
-python scripts/make_sdcard.py --set blight_1461   --out build/sdcard_blight
+python scripts/make_sdcard.py                                        # healthy_9111
+python scripts/make_sdcard.py --set esca_1744     --out build/sdcard_esca
+python scripts/make_sdcard.py --set blackrot_0346 --out build/sdcard_blackrot
+python scripts/make_sdcard.py --set blight_4740   --out build/sdcard_blight
 ```
 
 Each `build/sdcard*/` then holds the five blobs, `image_q8.bin`, `image_rgb.bin` and
