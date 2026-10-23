@@ -1,11 +1,11 @@
 EXPECTED RESULT - what the board must print
 ============================================================
 
-golden set   : esca_4399
-source image : 0075b632-2e34-4e4f-9697-fe2b332b7ef8___FAM_B.Msls 4399_flipLR.JPG
-checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+golden set   : esca_1744
+source image : 019afd88-6645-44c4-a5d2-bd583b877a50___FAM_B.Msls 1744.JPG
+checkpoint   : 1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d
 
-logits       :   -8592   23216  -10575   -3925
+logits       :   -6868   16581   -7421   -2876
 argmax       : 1 = ESCA
 manifest says: ESCA
 

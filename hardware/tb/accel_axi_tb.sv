@@ -249,7 +249,7 @@ module accel_axi_tb;
                    "../../software/export/params_b.hex",
                    "../../software/export/params_m0.hex",
                    "../../software/export/params_shift.hex");
-        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+        u_ddr.load_img("../../software/golden/healthy_9111/000_input.hex",
                        IH, IW, CIN);
 
         al_idle;

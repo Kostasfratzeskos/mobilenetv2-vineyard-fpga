@@ -3,7 +3,7 @@
 //  gap_datapath_tb.sv  -  INTEGRATION: the global average pool vs the golden
 //
 //  Layer: avgpool (the `gap` op)   7x7x1280 -> 1x1x1280
-//     m0 = 1990030058, shift = 36, window = 49
+//     m0 and shift from model_scalars.svh (the manifest's avgpool op), window = 49
 //     input  = golden 062_features_18_0   (7x7x1280, NCHW)
 //     output = golden 063_avgpool         (1280 values)
 //
@@ -34,8 +34,10 @@ module gap_datapath_tb;
     localparam NPIX = H*W;                  // 49
     localparam NELEM = C*H*W;               // 62720
 
-    localparam M0    = 32'sd1990030058;
-    localparam SHIFT = 6'd36;
+    // Generated, not typed: a retrain moves m0 (it did, DD-036).
+    `include "model_scalars.svh"
+    localparam signed [31:0] M0    = MS_AVGPOOL_M0;
+    localparam        [5:0]  SHIFT = MS_AVGPOOL_SHIFT;
 
     // ---- datapath ---------------------------------------------------------
     localparam DATA_W  = 8;
@@ -271,8 +273,8 @@ module gap_datapath_tb;
     integer c, m, k, ch, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/062_features_18_0.hex", in_mem);
-        $readmemh("../../software/golden/healthy_hl6025/063_avgpool.hex",       gold_mem);
+        $readmemh("../../software/golden/healthy_9111/062_features_18_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_9111/063_avgpool.hex",       gold_mem);
 
         start = 0; load_mode = 0; tb_rd = 0; mon_on = 0;
         pl_en = 0; pl_bank = 0; pl_addr = 0; pl_bias = 0; pl_m0 = 0; pl_shift = 0;

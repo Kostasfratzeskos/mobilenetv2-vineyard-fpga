@@ -167,7 +167,7 @@ build/bd_*/methodology.rpt
 #  card per directory, so each can be copied flat to a card root - and the
 #  pattern is build/sdcard*/ for the same reason as build/synth_*/: naming only
 #  build/sdcard/ left every other set's blobs untracked-but-not-ignored.
-#      python scripts/make_sdcard.py --set esca_4399 --out build/sdcard_esca
+#      python scripts/make_sdcard.py --set esca_1744 --out build/sdcard_esca
 build/sdcard*/*.bin
 
 # ── Place-and-route artifacts (scripts/run_impl.sh) ──
@@ -209,13 +209,14 @@ build/vivado/
 #  local artifacts. To reproduce the per-class verification table in
 #  docs/lab_notebook.md:
 #
-#      cd software/train && python export.py --data ../../data/grape \
-#          --ckpt ../runs/mobilenetv2_grape.pth --scales quant_scales.json \
+#      cd software/train && python export.py --data ../../data/grape_leafsplit \
+#          --ckpt ../runs/mobilenetv2_grape_leafsplit.pth \
+#          --scales ../runs/quant_scales_grape_leafsplit.json \
 #          --image <image> --check 0
 #      python scripts/gen_program.py --emit --golden-dir software/golden/<set>
 #      bash scripts/run_sim.sh accel accel_top ...
 software/golden/*/
-!software/golden/healthy_hl6025/
+!software/golden/healthy_9111/
 #  image_1 is 2026-06 and cannot be regenerated: its source image is gone from
 #  data/ and its checkpoint was overwritten. Its blobs are already in history,
 #  so excluding it here would save nothing; kept, marked stale in its manifest.

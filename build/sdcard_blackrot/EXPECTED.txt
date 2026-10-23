@@ -1,11 +1,11 @@
 EXPECTED RESULT - what the board must print
 ============================================================
 
-golden set   : blackrot_0376
-source image : 00090b0f-c140-4e77-8d20-d39f67b75fcc___FAM_B.Rot 0376.JPG
-checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+golden set   : blackrot_0346
+source image : 03423777-68b9-430e-9787-fbd776740881___FAM_B.Rot 0346.JPG
+checkpoint   : 1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d
 
-logits       :   12405   -2762   -5686   -3679
+logits       :    6352    -410   -2469   -2939
 argmax       : 0 = Black Rot
 manifest says: Black Rot
 

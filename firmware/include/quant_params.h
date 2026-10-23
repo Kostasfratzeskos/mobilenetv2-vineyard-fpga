@@ -9,7 +9,7 @@
  *  scale is how a deployed input tensor ends up silently different
  *  from the one the golden vectors were made with.
  *
- *  checkpoint 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+ *  checkpoint 1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d
  */
 #ifndef QUANT_PARAMS_H
 #define QUANT_PARAMS_H
@@ -37,6 +37,6 @@
 /*  What one step of the int16 logits is worth (DD-011). Not used by
  *  the arithmetic - the argmax needs no scale - only to show a
  *  softmax next to the class, which firmware/linux/src/ui.c does. */
-#define QP_LOGIT_SCALE   0.00074642713547160391
+#define QP_LOGIT_SCALE   0.00081278177279339259
 
 #endif /* QUANT_PARAMS_H */

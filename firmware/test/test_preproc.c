@@ -60,7 +60,7 @@
 /*  The tracked golden set. The others in software/golden/ are gitignored
  *  (see .gitignore), so this is the one a fresh clone has - and its RGB vector
  *  is committed beside it for exactly that reason. */
-#define GOLD_SET "healthy_hl6025"
+#define GOLD_SET "healthy_9111"
 #define GOLD_DIR "../software/golden/" GOLD_SET
 
 static int total, fails;

@@ -230,7 +230,7 @@ module accel_dma_tb;
                    "../../software/export/params_shift.hex");
         // The image goes into DDR too now, transposed to HWC by the model
         // (DD-032). This testbench no longer touches img_buffer at all.
-        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+        u_ddr.load_img("../../software/golden/healthy_9111/000_input.hex",
                        IH, IW, CIN);
 
         start = 0; n_instr = 0;

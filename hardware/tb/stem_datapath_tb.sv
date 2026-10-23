@@ -309,8 +309,8 @@ module stem_datapath_tb;
     integer p, y, x, m, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/000_input.hex",         img_mem);
-        $readmemh("../../software/golden/healthy_hl6025/001_features_0_0.hex",  gold_mem);
+        $readmemh("../../software/golden/healthy_9111/000_input.hex",         img_mem);
+        $readmemh("../../software/golden/healthy_9111/001_features_0_0.hex",  gold_mem);
         $readmemh("../../software/export/features_0_0_w.hex",            wq_mem);
         $readmemh("../../software/export/features_0_0_b.hex",            b_mem);
         $readmemh("../../software/export/features_0_0_m0.hex",           m0_mem);

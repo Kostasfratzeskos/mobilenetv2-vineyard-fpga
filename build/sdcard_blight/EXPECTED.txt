@@ -1,11 +1,11 @@
 EXPECTED RESULT - what the board must print
 ============================================================
 
-golden set   : blight_1461
-source image : 043920d3-0542-4bd7-a8e5-3807c04a5bdc___FAM_L.Blight 1461.JPG
-checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+golden set   : blight_4740
+source image : 002e4d32-15cf-4350-bfba-dde7c8992392___FAM_L.Blight 4740.JPG
+checkpoint   : 1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d
 
-logits       :   -1751   -7243   -4688   13659
+logits       :   -8198   -8365   -8296   25403
 argmax       : 3 = Leaf Blight
 manifest says: Leaf Blight
 

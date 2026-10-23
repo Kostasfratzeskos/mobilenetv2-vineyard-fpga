@@ -657,12 +657,12 @@ module wgt_dma_tb;
         $readmemh("../../software/export/params_b.hex",     pb);
         $readmemh("../../software/export/params_m0.hex",    pm);
         $readmemh("../../software/export/params_shift.hex", ps);
-        $readmemh("../../software/golden/healthy_hl6025/000_input.hex", img_chw);
+        $readmemh("../../software/golden/healthy_9111/000_input.hex", img_chw);
         u_ddr.load("../../software/export/weights.hex",
                    "../../software/export/params_b.hex",
                    "../../software/export/params_m0.hex",
                    "../../software/export/params_shift.hex");
-        u_ddr.load_img("../../software/golden/healthy_hl6025/000_input.hex",
+        u_ddr.load_img("../../software/golden/healthy_9111/000_input.hex",
                        IH, IW, CIN);
         $display("loaded the weight blob (%0d bytes) and %0d parameter entries",
                  WBLOB, PBLOB);

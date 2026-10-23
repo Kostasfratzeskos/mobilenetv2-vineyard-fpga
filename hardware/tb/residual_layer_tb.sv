@@ -6,7 +6,8 @@
 //     target = features.3.conv.2 output (main path)     -> golden 009
 //     saved  = features.2.conv.2 output (block input)   -> golden 006
 //     out    = golden 010_features_3_add
-//     rescale of `saved`: m0 = 1471079665, shift = 31 (per-tensor scalar)
+//     rescale of `saved`: features.3.add's per-tensor m0 and shift, from
+//     model_scalars.svh (generated from the manifest by gen_program.py --emit)
 //
 //  residual_add is combinational and element-wise (target[i] and saved[i] are
 //  the same NCHW position), so no gather: just iterate all elements.
@@ -20,8 +21,10 @@
 module residual_layer_tb;
 
     localparam N     = 75264;
-    localparam M0    = 32'd1471079665;
-    localparam SHIFT = 6'd31;
+    // Generated, not typed: a retrain moves m0 (it did, DD-036).
+    `include "model_scalars.svh"
+    localparam [31:0] M0    = MS_FEATURES_3_ADD_M0;
+    localparam [5:0]  SHIFT = MS_FEATURES_3_ADD_SHIFT;
 
     reg [7:0] saved_mem  [0:N-1];
     reg [7:0] target_mem [0:N-1];
@@ -39,9 +42,9 @@ module residual_layer_tb;
     integer i, total = 0, fails = 0;
     logic [7:0] expd;
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/006_features_2_conv_2.hex", saved_mem);
-        $readmemh("../../software/golden/healthy_hl6025/009_features_3_conv_2.hex", target_mem);
-        $readmemh("../../software/golden/healthy_hl6025/010_features_3_add.hex",    gold_mem);
+        $readmemh("../../software/golden/healthy_9111/006_features_2_conv_2.hex", saved_mem);
+        $readmemh("../../software/golden/healthy_9111/009_features_3_conv_2.hex", target_mem);
+        $readmemh("../../software/golden/healthy_9111/010_features_3_add.hex",    gold_mem);
 
         m0 = M0; shift = SHIFT;
         $display("integration: features.3.add residual (N=%0d)", N);

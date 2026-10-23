@@ -5,7 +5,8 @@
 //  Layer: avgpool (kind=gap), global average pool 7x7x1280 -> 1x1x1280.
 //     input  = golden 062_features_18_0  (NCHW int8, 7x7x1280)
 //     output = golden 063_avgpool        (int8, 1280)
-//     requantize: ACT_NONE, m0 = 1990030058, shift = 36 (per-tensor scalar);
+//     requantize: ACT_NONE, the avgpool op's per-tensor m0 and shift, from
+//     model_scalars.svh (generated from the manifest by gen_program.py --emit);
 //     the /(H*W)=1/49 averaging is folded into m0.
 //
 //  For each channel: stream its 49 spatial samples through the accumulator,
@@ -22,8 +23,10 @@ module avgpool_layer_tb;
 
     localparam C  = 1280;
     localparam H  = 7, W = 7, HW = 49;
-    localparam M0    = 32'd1990030058;
-    localparam SHIFT = 6'd36;
+    // Generated, not typed: a retrain moves m0 (it did, DD-036).
+    `include "model_scalars.svh"
+    localparam [31:0] M0    = MS_AVGPOOL_M0;
+    localparam [5:0]  SHIFT = MS_AVGPOOL_SHIFT;
     localparam ACT_NONE = 1'b0;
 
     reg [7:0] in_mem   [0:C*HW-1];
@@ -91,8 +94,8 @@ module avgpool_layer_tb;
     integer c;
     logic [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/062_features_18_0.hex", in_mem);
-        $readmemh("../../software/golden/healthy_hl6025/063_avgpool.hex",       gold_mem);
+        $readmemh("../../software/golden/healthy_9111/062_features_18_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_9111/063_avgpool.hex",       gold_mem);
 
         ap_valid=0; ap_first=0; ap_last=0; a_r=0; rq_en=0; act_r=0;
         m0_r=0; sh_r=0; qmax_r=0;

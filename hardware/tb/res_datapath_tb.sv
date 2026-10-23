@@ -2,7 +2,7 @@
 //============================================================================
 //  res_datapath_tb.sv  -  INTEGRATION: the residual add vs the golden
 //
-//  Layer: features.3.add   56x56x24, m0 = 1471079665, shift = 31
+//  Layer: features.3.add   56x56x24, m0 and shift from model_scalars.svh
 //     target = features.3.conv.2 output  (golden 009, the main path)
 //     saved  = features.2.conv.2 output  (golden 006, the block input)
 //     out    = golden 010
@@ -37,8 +37,10 @@ module res_datapath_tb;
     localparam NPIX = H*W;                  // 3136
     localparam NELEM = C*H*W;               // 75264
 
-    localparam M0    = 32'sd1471079665;
-    localparam SHIFT = 6'd31;
+    // Generated, not typed: a retrain moves m0 (it did, DD-036).
+    `include "model_scalars.svh"
+    localparam signed [31:0] M0    = MS_FEATURES_3_ADD_M0;
+    localparam        [5:0]  SHIFT = MS_FEATURES_3_ADD_SHIFT;
 
     // ---- datapath ---------------------------------------------------------
     localparam DATA_W  = 8;
@@ -290,9 +292,9 @@ module res_datapath_tb;
     integer p, y, x, m, c, bad;
     logic signed [7:0] got, expd;
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/009_features_3_conv_2.hex", tgt_mem);
-        $readmemh("../../software/golden/healthy_hl6025/006_features_2_conv_2.hex", sav_mem);
-        $readmemh("../../software/golden/healthy_hl6025/010_features_3_add.hex",    gold_mem);
+        $readmemh("../../software/golden/healthy_9111/009_features_3_conv_2.hex", tgt_mem);
+        $readmemh("../../software/golden/healthy_9111/006_features_2_conv_2.hex", sav_mem);
+        $readmemh("../../software/golden/healthy_9111/010_features_3_add.hex",    gold_mem);
 
         start = 0; load_mode = 0; tb_rd = 0; mon_on = 0;
         pl_en = 0; pl_bank = 0; pl_addr = 0; pl_bias = 0; pl_m0 = 0; pl_shift = 0;

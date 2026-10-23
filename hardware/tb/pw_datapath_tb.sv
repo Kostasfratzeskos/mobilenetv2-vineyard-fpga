@@ -356,12 +356,12 @@ module pw_datapath_tb;
     endtask
 
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/002_features_1_conv_0_0.hex", in_mem);
+        $readmemh("../../software/golden/healthy_9111/002_features_1_conv_0_0.hex", in_mem);
         $readmemh("../../software/export/features_1_conv_1_w.hex",             wq_mem);
         $readmemh("../../software/export/features_1_conv_1_b.hex",             b_mem);
         $readmemh("../../software/export/features_1_conv_1_m0.hex",            m0_mem);
         $readmemh("../../software/export/features_1_conv_1_shift.hex",         sh_mem);
-        $readmemh("../../software/golden/healthy_hl6025/003_features_1_conv_1.hex",   gold_mem);
+        $readmemh("../../software/golden/healthy_9111/003_features_1_conv_1.hex",   gold_mem);
 
         start = 0; stall = 0; load_mode = 0; mon_on = 0;
         wl_en = 0; wl_bank = 0; wl_addr = 0; wl_data = 0;

@@ -1,11 +1,11 @@
 EXPECTED RESULT - what the board must print
 ============================================================
 
-golden set   : healthy_hl6025
-source image : 0ca59865-f0d2-4863-b4d1-a6690de53a5a___Mt.N.V_HL 6025_90deg.JPG
-checkpoint   : 268f85f714d35c769571d42d7d72d31312c5dd1bb3b0f3a115d1f406951f4092
+golden set   : healthy_9111
+source image : 05cff9d7-0f63-4b6e-9aa3-199cf9ffa64c___Mt.N.V_HL 9111.JPG
+checkpoint   : 1b536a3033c85a3abcc624a6374bc9519d804d1d94e0cff4adc093f5df96693d
 
-logits       :   -4950   -6177   15185   -5486
+logits       :   -3218   -5612   11851   -4427
 argmax       : 2 = Healthy
 manifest says: Healthy
 

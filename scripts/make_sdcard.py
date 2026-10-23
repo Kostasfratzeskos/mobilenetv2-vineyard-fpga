@@ -37,7 +37,7 @@ answer is the accelerator and not the front end. Then switch to the RGB one, whi
 exercises preproc.c on the board, and the logits must be IDENTICAL - that is the
 whole point of the front end being bit-exact.
 
-Run: python scripts/make_sdcard.py --set healthy_hl6025
+Run: python scripts/make_sdcard.py --set healthy_9111
 """
 import argparse
 import json
@@ -98,7 +98,7 @@ def chw_to_hwc(chw):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--set", default="healthy_hl6025",
+    ap.add_argument("--set", default="healthy_9111",
                     help="which golden set to use as the known-answer image")
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()

@@ -351,8 +351,8 @@ module dw_datapath_tb;
     endtask
 
     initial begin
-        $readmemh("../../software/golden/healthy_hl6025/001_features_0_0.hex",         in_mem);
-        $readmemh("../../software/golden/healthy_hl6025/002_features_1_conv_0_0.hex",  gold_mem);
+        $readmemh("../../software/golden/healthy_9111/001_features_0_0.hex",         in_mem);
+        $readmemh("../../software/golden/healthy_9111/002_features_1_conv_0_0.hex",  gold_mem);
         $readmemh("../../software/export/features_1_conv_0_0_w.hex",            wq_mem);
         $readmemh("../../software/export/features_1_conv_0_0_b.hex",            b_mem);
         $readmemh("../../software/export/features_1_conv_0_0_m0.hex",           m0_mem);
