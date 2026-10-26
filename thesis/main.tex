@@ -2,8 +2,8 @@
 % Vineyard Disease Detection on an FPGA Platform
 % Diploma thesis - NTUA, School of ECE
 %
-% This is the supervisor's template, unchanged except for three things, each
-% marked <<< ADDED >>> below:
+% This is the supervisor's template, unchanged except for four things: three
+% marked <<< ADDED >>> and one <<< FIXED >>> below:
 %   1. \input{preamble_additions} - siunitx, plus all the number macros this
 %      manuscript needs on top of the template. Kept in a separate file so the
 %      template's own preamble stays diffable against the original.
@@ -12,6 +12,8 @@
 %      the submitted PDF.
 %   3. three extra \input lines - verification, timing closure and integration
 %      are chapters of their own. See thesis/README.md for why.
+%   4. \usepackage{algorithmic} commented out - the template loads both it and
+%      algpseudocode, which cannot coexist. As shipped it does not compile.
 %
 % Build: make
 % ===========================================================================
@@ -49,7 +51,15 @@
 \usepackage[greek,english]{babel}
 \usepackage[top=2cm, bottom=2cm,left=2cm,right=2cm]{geometry}
 \usepackage{algorithm}
-\usepackage{algorithmic}
+% <<< FIXED >>> algorithmic and algpseudocode cannot both be loaded.
+% algpseudocode (algorithmicx, loaded below) defines its own `algorithmic'
+% environment, so loading this package first aborts the build with
+%   ! LaTeX Error: Command \algorithmic already defined.
+% The template ships both; it does not compile as given. Nothing in this
+% manuscript uses either package, and algpseudocode is the maintained one,
+% so this is the line to drop. Restore it only if you also remove
+% \usepackage{algpseudocode} below and write \STATE-style pseudocode.
+%\usepackage{algorithmic}
 \usepackage{notoccite}
 \usepackage{listings}
 \usepackage{algorithm}

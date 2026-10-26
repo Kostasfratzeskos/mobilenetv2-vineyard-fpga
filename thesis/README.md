@@ -10,8 +10,8 @@ make todo       # what is still unwritten
 
 ## Relationship to the supervisor's template
 
-`main.tex` **is** the template's `main.tex`, changed in three places, each marked
-`<<< ADDED >>>`:
+`main.tex` **is** the template's `main.tex`, changed in four places — three marked
+`<<< ADDED >>>`, one `<<< FIXED >>>`:
 
 1. `\input{preamble_additions}` at the end of the preamble — siunitx and all the
    number macros this manuscript needs. Keeping them in their own file means a new
@@ -22,6 +22,10 @@ make todo       # what is still unwritten
    submitted PDF.
 3. Three extra `\input` lines — verification, timing closure and integration are
    chapters of their own. See *Structure* below.
+4. `\usepackage{algorithmic}` commented out. **The template does not compile as
+   shipped**: it loads both `algorithmic` and `algpseudocode`, and algpseudocode
+   (algorithmicx) defines its own `algorithmic` environment, so the build aborts
+   with `Command \algorithmic already defined`. Nothing here uses either package.
 
 `sections/template.tex` is the template's prescribed front matter — title page,
 approval page, copyright page, both abstracts, acknowledgements and the contents
@@ -29,6 +33,11 @@ lists — with the names, title, committee and dates changed to yours. The struc
 and wording are the school's; do not restyle them. Three things there still need
 filling in: the two other committee members and their ranks, the approval date, and
 the abstracts themselves.
+
+It carries one `<<< FIXED >>>` of its own: the English abstract had `\\` followed by
+`\linebreak\linebreak`, which need a line to act on. With the abstract still a
+`% TODO` there is none, so the build aborted with *There's no line here to end.*
+The Greek abstract above it has no such pair, and the English one now matches.
 
 ### Conventions taken from the template's example chapters
 
@@ -57,7 +66,7 @@ vector prints better and needs no second pipeline.
 | `preamble_additions.tex` | siunitx, the number macros, shorthands |
 | `sections/` | front matter (`template.tex`), one file per chapter, the Greek summary, three appendices |
 | `images/` | SVG sources under `images/<chapter>/`; `make figures` converts them to PDF |
-| `references.bib` | 45 entries: the 36 transcribed from the template's bibliography, plus the edge-device platforms, runtimes and the closest related deployment (DD-036) |
+| `references.bib` | 58 entries: the 36 transcribed from the template's bibliography, plus the edge-device platforms, runtimes and the closest related deployment (DD-036), and the sources of the introduction's motivation (Chapter 1) |
 | `generated/numbers.tex` | **generated** — every measured figure, as LaTeX macros |
 | `manual_numbers.tex` | the few figures that are not yet derivable, each with its source |
 

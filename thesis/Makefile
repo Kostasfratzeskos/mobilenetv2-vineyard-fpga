@@ -35,10 +35,10 @@ all: numbers figures pdf
 pdf: $(MAIN).pdf
 
 $(MAIN).pdf: $(TEX) references.bib generated/numbers.tex $(PDF)
-	$(LATEXMK) -pdf -interaction=nonstopmode -halt-on-error $(MAIN).tex
+	$(LATEXMK) -pdf -synctex=1 -interaction=nonstopmode -halt-on-error $(MAIN).tex
 
 watch:
-	$(LATEXMK) -pdf -pvc -interaction=nonstopmode $(MAIN).tex
+	$(LATEXMK) -pdf -synctex=1 -pvc -interaction=nonstopmode $(MAIN).tex
 
 # --- the numbers ----------------------------------------------------------
 # Regenerated unconditionally: the Vivado reports and the manifest live
