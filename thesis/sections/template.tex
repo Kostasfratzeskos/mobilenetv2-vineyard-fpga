@@ -1,3 +1,4 @@
+% !TEX root = ../main.tex
 % ===========================================================================
 % Front matter: title page, approval page, copyright, the two abstracts,
 % acknowledgements, and the contents lists.
@@ -211,8 +212,11 @@
 
 % TODO
 
-\\
-\linebreak\linebreak
+% <<< FIXED >>> the template had \\ then \linebreak\linebreak here. Both
+% need a line to act on, and with the abstract unwritten there is none, so
+% the build died with "! LaTeX Error: There's no line here to end." The
+% Greek abstract above has no such pair; this now matches it. For extra
+% space above the keywords once the abstract is written, use \vspace.
 \noindent \keywords{}
 % e.g.: convolutional neural networks, MobileNetV2, int8 quantization, FPGA,
 % Zynq UltraScale+, hardware accelerator, Verilog, bit-exact verification,

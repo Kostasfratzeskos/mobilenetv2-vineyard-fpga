@@ -1,73 +1,451 @@
+% !TEX root = ../main.tex
 % ===========================================================================
-% SOURCES: docs/claude_project/01_PROJECT_BRIEF.md (a snapshot of 2026-09-24:
-%            its status table and its "field contact" dataset are out of date)
-%          docs/design_decisions.md (DD-004, the tiered scope; DD-036, the
-%            scope as amended - the dataset and the comparison)
+% SOURCES: the chapter draft (opening and Motivation) and its references,
+%            each checked against its primary source on 2026-10-26
+%          README.md (the three success tiers and their status)
+%          docs/design_decisions.md: DD-002 (hand-written RTL), DD-004 (the
+%            tiers), DD-006 (golden vectors), DD-034 (the split by leaf),
+%            DD-035 (the camera on the board), DD-036 (the scope as amended)
+%          docs/lab_notebook.md: 2026-09-13 (the whole network bit-exact),
+%            2026-10-07 (the first board run), 2026-10-22 (Linux and the live
+%            camera), 2026-10-23 (the redeploy)
+%          Chapter~\ref{chap:architecture}, for the terminology
 %
-% WRITE THIS LAST but one. The introduction promises what the thesis delivers,
-% and you cannot write the promise honestly until chapters 5-10 exist.
+% THE STATUS BELOW IS EXACT ON 2026-10-26, AND IT WILL MOVE:
+%   TODO(BOARD)      every board result is the previous checkpoint's. Once the
+%                    redeployed model has run on the board, rewrite the
+%                    checkpoint paragraph of Section~\ref{sec:objectives} and
+%                    contributions 6 and 7.
+%   TODO(COMPARISON) nothing of DD-036's comparison is measured yet. Once it
+%                    is, state its outcome in Section~\ref{sec:objectives}
+%                    and add it to the contributions.
 % ===========================================================================
 \chapter{Introduction}
 \label{chap:introduction}
 
+Grapevine is a profitable crop that numerous diseases can affect, which makes
+their effective detection essential for crop
+monitoring~\cite{morellos2024iot}. Deep learning provides an alternative to
+traditional detection methods: convolutional neural networks (CNNs) can
+identify plant diseases from
+images~\cite{mohanty2016plantdisease,liu2020grape}, and lightweight networks
+of this kind have been deployed on edge devices and validated in the
+field~\cite{morellos2024iot}. The convolutions at the core of these networks,
+however, are computationally intensive and often require a powerful platform
+such as a graphics processing unit (GPU), which makes CNNs difficult to deploy
+on portable devices~\cite{bai2018dwsep}.
+
+This thesis designs, verifies and integrates a hardware accelerator for
+MobileNetV2~\cite{sandler2018mobilenetv2} inference on a Zynq UltraScale+
+multiprocessor system-on-chip (MPSoC), targeting the XCZU7EV device of the
+ZCU104 evaluation board. The accelerator classifies a
+$\thImgSize \times \thImgSize$ RGB image of a grapevine leaf into one of
+\thClasses{} classes: black rot, esca, leaf blight and healthy. It is written
+by hand in Verilog-2001 at the register-transfer level (RTL) and performs
+integer-only inference~\cite{jacob2018quantization} on int8 weights and
+activations, with per-channel weight scales and per-tensor activation scales.
+A program-driven controller sequences a small set of reusable, parameterized
+compute engines; the weights are streamed from off-chip DDR memory layer by
+layer, whereas the activations remain on chip for the entire inference.
+
+The work is empirical throughout. An integer-only software model of the
+network emits the exact integer output of every layer, referred to as the
+\emph{golden vectors}, and every RTL block, as well as the assembled network,
+is checked against these vectors bit for bit. A hardware result therefore
+either matches the software model exactly or constitutes a defect, and a
+failure can be localized to a single layer; Chapter~\ref{chap:verification}
+develops this method. Design decisions are defended in the same manner: with
+measured data or, where the correctness of the design depends on them, with
+provable bounds rather than observed values.
+
+The remainder of this chapter is organized as follows.
+Section~\ref{sec:motivation} motivates the work, from the impact of grapevine
+diseases to the case for dedicated inference hardware.
+Section~\ref{sec:objectives} states the objectives of the thesis as three tiers
+of success criteria and sets out its scope, Section~\ref{sec:contributions}
+summarizes its contributions, and Section~\ref{sec:outline} outlines the
+remaining chapters.
+
+
 \section{Motivation}
 \label{sec:motivation}
-% Vineyard disease detection as an agricultural problem; why inference has to
-% happen in the field rather than in a datacentre (connectivity, latency,
-% power); why an FPGA rather than a CPU, a GPU or a phone.
-% Ground this in [morellos2024iot] - the IoT grapevine-monitoring service is
-% the application context this thesis accelerates.
-% The CPU-or-GPU question is no longer only rhetorical: this thesis MEASURES
-% it, running the same model on a Raspberry Pi 4 and a Jetson Nano - the
-% boards such deployments actually use [karim2024grapeedge] - with the same
-% test images and the same meter (\DD{036}). Say here only that it is
-% measured; the numbers belong to Section~\ref{sec:comparison}.
+
+The motivation for this thesis rests on three observations. First, grapevine
+diseases affect an economically significant crop whose protection relies
+heavily on fungicides~\cite{oiv2026state,eurostat2007ppp}. Second,
+image-based classifiers have made automated disease detection feasible,
+including on edge devices in the
+field~\cite{mohanty2016plantdisease,morellos2024iot}. Third, the computational
+cost of these classifiers motivates their execution on dedicated
+hardware~\cite{bai2018dwsep,guo2019survey}.
+Sections~\ref{sec:motivation-diseases},~\ref{sec:motivation-detection}
+and~\ref{sec:motivation-hardware} develop these observations in turn.
+
+
+\subsection{Grapevine Diseases and Their Impact}
+\label{sec:motivation-diseases}
+
+Viticulture is a sector of considerable economic scale: according to the
+report of the International Organisation of Vine and Wine (OIV) on the year
+2025, the world vineyard area amounted to 7.0 million hectares, approximately
+45\% of which lay in the European Union~\cite{oiv2026state}. In the same year,
+world wine production was estimated at 227 million hectolitres, and the value
+of international wine exports at EUR~33.8 billion~\cite{oiv2026state}.
+
+The crop is, moreover, exposed to a large number of threats: a reference
+compendium describes nearly seventy diseases, disorders and pests of
+grape~\cite{wilcox2015compendium}. Several of them affect the leaves:
+Liu et al.~\cite{liu2020grape} identify six common grape leaf diseases and
+pests, among them black rot and leaf blight, as causes of severe economic
+losses to the grape industry, while Xie et al.~\cite{xie2020deep} report that
+black rot, black measles (also named esca), leaf blight and mites seriously
+affect grape yield. The first three of these are the disease classes of this
+thesis. Beyond the foliage, fungal trunk diseases rank among the most
+destructive diseases of grapevine in all grape-growing regions, and no single
+effective control measure against them has been
+developed~\cite{gramaje2018managing}.
+
+In practice, disease control in viticulture relies heavily on chemical
+protection: in the estimates that Eurostat compiled for 1992--2003, vines
+received between 64\% and 75\% of the fungicides used each year in the
+agriculture of the European Union, measured by mass of active substance,
+while occupying between 3\% and 5\% of the area under the crops that the same
+data cover~\cite{eurostat2007ppp}.
+% Both ranges are computed from the book's own tables, year by year: 2.1.2
+% (all fungicides), 5.7.1 (fungicides on grapes and vines) and 2.5.1 (crop
+% areas). Its prose states neither figure.
+Reducing pesticide use on grapevine is the subject of a critical review of
+plant-protection tools and of the prospects for implementing integrated pest
+management (IPM) in viticulture~\cite{pertot2017critical}. In parallel, timely
+diagnosis and accurate identification are regarded as decisive for
+controlling the spread of grape leaf diseases~\cite{liu2020grape}. The images
+of these diseases on which this thesis works are described in
+Section~\ref{sec:dataset}.
+
+
+\subsection{Image-Based Disease Detection}
+\label{sec:motivation-detection}
+
+Deep learning has been applied to image-based plant disease detection and
+diagnosis~\cite{mohanty2016plantdisease,ferentinos2018deep}, and its use
+across agriculture has been surveyed by Kamilaris and
+Prenafeta-Bold\'u~\cite{kamilaris2018deep}. Hughes and Salath\'e released an
+open-access repository of plant-health images, PlantVillage, specifically to
+enable the development of mobile disease
+diagnostics~\cite{hughes2015plantvillage}; the images used in this thesis are
+drawn from it (Section~\ref{sec:dataset}). Studies of grape leaf diseases
+observe that the identification of early plant diseases with CNNs has become
+a research focus~\cite{liu2020grape,xie2020deep}.
+
+Grape-specific models have also been
+developed~\cite{liu2020grape,xie2020deep}. Liu et al.\ combined 4,023 images
+collected in the field with 3,646 images from public datasets, generated a
+dataset of 107,366 grape leaf images through image enhancement techniques, and
+trained from scratch a CNN, DICNN, that combines Inception structures with
+dense connectivity~\cite{liu2020grape}. Xie et al.\ expanded grape leaf
+disease images through digital image processing to construct a grape leaf
+disease dataset (GLDD), and proposed a real-time detector for grape leaf
+diseases based on improved deep CNNs~\cite{xie2020deep}.
+
+For embedded platforms, state-of-the-art networks such as
+MobileNetV2~\cite{sandler2018mobilenetv2} replace standard convolution with
+depthwise separable convolution, which significantly reduces the number of
+operations and parameters with only a limited loss of
+accuracy~\cite{bai2018dwsep}. Morellos et al.\ applied two such lightweight
+models to grapevine within an Internet of Things (IoT) approach: they trained
+MobileNetV2 and EfficientNet~B0 by transfer learning on a commercially
+available online dataset, deployed them on a Raspberry Pi~4 edge device
+equipped with an RGB camera, and validated them on site in an organic
+winery~\cite{morellos2024iot}. During validation, MobileNetV2 achieved an
+accuracy of 94\%, against 92\% for EfficientNet~B0, and an inference time of
+\SI{330}{\milli\second}, against \SI{390}{\milli\second}; it was therefore
+preferred for online deployment~\cite{morellos2024iot}. Similarly, Karim et
+al.\ deployed a lightweight CNN derived from MobileNetV3-Large for grape leaf
+disease classification on an edge device, a Jetson Nano, and noted that
+inference on the device itself gives low latency, conserves bandwidth and
+requires neither an internet connection nor cloud
+processing~\cite{karim2024grapeedge}. The IoT service of Morellos et al.\
+defines the application context of the present thesis, and
+Chapter~\ref{chap:related} reviews it, together with the wider literature on
+plant disease detection, in greater depth.
+
+
+\subsection{The Case for Dedicated Hardware}
+\label{sec:motivation-hardware}
+
+These results establish that a lightweight CNN can classify grapevine leaves
+on an edge device~\cite{morellos2024iot,karim2024grapeedge}. The cost of
+inference is nevertheless high: the computation and storage complexity of
+neural network inference complicates its application, and it is difficult for
+CPU platforms to provide sufficient computational
+capacity~\cite{guo2019survey}. In practice, GPUs are the first choice for
+neural network processing, owing to their computational capacity and
+easy-to-use development frameworks~\cite{guo2019survey}.
+
+Field-programmable gate arrays (FPGAs) offer an alternative: with hardware
+designed specifically for the task, an FPGA-based accelerator is a possible
+means of surpassing the GPU in both speed and energy efficiency, and various
+such accelerators have been proposed, combining software and hardware
+optimization techniques~\cite{guo2019survey}. The efficient processing of deep
+neural networks is surveyed more broadly by Sze et
+al.~\cite{sze2017efficient}. Representative designs have optimized FPGA
+accelerators for deep CNNs~\cite{zhang2015optimizing} and targeted embedded
+FPGA platforms~\cite{qiu2016goingdeeper}, and a range of toolflows automates
+the mapping of CNNs onto FPGAs~\cite{venieris2018toolflows}.
+
+MobileNetV2 lends itself well to this approach: Bai et al.\ observe that
+networks built on depthwise separable convolution are highly structured and
+therefore very suitable for FPGA implementation, and their scalable
+accelerator, instantiated for MobileNetV2 on an Arria~10 SoC FPGA, classified
+an ImageNet image in \SI{3.75}{\milli\second} (approximately 266.6 frames per
+second), a 20-fold speedup over a CPU~\cite{bai2018dwsep}. Wu et al.\
+separated the two forms of convolution in hardware, with one dedicated engine
+for pointwise and another for depthwise convolution, and executed MobileNetV2
+with 8-bit weights and activations on two Zynq UltraScale+ MPSoC devices, the
+ZU2 and the ZU9~\cite{wu2019high}. Low-precision execution of this kind relies
+on quantization, which enables efficient inference using integer arithmetic
+only~\cite{jacob2018quantization,krishnamoorthi2018whitepaper}. FPGAs have
+also been applied to plant disease identification itself: Perumal et al.\
+used the parallel processing capabilities of a PYNQ FPGA platform to
+accelerate CNN inference, with the aim of improving the efficiency of plant
+disease detection in agricultural settings~\cite{perumal2024cnn}. Finally,
+for the Zynq UltraScale+ family, the vendor offers a ready-made option, the
+DPUCZDX8G, an IP core for deep neural network applications that is integrated
+into a design through either the Vivado or the Vitis
+flow~\cite{xilinx_pg338}.
+
+Apart from the PYNQ study, the works closest to this thesis approach the
+problem from one of two directions: grapevine disease classifiers executed on
+edge
+devices~\cite{morellos2024iot,karim2024grapeedge}, and FPGA accelerators for
+MobileNetV2 demonstrated on general-purpose image classification, such as
+ImageNet~\cite{bai2018dwsep,wu2019high}. This thesis combines the two: it
+implements a MobileNetV2 grapevine disease classifier as a dedicated
+accelerator on a Zynq UltraScale+ MPSoC. Rather than configuring a vendor IP
+core~\cite{xilinx_pg338} or generating the hardware with a
+toolflow~\cite{venieris2018toolflows}, it implements the accelerator by hand
+in Verilog-2001, because the layer-level control and understanding that
+hand-written RTL gives are the purpose of the work. Whether such an
+accelerator is preferable to the edge devices on which grapevine classifiers
+are already deployed~\cite{morellos2024iot,karim2024grapeedge} is, however, a
+question for measurement rather than for citation.
+Section~\ref{sec:objectives} therefore includes that comparison among the
+objectives of the thesis, alongside the tiers that define its success.
+
 
 \section{Objectives and Scope}
 \label{sec:objectives}
-% State the tiered scope from DD-004 explicitly and early - Foundation / Core /
-% Stretch. It is unusual to publish one's own success criteria in a thesis and
-% it is the honest thing to do here, because the tiering is what made the
-% result defensible when the board work ran late.
-%
-% State also the deliberate constraint: hand-written Verilog-2001, not HLS and
-% not a vendor IP core. Say why (layer-level control and understanding), and
-% forward-reference Section~\ref{sec:hls} where the alternative is discussed.
-%
-% Then the two scope statements of \DD{036}, both early:
-%   - the comparison with a Raspberry Pi 4 (CPU) and a Jetson Nano (GPU) is an
-%     objective of the thesis, not an afterthought - the same model, images
-%     and measurements on all three platforms;
-%   - the data is PlantVillage's grape leaves, split by leaf (\DD{034}), and
-%     nothing else: no field photographs. State it as a limit HERE, so the
-%     conclusion repeats it instead of discovering it.
+
+The objective of this thesis is an accelerator that reproduces the
+integer-only software model of MobileNetV2 bit for bit and classifies
+grapevine leaves on the ZCU104 board. A complete network and a live camera,
+both to be developed within the duration of a diploma thesis, form a
+high-risk target if treated as all or nothing. The objective was therefore
+divided at the outset into three cumulative tiers of success criteria, so
+that a defensible result would exist even if the work on the board ran late
+(\DD{004}). Decisions are cited throughout by their identifiers in the design
+decision log, which Appendix~\hyperref[appendix:decisions]{B} summarizes. Each
+tier is defined below, together with the measure that decides it and its
+status at the time of writing.
+
+\begin{description}
+  \item[Foundation.] The complete MobileNetV2 network runs bit-exact against
+    its software model in simulation. The measure is the element-by-element
+    comparison of every intermediate tensor of a whole-network simulation with
+    the golden vectors, \thElements{} elements over the \thInstructions{}
+    instructions of the program, in which a single differing element is a
+    failure. \emph{Status:} reached. With the deployed model, the
+    whole-network comparison is bit-exact on \thImagesVerified{} images, one
+    per class, and all \thTestbenches{} testbenches of the verification suite
+    pass (Section~\ref{sec:bit-exactness-result}).
+  \item[Core.] An image loaded from the SD card is classified by the
+    accelerator on the board itself; this tier is the minimum that the thesis
+    must meet. The measure is a known answer, staged on the card together
+    with the image: the \thClasses{} integer logits and the class that the
+    simulation produces for that image, which the board must reproduce bit for
+    bit. \emph{Status:} reached on 7~October 2026, when the bare-metal
+    application on the ZCU104, booted over JTAG with the image read from the
+    SD card, reproduced the known answer of one image bit for bit
+    (Section~\ref{sec:bringup}). On 22~October 2026, under Linux, the same
+    driver reproduced the known answers of all \thClasses{} classes
+    (Section~\ref{sec:bit-exactness-result}).
+  \item[Stretch.] A live camera feeds the accelerator, which classifies its
+    frames on the board in real time. The measures are the known answers,
+    which establish that the board computes exactly what the simulation
+    computes; the frame rate and the per-frame time of the live loop; and a
+    check that frames saved on the board, when re-derived on the host, yield
+    the same resized window, input tensor and logits. \emph{Status:} reached
+    on 22~October 2026, when the frames of a USB webcam connected to the
+    board were classified live under Linux
+    (Section~\ref{sec:camera-result}). The frame rate of the live loop was
+    not recorded during that run, however, so the real-time qualifier is not
+    yet supported by a measured figure, and neither the check of saved frames
+    nor the display output has yet been verified.
+\end{description}
+
+% TODO(BOARD): the board results above are the previous checkpoint's
+% (268f85f714d3). When the redeployed model has run on the board (lab guide
+% C4, with the restaged cards in build/sdcard*/), rewrite this paragraph, and
+% the dates above if the runs are repeated.
+All the results on the board quoted above were obtained with the weights of
+an earlier training run of the same network. The model was subsequently
+retrained on a split of the dataset by leaf (\DD{034}) and redeployed to the
+accelerator without any change to the RTL, to the compiled program or to the
+cycle count of an inference (\DD{036}). The redeployed model is bit-exact in
+simulation, and its known answers are staged for the board; at the time of
+writing, however, it has not yet been run on the board.
+
+Two constraints bound the work. The first concerns the method: the
+accelerator, including its weight DMA engine and its control registers, is
+written by hand in Verilog-2001 (\DD{002}). It is neither generated by
+high-level synthesis nor assembled from a vendor accelerator core, because
+the layer-level control and understanding that hand-written RTL gives are
+what the work is about; Section~\ref{sec:hls} discusses the alternative, and
+Section~\ref{sec:positioning} positions the thesis against it. The second
+constraint concerns the data, and it is stated here as a limit of every
+result that follows. The dataset is final (\DD{036}): the grape leaf images
+of PlantVillage~\cite{hughes2015plantvillage}, split into training,
+validation and test sets by leaf rather than by image. The dataset holds
+several photographs of each leaf, as Section~\ref{sec:leakage} shows, and a
+split by image therefore separates photographs of the same leaf between
+training and evaluation, as the earlier splits of this work did (\DD{034}).
+The test split is scored once, after the checkpoint and its int8 scales have
+been fixed, and no photographs taken in a vineyard are used. Since the
+PlantVillage images were collected under controlled
+conditions~\cite{mohanty2016plantdisease}, every accuracy figure in this
+thesis describes images of that kind, and none yet describes photographs
+from a vineyard; such photographs are left to future work
+(Section~\ref{sec:future}).
+
+% TODO(COMPARISON): nothing of DD-036's comparison is measured yet. When the
+% JSON reports exist and thesis_numbers.py turns them into macros, state the
+% outcome here in one sentence.
+Beyond the tiers, the evaluation is to compare the accelerator with two edge
+platforms of the kind on which grapevine classifiers have been deployed, a
+Raspberry Pi~4~\cite{morellos2024iot} and a Jetson
+Nano~\cite{karim2024grapeedge} (\DD{036}). The comparison is designed so that
+only the platform differs: the same trained model, the same
+\thAccTestImages{} test images, the same preprocessing and the same
+measurement procedure, including a single power meter for all three boards.
+It comprises two comparisons, which are never combined into one figure. The
+first runs the same integer arithmetic on the Raspberry Pi~4, through the
+bit-exact C model of Section~\ref{sec:c-model}, and therefore isolates the
+effect of the architecture. The second runs the software stack of each
+platform at its best available precision, and therefore reflects what a
+deployment on that platform would obtain. At the time of writing, none of
+these measurements has been made; Section~\ref{sec:comparison} presents the
+comparison.
+
 
 \section{Contributions}
 \label{sec:contributions}
-% Claim only what is measured. A defensible list:
-%   1. an int8 MobileNetV2 accelerator, hand-written RTL, \thDspAccelAxi DSPs,
-%      bit-exact against its software reference over \thElements elements;
-%   2. a verification method built on golden vectors that makes "close enough"
-%      an impossible answer (Chapter~\ref{chap:verification});
-%   3. a measured timing-closure progression, \MHz{\thFmaxBase} to
-%      \MHz{\thFmaxPhaseFour} out of context, each step attributed
-%      (Chapter~\ref{chap:timing});
-%   4. a complete PS integration - DMA, CSR, block design, bit-exact C
-%      preprocessing - closing at \MHz{\thClkBoard} in context
-%      (Chapter~\ref{chap:integration}), and running on the ZCU104;
-%   5. a measured comparison of the same model, on the same test images,
-%      against a Raspberry Pi 4 and a Jetson Nano: latency, power and energy
-%      per inference (Section~\ref{sec:comparison}, \DD{036});
-%   6. the live camera path, running on the board since 2026-10-22 - a USB
-%      webcam to a class, with the resize bit-exact against Pillow
-%      (Section~\ref{sec:camera-path}, \DD{035}).
-% Board results exist, so claim them exactly: on 2026-10-07 the bare-metal
-% application reproduced one known answer bit for bit
-% (Section~\ref{sec:board-remaining}); on 2026-10-22 the Linux port reproduced
-% all four, one per class, at \thBoardMs{} ms per image, and then ran the live
-% camera (Section~\ref{sec:camera-result}).
+
+The contributions of this thesis are listed below, each with the chapter or
+section that presents it. Results obtained on the board are stated together
+with the model that produced them, for the reason given in
+Section~\ref{sec:objectives}.
+
+\begin{enumerate}
+  \item An integer-only MobileNetV2 accelerator for the Zynq UltraScale+
+    MPSoC, written by hand in Verilog-2001. A program of \thInstructions{}
+    instructions drives five parameterized compute engines, which share a
+    single requantization stage and a single on-chip activation pool, while
+    the weights are streamed from DDR memory; the finished accelerator uses
+    \thDspAccelAxi{} DSP slices, \thDspPctAccelAxi\% of those of the device
+    (Chapter~\ref{chap:architecture}).
+  \item A verification method in which the hardware must reproduce the golden
+    vectors of the integer-only software model bit for bit, at the level of
+    each engine, of each layer and of the whole network. With the deployed
+    model, the whole-network comparison covers \thElements{} elements and is
+    bit-exact on \thImagesVerified{} images, one per class
+    (Chapter~\ref{chap:verification}, Section~\ref{sec:bit-exactness-result}).
+  \item Datapath widths that rest on provable bounds rather than on
+    observations. In particular, the accumulator width is sized from a
+    worst-case bound that holds for any input; the exporter recomputes this
+    bound for every exported model and checks it against the width read from
+    the RTL, and when the model was retrained on the split by leaf, the check
+    reported, without any manual step, that the bound had moved to
+    \thAccBoundBits{} bits (Section~\ref{sec:acc-bound},
+    Section~\ref{sec:widths}).
+  \item A software reference model, and an accuracy evaluation that keeps the
+    photographs of each leaf on one side of the split. An analysis of the
+    earlier splits found photographs of the same leaf on both sides of them;
+    on the split by leaf, scored once, the floating-point model classifies
+    \thAccFloat\% and the integer pipeline that the accelerator reproduces
+    \thAccInt\% of the \thAccTestImages{} test images correctly
+    (Chapter~\ref{chap:software}, Section~\ref{sec:accuracy}).
+  \item A timing-closure campaign at a fixed clock constraint, in which each
+    optimization was implemented and measured separately. Over the steps that
+    can be attributed to individual changes, the maximum frequency of the
+    out-of-context implementation, derived from its worst negative slack, rose
+    from \MHz{\thFmaxBase} to \MHz{\thFmaxPhaseThree}
+    (Chapter~\ref{chap:timing}).
+  \item The integration of the accelerator into the MPSoC: a hand-written
+    weight DMA engine and AXI-Lite control registers, a block design for the
+    ZCU104 that meets its timing constraint at \MHz{\thClkBoard}, and a
+    processing-system application whose image preprocessing is bit-exact
+    against the software model. With the weights of the earlier training run,
+    the bare-metal application reproduced the known answer of one image bit
+    for bit on the board (Chapter~\ref{chap:integration},
+    Section~\ref{sec:bringup}).
+  \item A live camera path under Linux, whose front end resizes each camera
+    frame with the same result, bit for bit, as the preprocessing of the
+    software model, as verified on the host. With the same weights, the board
+    reproduced the known answers of all \thClasses{} classes, at a measured
+    mean of \SI{\thBoardMs}{\milli\second} per image over \thBoardRuns{} runs
+    from the start of the image transfer to the result, and then classified
+    the frames of a USB webcam live (Section~\ref{sec:camera-path},
+    Section~\ref{sec:camera-result}).
+\end{enumerate}
+% TODO(COMPARISON): add the comparison with the Raspberry Pi 4 and the Jetson
+% Nano as a contribution once Section~\ref{sec:comparison} has its
+% measurements (DD-036). It is left out until then: it is not yet a result.
+
 
 \section{Thesis Outline}
 \label{sec:outline}
-% One short paragraph per chapter. Write it from the final table of contents,
-% not from this skeleton.
+
+The remainder of the thesis is organized as follows.
+Chapter~\ref{chap:related} reviews deep learning for plant disease detection,
+plant disease classifiers deployed on edge devices and CNN accelerators on
+FPGAs, and positions this thesis with respect to them.
+Chapter~\ref{chap:background} then provides the background on which the
+subsequent chapters depend: convolutional neural networks and the MobileNetV2
+architecture, the quantization of neural networks, FPGAs and the Zynq
+UltraScale+ MPSoC, and the design principles of CNN accelerators. The
+experimental setup, namely the ZCU104 board, the two edge platforms of the
+comparison and the measurement equipment, is described in
+Chapter~\ref{chap:setup}, together with the development tools.
+
+The work itself is presented in
+Chapters~\ref{chap:software} to~\ref{chap:integration}.
+Chapter~\ref{chap:software} presents the software reference model: the
+dataset and its split by leaf, the training of the model and its
+post-training quantization to int8, the export of its parameters and golden
+vectors, the bit-exact C reference model, the input preprocessing, and the
+workload analysis that identifies the operations to accelerate. On this
+basis, Chapter~\ref{chap:architecture} presents the architecture of the
+accelerator: its compute engines and their degree of parallelism, its
+on-chip memory organization, its control unit and instruction set, and the
+latency contract between the feeders and the engines. The verification
+methodology, which is built on bit-exactness against the golden vectors, is
+described in Chapter~\ref{chap:verification}, together with its limits.
+Chapter~\ref{chap:timing} presents the timing closure of the design, one
+measured optimization at a time, and the critical path that remains.
+Finally, Chapter~\ref{chap:integration} integrates the accelerator into the
+MPSoC, from the weight DMA and the control registers to the
+processing-system application, the bring-up on the board and the live
+camera path under Linux.
+
+The results are evaluated in Chapter~\ref{chap:evaluation}: resource
+utilization and clock frequency, throughput and latency, bit-exactness and
+classification accuracy, power consumption, the comparison with the edge
+platforms and with related work, and the live camera demonstration.
+Chapter~\ref{chap:conclusion} assesses the thesis against the objectives of
+Section~\ref{sec:objectives} and identifies future work. Three appendices
+complete the thesis: Appendix~\hyperref[appendix:isa]{A} specifies the
+instruction set of the accelerator and lists the compiled program,
+Appendix~\hyperref[appendix:decisions]{B} summarizes the design decision log,
+and Appendix~\hyperref[appendix:reproduction]{C} describes how the design is
+built and how each result, including every figure quoted in the text, is
+reproduced.
