@@ -6,3 +6,8 @@ software/runs/*.pth filter=lfs diff=lfs merge=lfs -text
 # the first '\r', and a fragment line reads CONFIG_UIO=y plus a carriage
 # return. Pinned to LF whatever the checkout.
 firmware/linux/petalinux/** text eol=lf
+
+# Claude Code's instruction files: YAML frontmatter and JSON that Claude Code
+# parses, written and tested as LF. core.autocrlf=true would check them out as
+# CRLF. Pinned to LF whatever the checkout, like the PetaLinux inputs above.
+.claude/** text eol=lf

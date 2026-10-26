@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/run_sim.sh *)",
+      "Bash(bash scripts/run_all_sims.sh *)",
+      "Bash(make -C thesis *)",
+      "Bash(make -C software/cmodel test)",
+      "Bash(make -C firmware test)",
+      "Bash(make -C firmware/linux test)",
+      "Bash(python scripts/thesis_numbers.py *)",
+      "Bash(python scripts/analyze_workload.py *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git reset --hard *)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git restore *)",
+      "Bash(git clean *)",
+      "Bash(git rebase *)",
+      "Bash(git branch -D *)",
+      "PowerShell(git push *)",
+      "PowerShell(git reset --hard *)",
+      "PowerShell(git checkout -- *)",
+      "PowerShell(git restore *)",
+      "PowerShell(git clean *)"
+    ],
+    "deny": [
+      "Edit(/software/export/**)",
+      "Edit(/software/golden/**)",
+      "Edit(/software/runs/**)",
+      "Edit(/build/**)",
+      "Edit(/thesis/generated/**)",
+      "Edit(/firmware/include/quant_params.h)",
+      "Edit(/hardware/tb/model_scalars.svh)",
+      "Edit(/hardware/tb/program_ops.svh)",
+      "Edit(/firmware/linux/test/camfront_vectors.txt)"
+    ]
+  }
+}
