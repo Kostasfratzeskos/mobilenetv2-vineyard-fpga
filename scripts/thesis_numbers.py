@@ -57,7 +57,9 @@ RUNS = [
     ("impl_base_4p000", "Base", "baseline, before the review"),
     ("impl_phase1_4p000", "PhaseOne", "observability only, no datapath change"),
     ("impl_dd020_4p000", "SyncReset", "DD-020, synchronous reset"),
-    ("impl_p2a_4p000", "PhaseTwoA", "mac_lane and pe_array pipelined"),
+    # Phase 2a as kept: DD-021's variant D. impl_p2a_4p000 is variant A, the
+    # rejected `use_dsp` on the module (1,200 DSPs), and must not stand for 2a.
+    ("impl_p2aD_4p000", "PhaseTwoA", "mac_lane and pe_array pipelined, DD-021 variant D"),
     ("impl_p2b_4p000", "PhaseTwoB", "dwconv3x3 pipelined"),
     ("impl_p2c_4p000", "PhaseTwoC", "conv3x3_std pipelined"),
     ("impl_p2d_4p000", "PhaseTwoD", "requantize pipelined"),
