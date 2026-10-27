@@ -18,7 +18,7 @@ The caller names the files or sections to check. Check each one for:
    and definitional constants (int8, 3×3, the four classes) are fine.
 2. **Claims.** Check every technical claim against `docs/design_decisions.md` (DD entries),
    `docs/lab_notebook.md` (dated entries), the READMEs and the code. `docs/claude_project/` is a
-   snapshot from 2026-09-24, so never accept it as evidence for anything later.
+   summary derived from those records, so never accept it as evidence.
 3. **Status.** Every result must name the right checkpoint and platform (simulation or board, and
    which board run). Unfinished work must carry a TODO marker, not be stated as done.
 4. **References.** Use Grep to confirm that every `\ref` and `\hyperref` target has a matching

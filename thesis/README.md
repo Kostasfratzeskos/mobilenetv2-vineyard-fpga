@@ -74,12 +74,11 @@ Every chapter file opens with a comment block naming the documents in `docs/` it
 written from. The material is already written; the chapters are mostly a matter of
 following those pointers.
 
-One caution about those pointers: `docs/claude_project/` is a snapshot of 24–25
-September. It predates the PS application, the board run of 2026-10-07, the accuracy
-measurement (DD-034), the camera (DD-035) and the edge-device comparison (DD-036), and
-in places it still says the opposite — "never run on a board", "accuracy not recorded".
-For anything after 25 September, `docs/design_decisions.md` and `docs/lab_notebook.md`
-are the sources.
+One caution about those pointers: some name files in `docs/claude_project/`. That
+folder is a gitignored summary written for a claude.ai Project, derived from the records
+and dated in its `00_START_HERE.md`; it may lag or simplify them, so it is never a
+source. Follow it to the DD entries and notebook dates it cites. For anything after 25
+September, `docs/design_decisions.md` and `docs/lab_notebook.md` are the sources.
 
 ## The rule about numbers
 
@@ -112,7 +111,7 @@ chapters and writing it early guarantees rework.
 
 Two gaps block Chapter 10:
 
-1. **The 202 MHz figure is unattributed** (`docs/claude_project/05_RESULTS.md` §2).
+1. **The 202 MHz figure is unattributed** (`docs/lab_notebook.md`, 2026-09-24, Phase 4).
    Either do the back-to-back re-run or quote 179.0 MHz and say why.
 2. **Part of Chapter 10 is not measured yet.** Measured on the board so far: the
    bare-metal known answer (2026-10-07) and, under Linux (2026-10-22), all four known

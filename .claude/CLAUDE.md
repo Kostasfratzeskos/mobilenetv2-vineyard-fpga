@@ -18,8 +18,8 @@ and its testbenches, the PS firmware, the Linux camera application, and the LaTe
   changes every week.
 - The reasons behind the design are in `docs/design_decisions.md` (DD-001 onward). Cite the DD id
   when you explain or defend a choice.
-- `docs/claude_project/` is a stale snapshot from 2026-09-24 that contradicts later results (it
-  says the design never ran on a board). Never use it as a source for anything after 2026-09-25.
+- `docs/claude_project/` is a gitignored summary written for a claude.ai Project, dated in its
+  `00_START_HERE.md`. It is derived from the records and may lag them, so it is never a source.
 
 ## Ground rules
 - The int8 software model is the source of truth. Every hardware block is bit-exact against the

@@ -11,8 +11,10 @@ argument-hint: "[chapter file or section label]"
    Read the sections around it too, so the new text continues them instead of repeating them.
 2. **Gather.** Read those sources, and the DD entries and dated notebook entries they point to.
    For anything after 2026-09-25 the sources are `docs/design_decisions.md` and
-   `docs/lab_notebook.md`; `docs/claude_project/` is stale. If the records don't support something
-   the section needs, stop and tell the user what is missing instead of writing around it.
+   `docs/lab_notebook.md`. `docs/claude_project/` is a derived summary, never a source, even where
+   a chapter's comment block names it: follow it to the DD entries and notebook dates instead. If
+   the records don't support something the section needs, stop and tell the user what is missing
+   instead of writing around it.
 3. **Numbers.** Find the macro for every figure, e.g. with
    `grep -n '<keyword>' thesis/generated/numbers.tex thesis/manual_numbers.tex`.
    - A figure that a script can derive but has no macro yet: add it to
